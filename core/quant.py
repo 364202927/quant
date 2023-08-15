@@ -6,7 +6,6 @@ from core.task import task
 
 #todo:会将所有策略用到的币种讯息收集起，每5分钟获取一次
 
-
 class quant:
     "主流程"
     
@@ -23,11 +22,13 @@ class quant:
         for key in g_config.markets():
             market_config = g_config.markets()[key]
             if market_config['enable'] == 1:
+                # g_marketMgr.newExchange(key,
+                #                         market_config["exchange"],
+                #                         market_config["apiKey"],
+                #                         market_config["secret"],
+                #                         market_config["description"])
                 g_marketMgr.newExchange(key,
-                                        market_config["exchange"],
-                                        market_config["apiKey"],
-                                        market_config["secret"],
-                                        market_config["description"])
+                                        market_config)
 
     def __initThirdParty(self):
         # log("~~~~__ThirdParty~~~~",g_config.thirdParty())
