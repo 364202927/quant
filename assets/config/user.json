@@ -1,0 +1,45 @@
+{
+    "info": {
+        "_info": "交易所关注币种，没有在filter的会被过滤",
+        "userName": "Agzer0",
+        "filter": [ "BTC/USDT", "ETH/USDT", "BNB/USDT", "OKB/USDT", "DOGE/USDT", "USDC/USDT" ],
+        "ccxtRetry": 1
+    },
+    "files": {
+        "_info": "outpute到指定目录",
+        "marketsPath": "assets/markets/",
+        "dataPath": "assets/save/"
+    },
+    "logger": {
+        "_info": "",
+        "send2Third": 0,
+        "outFilePath": "",
+        "level": 0
+    },
+    "market": {
+        "binanceMain": {
+            "exchange": "binance",
+            "enable": 0,
+            "apiKey": "",
+            "secret": "",
+            "description": "U合约+bnb",
+            "utc": 7
+        }
+    },
+    "thirdParty": {
+        "console": {
+            "enable": 0
+        },
+        "tg": {
+            "enable": 1,
+            "token": "",
+            "myID": "",
+            "group": -0
+        },
+        "email": {
+            "enable": 0,
+            "address": "364202927@qq.com",
+            "token": "授权码,网页登陆QQ邮箱后,从「设置」-「账户」-「开启 POP3/SMTP服务」中获得 或改其他邮箱"
+        }
+    }
+}
