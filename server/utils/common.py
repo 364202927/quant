@@ -7,7 +7,7 @@ import requests
 import inspect
 from importlib import import_module
 from pydispatch import dispatcher
-from server.utils.enumeration import eTimeTs
+from server.utils import eTimeTs
 import pandas as pd
 
 # from multiprocessing.pool import Pool

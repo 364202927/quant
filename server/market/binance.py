@@ -1,4 +1,4 @@
-from market.baseExchange import *
+from server.market.baseExchange import *
 # from concurrent.futures import ThreadPoolExecutor
 
 kMaxLimit = 1000  # 现货最大k线

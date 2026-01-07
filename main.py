@@ -1,7 +1,5 @@
-from server.core.quant import quant
+from server.core import quant
 from server.utils.common import publicIp
-# from market.markets import *
-# from data.user.center import g_userCenter
 
 
 def main():

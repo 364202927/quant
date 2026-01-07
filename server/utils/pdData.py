@@ -3,7 +3,7 @@ from functools import reduce
 from server.utils.common import switchFn, joinPath, getFileExtension
 from server.utils.fileConfig import g_config
 from server.utils.logger import err, log
-from server.utils.enumeration import eSampleTs
+from server.utils import eSampleTs
 
 # pd.set_option('display.max_rows', None)  # 最大显示行
 pd.set_option('expand_frame_repr', False)  # 当列太多时不换行

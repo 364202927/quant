@@ -1,8 +1,5 @@
 from server.core.timerMsg import timerMgr
-from server.utils.common import require, path2File, loadJson
-from server.utils.logger import log
-# from server.market.markets import g_marketMgr
-# from deploy.console import g_console
+from server.utils import require, path2File, loadJson, log
 
 kStrategyFile = 'server.strategy.'
 kStrategyFile2 = 'server/strategy/'

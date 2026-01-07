@@ -1,8 +1,5 @@
-from server.market.markets import g_marketMgr
-from server.utils.pdData import pdData
-from server.utils.common import switchFn, switchV, slit
-from server.utils.science import inRange, binanceTimestamp
-from server.utils.logger import err
+from server.market import g_marketMgr
+from server.utils import pdData, switchFn, switchV, slit, inRange, binanceTimestamp, err
 
 kBuy = 'buy'
 kSell = "sell"

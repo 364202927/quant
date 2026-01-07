@@ -1,4 +1,4 @@
-from market.baseExchange import *
+from server.market.baseExchange import *
 # kUtcTime = 7        #交易所获取k线utc时间
 kMaxLimit = 1000  # bybit获取最大k线数据
 

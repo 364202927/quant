@@ -1,6 +1,4 @@
-from server.utils.decoratorTool import singleton
-from server.utils.fileConfig import g_config
-from server.utils.common import require
+from server.utils import singleton, g_config, require
 
 
 @singleton

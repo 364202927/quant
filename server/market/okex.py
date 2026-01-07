@@ -1,4 +1,4 @@
-from market.baseExchange import *
+from server.market.baseExchange import *
 kMaxLimit = 100  # 最大k线数据
 
 # todo:批次下单没做

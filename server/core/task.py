@@ -1,6 +1,4 @@
-from server.utils.common import switch, evtConnect, evtFire
-from server.utils.enumeration import eTaskState, kEvt_GetTime, kEvt_Time
-from server.utils.science import time2ID
+from server.utils import switch, evtConnect, evtFire, eTaskState, kEvt_GetTime, kEvt_Time, time2ID
 # from data.user.center import g_userCenter
 # from data.user.shareDate import g_share
 

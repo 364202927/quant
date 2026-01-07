@@ -1,4 +1,5 @@
 from server.strategy.base.testCTA import *
+from server.utils import pdData, log
 
 
 class test(testCTA):

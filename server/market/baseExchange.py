@@ -1,6 +1,6 @@
 import ccxt
 import time
-from server.utils.common import (
+from server.utils import (
     switch,
     trySwitchFn,
     tryExecution,
@@ -8,12 +8,12 @@ from server.utils.common import (
     slit,
     str2ms,
     reviseTime,
-    diff_Pdtime
+    diff_Pdtime,
+    g_config,
+    pdData,
+    err,
+    inRange,
 )
-from server.utils.fileConfig import g_config
-from server.utils.pdData import pdData
-from server.utils.logger import err
-from server.utils.science import inRange
 
 # todo优化方向:
 # 1.冰山单

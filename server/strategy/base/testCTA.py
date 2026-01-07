@@ -1,5 +1,5 @@
 from server.strategy.base.baseCTA import *
-from server.utils.logger import log
+from server.utils import log
 
 class testCTA(baseCTA):
     "测试模式"

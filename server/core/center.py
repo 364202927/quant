@@ -1,5 +1,5 @@
-from server.utils.decoratorTool import singleton
-from server.market.markets import g_marketMgr
+from server.utils import singleton
+from server.market import g_marketMgr
 
 
 # todo:每天记录当天的资金

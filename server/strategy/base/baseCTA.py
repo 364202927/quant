@@ -1,8 +1,10 @@
 import abc
-from server.utils.pdData import pdData
-from server.utils.logger import log
+from server.utils import pdData, log, warn, require, evtFire, kEvt_ModifiedTime, eTaskState
+from server.core.task import task
+from server.indicators import baseIndicators
+
+# 导入 task 模块的所有内容（保持向后兼容）
 from server.core.task import *
-from server.indicators.baseIndicators import *
 
 # ? 1、是否保存状态
 # ? 2、调用次数
