@@ -8,27 +8,16 @@ from server.utils import switch, evtConnect, evtFire, eTaskState, kEvt_GetTime, 
 
 
 class task:
-    '任务'
-
-    __id = 0  # 任务id
-    __state = None  # 当前状态
     __shared = {}  # task间信息互传的类
-    info = ''  # 描述
-    # taskOrder = []		#当前任务挂单 todo:不确定有用
-    symbols = []  # 要获取那个币的k线数据 todo：不需要
-    tacticsTime = []  # 触发时间
-    indicators = {}  # 绑定的策略{name:class,name2:class2}
 
     def __init__(self, fnCta):
-        # self.info = ''
-        # self.indicators = {}
-        # self.taskOrder = []
-        # self.symbols	= []
-        # self.tacticsTime = []
-        self.__id = time2ID()
-        self.__state = eTaskState.get("eActive")
+        self.info = ''
+        self.tacticsTime = []           # 触发时间
+        self.__id = time2ID()                   # 任务id
+        self.__state = eTaskState.get("eActive")# 当前状态
         self.__fnCta = fnCta
-
+        self.indicators = {}  # 绑定的策略{name:class,name2:class2}
+        
         evtConnect(kEvt_GetTime, self)
         # evtConnect(kEvt_Signal, self)
 
@@ -40,7 +29,7 @@ class task:
                        'id': self.__id,
                        # 'order':self.taskOrder,
                        'className': self.__class__.__name__,
-                       'symbols': self.symbols,
+                    #    'symbols': self.symbols,
                        'info': self.info,
                        'name': self.__doc__,
                        'indicators': self.indicators,
@@ -51,17 +40,20 @@ class task:
     def state(self):
         return self.__state
     # 激活任务
-
     def active(self):
         if self.state() > eTaskState.get("eActive"):
             return
         self.__state = eTaskState.get("eWait")
-        # 判断第一次激活注册协议
+        # 判断第一次激活，向定时器注册任务
         if len(self.indicators) == 0 and \
-                len(self.symbols) == 0 and \
                 len(self.tacticsTime) == 0:
             self._register()
-
+    def pause(self):
+        pass
+    
+    def regTime(self, *timeKeys):
+        self.tacticsTime = list(timeKeys) if timeKeys else []
+    
     # 关闭任务 todo
     def close(self):
         # if self.state() == eTaskState.get("eWait") or \
@@ -86,14 +78,13 @@ class task:
     # 	pass
 
     # 注册时间，策略
-
     def _register(self):
         # g_share.regSymbols(self.__ex, strategy.symbol) #公用资源添加监控的币种
         # g_userCenter.addTask(self)						#个人中心添加任务
         self.init()
         if len(self.tacticsTime) > 0:
             evtFire(kEvt_Time, self.get('id'), self.get())  # 告诉定时器任务id和触发间隔
-
+    
     # 处理共享数据
     def store(self, key, value):
         self.__shared[key] = value

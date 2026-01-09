@@ -1,10 +1,14 @@
 from server.core.timerMsg import timerMgr
 from server.utils import require, path2File, loadJson, log
+import asyncio
 
 kStrategyFile = 'server.strategy.'
 kStrategyFile2 = 'server/strategy/'
 kStartFile = 'assets.config.start.json'
 
+
+#todo:1.添加功能每天判断一次是否更新list任务
+#todo:2.检查崩溃并发送信息
 
 class quant:
     "主流程"
@@ -42,15 +46,20 @@ class quant:
 
     # 运行一次或一直运行
     def run(self, count=True):
-        def loop():
-            # g_console.run()
-            self.__timeMgr.run()
-
+        async def async_loop():
+            await self.__timeMgr.run()        
         if not count:
-            loop()
+            asyncio.run(async_loop())
             exit()
+        # run
+        try:
+            asyncio.run(self._run_forever())
+        except KeyboardInterrupt:
+            log("用户中断，正在退出...")
+    
+    async def _run_forever(self):
         while True:
-            loop()
+            await self.__timeMgr.run()
 
     # 创建任务
     def newTask(self, tabStrategy):

@@ -1,18 +1,11 @@
-import pickle
-import json
-import datetime
-import time
-import os
-import requests
-import inspect
+import pickle,json,datetime,time,os,requests,inspect,asyncio,inspect
 from importlib import import_module
 from pydispatch import dispatcher
 from server.utils import eTimeTs
 import pandas as pd
 
-# from multiprocessing.pool import Pool
-savePath = "data/save/"
 
+savePath = "data/save/"
 
 def publicIp():
     response = requests.get('https://api.ipify.org?format=json')
@@ -27,7 +20,7 @@ def evtConnect(strEvt, obj):
     dispatcher.connect(rtMsg, signal=strEvt, weak=False)
 
 
-# 发送消息(最多3参数)
+# 发送消息(最多3参数) - 同步版本
 def evtFire(strEvt, *args):
     def getValue(index):
         if index < len(args):
@@ -38,12 +31,48 @@ def evtFire(strEvt, *args):
                     value2=getValue(2), value3=getValue(3))
 
 
+# 发送消息(最多3参数) - 异步版本
+async def evtFireAsync(strEvt, *args):
+    def getValue(index):
+        return args[index] if index < len(args) else ''
+    
+    # 获取所有监听者
+    receivers = dispatcher.getAllReceivers(sender=dispatcher.Any, signal=strEvt)
+    if not receivers:
+        return
+    
+    # 并发执行所有回调
+    tasks = []
+    for receiver in receivers:
+        try:
+            if inspect.iscoroutinefunction(receiver):# 异步回调：创建task
+                task = receiver(
+                    sender=strEvt,
+                    value=getValue(0),
+                    value1=getValue(1),
+                    value2=getValue(2),
+                    value3=getValue(3))
+                tasks.append(task)
+            else:# 同步回调
+                receiver(
+                    sender=strEvt,
+                    value=getValue(0),
+                    value1=getValue(1),
+                    value2=getValue(2),
+                    value3=getValue(3))
+        except Exception as e:
+            print(f"事件回调执行失败: {strEvt}, 错误: {e}")
+    
+    # 等待所有异步任务完成
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 # 加载json
 def loadJson(filePath):
     with open(filePath, "r", encoding="utf-8") as file:
         fileData = json.load(file)
     return fileData
-
 
 # 加载路径
 def joinPath(path, fileName):

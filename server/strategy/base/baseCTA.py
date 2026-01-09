@@ -1,16 +1,16 @@
 import abc
-from server.utils import pdData, log, warn, require, evtFire, kEvt_ModifiedTime, eTaskState
+from server.utils import pdData, log, warn, require, evtFire, eTaskState
 from server.core.task import task
 from server.indicators import baseIndicators
 
 # 导入 task 模块的所有内容（保持向后兼容）
-from server.core.task import *
+# from server.core.task import *
 
 # ? 1、是否保存状态
 # ? 2、调用次数
 kIndicatorsFile = 'indicators.'
 
-
+#todo:时间接收添加一个函数
 class baseCTA(task, metaclass=abc.ABCMeta):
     "基类模版"
 
@@ -41,7 +41,7 @@ class baseCTA(task, metaclass=abc.ABCMeta):
         #         self.testEnd(self.__testOrders)
         #         # exit()
         #     return
-        self._processCount()
+        # self._processCount()
         # 调用evt fn:  update_ts
         fnName = 'update_' + timeKey
         if hasattr(self, fnName):
@@ -52,9 +52,9 @@ class baseCTA(task, metaclass=abc.ABCMeta):
         self.evtTime(timeKey)
 
     # 改变策略时间
-    def setTacticsTime(self, tabTime):
-        self.tacticsTime = tabTime
-        evtFire(kEvt_ModifiedTime, self.get('id'), tabTime)
+    # def setTacticsTime(self, tabTime):
+    #     self.tacticsTime = tabTime
+    #     evtFire(kEvt_ModifiedTime, self.get('id'), tabTime)
     # 注册策略 dict = {name:指标, ...}
 
     def regStrategy(self, dict):
@@ -119,4 +119,4 @@ class baseCTA(task, metaclass=abc.ABCMeta):
     # interface
     @abc.abstractmethod  # 初始化
     def init(self): pass
-    def _processCount(self): pass
+    # def _processCount(self): pass

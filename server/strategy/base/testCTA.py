@@ -1,5 +1,5 @@
 from server.strategy.base.baseCTA import *
-from server.utils import log
+# from server.utils import log
 
 class testCTA(baseCTA):
     "测试模式"
@@ -81,7 +81,6 @@ class testCTA(baseCTA):
             return close('short')
         return False
     # 测试模式返回仓位
-
     def testPosition(self, dir):
         open_dir = self.__openl if dir == 'long' else self.__opens
         if len(open_dir) > 0:

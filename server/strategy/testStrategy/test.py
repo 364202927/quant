@@ -1,6 +1,6 @@
 from server.strategy.base.testCTA import *
-from server.utils import pdData, log
-
+# from server.utils import pdData, log
+from datetime import datetime
 
 class test(testCTA):
     "测试用法"
@@ -11,8 +11,9 @@ class test(testCTA):
         return "demo+测试代码"
 
     def init(self):
-        self.symbol = ['swap_BTCUSDT']  # todo:应该可以不要
-        self.tacticsTime = ['1s', "1m"]
+        # self.symbol = ['swap_BTCUSDT']  # todo:应该可以不要
+        # self.tacticsTime = ['15s', "1m"]
+        self.regTime('1s', "1m")
         # 获取原始数据
         self._kLinePd = pdData()
         self._kLinePd.readFile('binance_BTCUSDT.pkl')
@@ -28,10 +29,14 @@ class test(testCTA):
         # newPf = pdData()
         # newPf.pfMerge([self._kLinePd.get(),self.boll.get()])
         # newPf.setPf(self.bollSig1(newPf.get()), 'signal', ['std', 'dis'])
-
-        print("~~~~init test~~~~")
+        
+        print("~~~~init test~~~~",datetime.now().strftime("%m-%d %H:%M:%S"))
         log(self._kLinePd.get())
-
+    
     def update_1s(self, id):
         # cta = self.getCTA('test')
-        print("~~evt_1s~~~~~")
+        print("~~evt_15s~~~~~",datetime.now().strftime("%m-%d %H:%M:%S"))
+
+
+    def update_1m(self, id):
+        print("~~evt_1m~~~~~",datetime.now().strftime("%m-%d %H:%M:%S"))

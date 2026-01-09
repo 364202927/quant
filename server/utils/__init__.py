@@ -1,4 +1,3 @@
-# 枚举常量定义（从 enumeration.py 移入）
 # 时间单位转换
 eTimeTs = {
     's': 1,
@@ -28,9 +27,7 @@ eTaskState = {
 
 # 事件
 kEvt_Time = 'evtTime'  # 任务时间设定
-kEvt_ModifiedTime = 'evtModifiedTime'  # 任务修改时间
 kEvt_GetTime = 'evtGetTime'  # 任务时间触发
-kEvt_Signal = 'evtSignal'  # 指标信号触发
 
 # 导出常用工具函数和类
 from server.utils.common import (
@@ -42,6 +39,7 @@ from server.utils.common import (
     switchV,
     evtConnect,
     evtFire,
+    evtFireAsync,
     slit,
     str2ms,
     reviseTime,
@@ -68,6 +66,7 @@ __all__ = [
     'switchV',
     'evtConnect',
     'evtFire',
+    'evtFireAsync',
     'slit',
     'str2ms',
     'reviseTime',
@@ -96,7 +95,5 @@ __all__ = [
     'eTaskState',
     'kEvt_GetTime',
     'kEvt_Time',
-    'kEvt_ModifiedTime',
-    'kEvt_Signal',
     'eSampleTs',
 ]
