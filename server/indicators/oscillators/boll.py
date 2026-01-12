@@ -1,4 +1,4 @@
-from indicators.baseIndicators import *
+from server.indicators.baseIndicators import *
 # 使用方法
 # 1.布林带更多是用来预测趋势，不要用来抓反转
 # 2.开口情况需注意，开始有人来参与，股价会有波动 (开口是上轨-下轨 >10%,也能使用%B或bbw判断)

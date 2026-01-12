@@ -9,7 +9,6 @@ class schedule:
         self.__timeKey = timeKey
         self.__interval = float(timeKey[:-1]) * eTimeTs[timeKey[-1]] # 间隔时间
         # print("~~~~interval~~~~",self.__interval,float(timeKey[:-1]),eTimeTs[timeKey[-1]])
-        # exit()
         self.__nextRun = self._nextTime()
         # log(f"Schedule初始化:",timeKey,datetime.now().strftime('%m-%d %H:%M:%S'),'  next:',self.__nextRun.strftime('%m-%d %H:%M:%S'))
 
@@ -42,7 +41,7 @@ class schedule:
         return self.__nextRun < other.__nextRun
 
 class timerMgr:
-    """异步时间管理器"""
+    """时间管理器"""
 
     def __init__(self):
         self.__heap = []        # 最小堆，存储 schedule 对象
@@ -69,7 +68,6 @@ class timerMgr:
     async def run(self):
         if not self.__heap:
             return
-
         # 取出栈顶的进行休眠
         sch = self.__heap[0]
         restTime = (sch.next() - datetime.now()).total_seconds()

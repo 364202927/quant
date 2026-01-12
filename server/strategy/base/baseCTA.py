@@ -8,7 +8,7 @@ from server.indicators import baseIndicators
 
 # ? 1、是否保存状态
 # ? 2、调用次数
-kIndicatorsFile = 'indicators.'
+kIndicatorsFile = 'server.indicators.'
 
 #todo:时间接收添加一个函数
 class baseCTA(task, metaclass=abc.ABCMeta):

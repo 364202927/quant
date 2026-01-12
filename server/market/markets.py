@@ -1,17 +1,18 @@
 from server.utils import singleton, g_config, require
-
+# todo:使用堆栈的方式进行下单交易
 
 @singleton
 class marketMgr:
     '交易所管理器'
-    __exchangeMgr = None
+    # __exchangeMgr = None
 
     def init(self):
         self.__exchangeMgr = {}
+
         for name in g_config.markets():
             market_config = g_config.markets()[name]
             if market_config['enable'] == 1:
-                g_marketMgr._newExchange(name, market_config)
+                self._newExchange(name, market_config)
 
     def _newExchange(self, exName, config):
         exchange = require(
@@ -26,6 +27,9 @@ class marketMgr:
         if keyName == "":
             return self.__exchangeMgr
         return self.__exchangeMgr[keyName]
+
+    def run(self):
+        pass
     
 
 g_marketMgr = marketMgr()

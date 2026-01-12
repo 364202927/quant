@@ -1,4 +1,4 @@
-from indicators.baseIndicators import *
+from server.indicators.baseIndicators import *
 
 
 class vwap(baseIndicators):

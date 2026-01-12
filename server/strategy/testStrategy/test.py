@@ -12,7 +12,6 @@ class test(testCTA):
 
     def init(self):
         # self.symbol = ['swap_BTCUSDT']  # todo:应该可以不要
-        # self.tacticsTime = ['15s', "1m"]
         self.regTime('1s', "1m")
         # 获取原始数据
         self._kLinePd = pdData()
@@ -20,9 +19,8 @@ class test(testCTA):
         # self._kLinePd.resample("15m",['2019-01-01 00:00:00','2020-01-01 00:00:00'])
         # self._kLinePd.resample("D")
         # 初始化指标
-        # self.regStrategy({'boll':'oscillators.boll',
-        # 'boll2':'timings.boll',
-        # 'vwap':'volume.vwap'})
+        self.regStrategy({'boll':'oscillators.boll',
+                        'vwap':'volume.vwap'})
         # self.boll.delimit(maDay= 30, stdev = 2.5)
         # self.boll.calculate(self._kLinePd.get())
         # print("~~~~boll~~~~", self._kLinePd.get(),self.boll.get())
@@ -35,8 +33,10 @@ class test(testCTA):
     
     def update_1s(self, id):
         # cta = self.getCTA('test')
-        print("~~evt_15s~~~~~",datetime.now().strftime("%m-%d %H:%M:%S"))
+        # print("~~evt_15s~~~~~",datetime.now().strftime("%m-%d %H:%M:%S"))
+        pass
 
 
     def update_1m(self, id):
-        print("~~evt_1m~~~~~",datetime.now().strftime("%m-%d %H:%M:%S"))
+        # print("~~evt_1m~~~~~",datetime.now().strftime("%m-%d %H:%M:%S"))
+        pass
