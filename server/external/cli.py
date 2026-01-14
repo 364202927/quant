@@ -6,7 +6,7 @@ if TYPE_CHECKING:
     from server.core.quant import quant
 
 
-class ConsoleMonitor:
+class cli:
     """Console监控器 - 使用aioconsole实现异步按键监听"""
     
     def __init__(self, quant_instance: 'quant'):

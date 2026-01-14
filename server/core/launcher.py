@@ -2,8 +2,8 @@ import asyncio
 from server.core.quant import quant
 from server.utils.logger import log
 from server.utils.fileConfig import g_config
-from server.external.webPort import FastAPIServer
-from server.external.cli import ConsoleMonitor
+from server.external.webPort import web
+from server.external.cli import cli
 
 
 class launcher:
@@ -12,16 +12,16 @@ class launcher:
     def __init__(self):
         self.__modules = []
         self.__quant = None
-        self.__fastapi_server = None
-        self.__console_monitor = None
+        # self.__fastapi_server = None
+        # self.__console_monitor = None
 
         self.init()
     
     def init(self):
         def create(key: str):
             if key == 'web':
-                return FastAPIServer(self.__quant, g_config)
-            return ConsoleMonitor(self.__quant)
+                return web(self.__quant)
+            return cli(self.__quant)
         # 初始化quant
         self.__quant = quant()
         self.__quant.set_crash_callback(self._on_crash)
@@ -33,6 +33,9 @@ class launcher:
             if config.get(key).get('enable') == True:
                 self.__modules.append(create(key))
         log("Launcher初始化完成",self.__modules)
+        
+        # todo:检查配置，如果都没配置，则打开web端
+        self.getModules('web').openWeb()
     
     async def _on_crash(self, error: Exception, crash_count: int):
         """崩溃回调 - 发送通知"""
@@ -54,6 +57,12 @@ class launcher:
     def run(self):
         asyncio.run(self._async_run())
 
+    # 获取模块
+    def getModules(self,className: str):
+        for module in self.__modules:
+            if module.__class__.__name__ == className:
+                return module
+        return None
     # 调试用，优先使用start
     def testTask(self,projectName: str):
         self.__quant.loadTask(projectName)

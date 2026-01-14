@@ -1,0 +1,17 @@
+{
+  "appName": "量化交易系统",
+  "version": "1.0.0",
+  "api": {
+    "baseUrl": "http://localhost:8000",
+    "timeout": 5000
+  },
+  "features": {
+    "darkMode": true,
+    "autoSave": true,
+    "notifications": true
+  },
+  "user": {
+    "defaultLanguage": "zh-CN",
+    "theme": "dark"
+  }
+}

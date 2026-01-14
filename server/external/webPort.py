@@ -1,17 +1,17 @@
 from fastapi import FastAPI
-import uvicorn
-from typing import TYPE_CHECKING
+import uvicorn,webbrowser,sys
+from server.utils.fileConfig import g_config
 
+from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from server.core.quant import quant
 
 
-class FastAPIServer:
+class web:
     """FastAPI服务器框架"""
     
-    def __init__(self, quant_instance: 'quant', config):
+    def __init__(self, quant_instance: 'quant'):
         self._quant = quant_instance
-        self._config = config
         self._app = self._create_app()
         self._server = None
     
@@ -35,15 +35,20 @@ class FastAPIServer:
     
     async def run(self):
         """启动FastAPI服务器"""
-        web_config = self._config.thirdParty().get('web', {})
-        host = web_config.get('host', '0.0.0.0')
-        port = web_config.get('port', 8000)
-        
+        web_config = g_config.thirdParty().get('web')
         config = uvicorn.Config(
             self._app,
-            host=host,
-            port=port,
+            host=web_config.get('host'),
+            port=web_config.get('port'),
             log_level="info"
         )
+        print('~~~~~',web_config.get('host'),web_config.get('port'))
         self._server = uvicorn.Server(config)
         await self._server.serve()
+
+    def openWeb(self):
+        if sys.platform.startswith("darwin"):#macos
+            safari = webbrowser.get('safari')
+            safari.open('http://localhost:5173/')
+            return
+        webbrowser.open('http://localhost:5173/')
