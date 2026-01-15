@@ -2,54 +2,62 @@
 import { ref, onMounted } from 'vue'
 import Sidebar from './components/uiSidebar.vue'
 import MainContent from './components/uiMainContent.vue'
-import { readJson, writeJson, fileExists, localStorage, downloadJson, uploadJson } from './utils/common'
+import {postMessage,sendMessage } from './utils/common'
 
-// 定义菜单数据
-const menuItems = [
-  { id: 1, name: '市场行情', icon: 'ri-dashboard-line' },
-  { id: 2, name: '设置', icon: 'ri-user-settings-line' },
-  { id: 3, name: '订单列表', icon: 'ri-file-list-3-line' },
-  { id: 4, name: '回测分析', icon: 'ri-pie-chart-2-line'  },
-]
-
-// 当前选中的项
-const activeItem = ref(menuItems[1])
-
-// 处理子组件触发的切换事件
-const handleSelect = (item: any) => {
-  activeItem.value = item
+// 定义菜单项类型
+interface MenuItem {
+  id: number
+  name: string
+  icon: string
 }
 
-// 组件挂载时演示工具函数的使用
+// 定义菜单数据
+const menuItems: MenuItem[] = [
+  { id: 1, name: '市场行情', icon: 'ri-dashboard-line' },
+  { id: 2, name: '回测', icon: 'ri-user-settings-line' },
+  { id: 3, name: '订单列表', icon: 'ri-file-list-3-line' },
+  { id: 4, name: '回测分析', icon: 'ri-pie-chart-2-line' },
+  { id: 5, name: '设置', icon: 'ri-settings-3-line' },
+]
+
+// Sidebar 组件引用
+const sidebarRef = ref<InstanceType<typeof Sidebar> | null>(null)
+// 先声明，稍后赋值
+const activeItem = ref<MenuItem | undefined>(undefined)
+
+const handleSelect = async (item: MenuItem) => {
+  activeItem.value = item
+  console.log('切换菜单项', item)
+  
+  // 演示：发送菜单切换事件到后端
+  // try {
+  //   await sendToBackend(item.id, { action: 'menu_select', menuName: item.name })
+  //   console.log('已通知后端切换菜单')
+  // } catch (error) {
+  //   console.error('通知后端失败:', error)
+  // }
+  const back = await postMessage(1001, item.id, { action: 'menu_select', menuName: item.name })
+  console.log("~~~按钮back~~~",back)
+}
+
+// 组件挂载时初始化
 onMounted(async () => {
-  console.log('=== 通用工具函数测试 ===')
+  console.log('=== 系统初始化 ===')
   
-  // 1. 测试 localStorage 读写
-  console.log('1. 测试 localStorage')
-  localStorage.setJson('userConfig', { theme: 'dark', language: 'zh-CN' })
-  const config = localStorage.getJson('userConfig')
-  console.log('读取的配置:', config)
+  // 1. 初始化 activeItem
+  // activeItem.value = menuItems[0]
   
-  // 2. 测试文件是否存在
-  console.log('\n2. 测试文件存在性检查')
-  const exists = await fileExists('/vite.svg')
-  console.log('/vite.svg 是否存在:', exists)
-  
-  // 3. 测试读取 JSON 文件（如果 public 目录有 config.json）
-  console.log('\n3. 尝试读取 JSON 文件')
-  try {
-    // 注意：这个文件需要先在 public 目录创建
-    const jsonData = await readJson('/config.json')
-    console.log('读取的 JSON 数据:', jsonData)
-  } catch (error) {
-    console.log('读取失败（文件可能不存在）:', error)
+  // 2. 消息测试
+  let backdata = await postMessage(1000)
+  console.log('~~~~~postMessage:~~~~~~~~~', backdata)
+  backdata = await sendMessage(1003)
+  console.log('~~~~sendMessage:~~~~', backdata)
+
+  // 3. 初始化侧边栏
+  if (sidebarRef.value) {
+    sidebarRef.value.init('sss')
+    console.log('侧边栏初始化完成')
   }
-  
-  // 4. 演示数据导出功能（注释掉，避免自动下载）
-  // downloadJson({ test: 'data', timestamp: Date.now() }, 'export.json')
-  
-  console.log('\n=== 工具函数已就绪，可以在控制台使用 ===')
-  console.log('可用函数: readJson, writeJson, fileExists, localStorage, downloadJson, uploadJson')
 })
 </script>
 
@@ -59,13 +67,15 @@ onMounted(async () => {
     
     <!-- 左侧侧边栏 -->
     <Sidebar 
+      v-if="activeItem"
+      ref="sidebarRef"
       :menu-items="menuItems" 
       :active-item="activeItem" 
       @select-item="handleSelect" 
     />
 
     <!-- 右侧内容区 -->
-    <MainContent :active-item="activeItem" />
+    <MainContent v-if="activeItem" :active-item="activeItem" />
     
   </div>
 </template>

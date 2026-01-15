@@ -33,7 +33,7 @@
             "port": 8000
         },
         "console": {
-            "enable": 1
+            "enable": 0
         },
         "tg": {
             "enable": 1,

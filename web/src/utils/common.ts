@@ -160,3 +160,86 @@ export function uploadJson<T = any>(): Promise<T> {
         input.click()
     })
 }
+
+/**
+ * API 配置
+ */
+const API_CONFIG = {
+    baseURL: 'http://localhost:8000',
+    timeout: 5000
+}
+
+/**
+ * 统一的 API 响应接口
+ */
+export interface ApiResponse<T = any> {
+    code?: number
+    message?: string
+    data?: T
+    [key: string]: any
+}
+
+/**
+ * 发送 GET 消息到后端
+ * @param id 消息 ID
+ * @param args 其他参数，会被转换为查询字符串
+ */
+export async function sendMessage(id: number, ...args: any[]): Promise<ApiResponse> {
+    const params = new URLSearchParams()
+    params.append('id', String(id))
+    // 将其他参数序列化为查询字符串
+    args.forEach((arg, index) => {
+        params.append(`arg${index}`, typeof arg === 'object' ? JSON.stringify(arg) : String(arg))
+    })
+    return apiRequest('GET', `/api/getMessage?${params.toString()}`)
+}
+
+/**
+ * 发送 POST 消息到后端
+ * @param id 消息 ID
+ * @param args 消息内容（会被包装成对象发送）
+ */
+export async function postMessage(id: number, ...args: any[]): Promise<ApiResponse> {
+    const payload = {
+        id: id,
+        args: args
+    }
+    return apiRequest('POST', '/api/postMessage', payload)
+}
+
+/**
+ * 通用的 API 请求方法
+ * @param method HTTP 方法
+ * @param endpoint API 端点
+ * @param data 请求数据
+ * @returns Promise<ApiResponse> 后端响应
+ */
+export async function apiRequest<T = any>(
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+    endpoint: string,
+    data?: any
+): Promise<ApiResponse<T>> {
+    try {
+        const url = `${API_CONFIG.baseURL}${endpoint}`
+        const options: RequestInit = {
+            method,
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            signal: AbortSignal.timeout(API_CONFIG.timeout)
+        }
+
+        if (data && method !== 'GET')
+            options.body = JSON.stringify(data)
+
+        const response = await fetch(url, options)
+        if (!response.ok)
+            throw new Error(`HTTP error! status: ${response.status}`)
+
+        const responseData = await response.json()
+        return responseData
+    } catch (error) {
+        console.error(`API 请求失败: ${method} ${endpoint}`, error)
+        throw error
+    }
+}

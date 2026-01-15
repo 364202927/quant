@@ -12,7 +12,7 @@ class test(testCTA):
 
     def init(self):
         # self.symbol = ['swap_BTCUSDT']  # todo:应该可以不要
-        self.regTime('1s', "1m")
+        self.regTime('10s', "1m")
         # 获取原始数据
         self._kLinePd = pdData()
         self._kLinePd.readFile('binance_BTCUSDT.pkl')
@@ -31,7 +31,7 @@ class test(testCTA):
         print("~~~~init test~~~~",datetime.now().strftime("%m-%d %H:%M:%S"))
         log(self._kLinePd.get())
     
-    def update_1s(self, id):
+    def update_10s(self, id):
         # cta = self.getCTA('test')
         # print("~~evt_15s~~~~~",datetime.now().strftime("%m-%d %H:%M:%S"))
         pass

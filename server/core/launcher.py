@@ -35,7 +35,7 @@ class launcher:
         log("Launcher初始化完成",self.__modules)
         
         # todo:检查配置，如果都没配置，则打开web端
-        self.getModules('web').openWeb()
+        # self.getModules('web').openWeb()
     
     async def _on_crash(self, error: Exception, crash_count: int):
         """崩溃回调 - 发送通知"""
