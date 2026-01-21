@@ -1,16 +1,15 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
+import type { MenuItem } from '../types'
 
-interface MenuItem {
-  id: number
-  name: string
-  icon: string
-}
-
-defineProps<{
-  menuItems: MenuItem[]
-  activeItem: MenuItem
-}>()
+// 定义菜单数据
+const menuItems: MenuItem[] = [
+  { id: 1, name: '行  情', icon: 'ri-dashboard-line' },
+  { id: 2, name: '策略管理', icon: 'ri-user-settings-line' },
+  { id: 3, name: '回  测', icon: 'ri-file-list-3-line' },
+  { id: 4, name: '订单管理', icon: 'ri-pie-chart-2-line' },
+  { id: 5, name: '设  置', icon: 'ri-settings-3-line' },
+]
 
 const emit = defineEmits<{
   'select-item': [item: MenuItem]
@@ -20,7 +19,10 @@ const emit = defineEmits<{
 const userName = ref<string>('')
 
 // 按钮是否禁用
-const isDisabled = ref<boolean>(true)
+const isDisabled = ref<boolean>(false)
+
+// 当前激活项
+const activeItem = ref<MenuItem>(menuItems[4])
 
 // 初始化函数
 const init = (strName: string) => {
@@ -31,12 +33,15 @@ const init = (strName: string) => {
 // 选择菜单项
 const onSelect = (item: MenuItem) => {
   if (isDisabled.value) return
+  activeItem.value = item
   emit('select-item', item)
 }
 
 // 设置按钮点击（不受禁用限制）
 const onSettingsClick = () => {
-  emit('select-item', { id: 5, name: '设置', icon: 'ri-settings-3-line' })
+  const settingsItem = menuItems.find(i => i.id === 5)!
+  activeItem.value = settingsItem
+  emit('select-item', settingsItem)
 }
 
 // 获取用户名首字母
@@ -44,38 +49,55 @@ const getUserInitial = () => {
   return userName.value ? userName.value.charAt(0).toUpperCase() : '?'
 }
 
-// 暴露 init 方法给父组件调用
+// 设置菜单锁定状态
+const setLock = (locked: boolean) => {
+  isDisabled.value = locked
+}
+
+const setItem = (id: number) => {
+  const item = menuItems.find(i => i.id === id)
+  if (item){
+    activeItem.value = item
+    emit('select-item', item)
+  }
+}
+
+// 初始化
+onMounted(() => {
+  console.log('侧边栏组件挂载完成')
+  setLock(true)  // 初始状态锁定
+  setItem(5) // 默认选中设置
+})
+
+// export
 defineExpose({
-  init
+  init,
+  setLock
 })
 </script>
   
   <template>
     <aside class="w-64 bg-gray-900 text-white flex flex-col shadow-2xl z-10 shrink-0">
       <!-- Logo 区域 -->
-      <div class="h-16 flex items-center px-6 border-b border-gray-800">
-        <div class="w-8 h-8 bg-indigo-500 rounded-md flex items-center justify-center mr-3">
-          <i class="ri-code-s-slash-line text-lg"></i>
-        </div>
-        <span class="text-lg font-bold tracking-wide">Dashboard</span>
+      <div class="h-16 flex items-center px-6 border-b border-gray-800 justify-center">
+        <span class="text-lg font-bold tracking-wide ">Dashboard</span>
       </div>
   
       <!-- 菜单列表 -->
       <nav class="flex-1 overflow-y-auto py-4">
         <ul class="space-y-1">
           <li v-for="(item, index) in menuItems.filter(i => i.id !== 5)" :key="index">
-            <button 
+            <button
               @click="onSelect(item)"
               :disabled="isDisabled"
-              class="w-full flex items-center px-6 py-3 text-sm transition-all duration-200 border-l-4"
+              class="w-full flex items-center justify-center px-6 py-3 text-lg transition-all duration-200 border-l-4"
               :class="[
-                activeItem.id === item.id 
-                  ? 'bg-transparent border-indigo-500 text-blue-400 hover:text-blue-500 font-medium' 
+                activeItem.id === item.id
+                  ? 'bg-transparent border-indigo-500 text-blue-400 hover:text-blue-500 font-medium'
                   : 'bg-transparent text-white hover:text-white',
                 isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
-              ]"
-            >
-              <i :class="[item.icon, 'mr-3 text-lg']"></i>
+              ]">
+              <i :class="[item.icon, 'mr-3 text-2xl']"></i>
               <span>{{ item.name }}</span>
             </button>
           </li>
@@ -91,22 +113,17 @@ defineExpose({
             </div>
             <div class="flex-1 min-w-0">
               <p class="text-sm font-medium truncate">{{ userName }}</p>
-              <!-- <p class="text-xs text-gray-500">在线</p> -->
             </div>
           </div>
-          <!-- 设置按钮 - 使用图片 -->
+          <!-- 设置按钮 -->
           <button
             @click="onSettingsClick"
             class="w-13 h-13 flex items-center justify-center overflow-visible opacity-70 hover:opacity-100 transition-opacity cursor-pointer flex-shrink-0"
-            :class="[
-              activeItem.id === 5 ? 'opacity-100' : ''
-            ]"
-          >
+            :class="[activeItem.id === 5 ? 'opacity-100' : '']">
             <img 
               src="/setting.png"
               alt="设置"
-              class="w-10 h-10 object-cover"
-            />
+              class="w-10 h-10 object-cover"/>
           </button>
         </div>
       </div>

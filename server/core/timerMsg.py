@@ -12,6 +12,7 @@ class schedule:
         self.__nextRun = self._nextTime()
         # log(f"Schedule初始化:",timeKey,datetime.now().strftime('%m-%d %H:%M:%S'),'  next:',self.__nextRun.strftime('%m-%d %H:%M:%S'))
 
+    #下次触发时间
     def _nextTime(self,t = datetime.now()):
         return t + timedelta(seconds=self.__interval)
 

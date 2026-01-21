@@ -1,33 +1,23 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import Sidebar from './components/uiSidebar.vue'
-import MainContent from './components/uiMainContent.vue'
-import {postMessage,sendMessage } from './utils/common'
+import type { MenuItem } from './types'
+import { userDataStore } from './types/userDataStore'
+import { ref,onMounted,provide} from 'vue'
+import { postMessage } from './utils/common'
+import uiSidebar from './components/uiSidebar.vue'
+import uiMainContent from './components/uiMainContent.vue'
 
-// 定义菜单项类型
-interface MenuItem {
-  id: number
-  name: string
-  icon: string
-}
 
-// 定义菜单数据
-const menuItems: MenuItem[] = [
-  { id: 1, name: '行  情', icon: 'ri-dashboard-line' },
-  { id: 2, name: '策  略', icon: 'ri-user-settings-line' },
-  { id: 3, name: '回  测', icon: 'ri-file-list-3-line' },
-  { id: 4, name: '订  单', icon: 'ri-pie-chart-2-line' },
-  { id: 5, name: '设  置', icon: 'ri-settings-3-line' },
-]
-
-// Sidebar 组件引用
-const sidebarRef = ref<InstanceType<typeof Sidebar> | null>(null)
+// 当前激活的菜单项（用于内容区显示）
 const activeItem = ref<MenuItem | undefined>(undefined)
 
+// 侧边栏组件引用
+const sidebarRef = ref<InstanceType<typeof uiSidebar> | null>(null)
+
+// 处理菜单选择通知
 const handleSelect = async (item: MenuItem) => {
   activeItem.value = item
   console.log('切换菜单项', item)
-  
+}
   // 演示：发送菜单切换事件到后端
   // try {
   //   await sendToBackend(item.id, { action: 'menu_select', menuName: item.name })
@@ -37,45 +27,30 @@ const handleSelect = async (item: MenuItem) => {
   // }
   // const back = await postMessage(1001, item.id, { action: 'menu_select', menuName: item.name })
   // console.log("~~~按钮back~~~",back)
-}
 
-// 组件挂载时初始化
+// 将用户数据注入子组件
+const user = new userDataStore()
+provide('userDataStore', user)
+// init
 onMounted(async () => {
-  console.log('=== 系统初始化 ===')
-  
-  // 1. 初始化 activeItem
-  activeItem.value = menuItems[1]
-  
-  // 2. 消息测试
-  // let backdata = await postMessage(1000)
-  // console.log('~~~~~postMessage:~~~~~~~~~', backdata)
-  // backdata = await sendMessage(1003)
-  // console.log('~~~~sendMessage:~~~~', backdata)
-
-  // 3. 初始化侧边栏
-  if (sidebarRef.value) {
-    sidebarRef.value.init('sss')
-    console.log('侧边栏初始化完成')
-  }
+  const data = await postMessage(1001)
+  console.log("~~~App.vue init~~~",data)
 })
 </script>
 
 <template>
   <!-- 外层布局容器 -->
   <div class="flex h-screen overflow-hidden bg-gray-50 text-gray-800">
-    
+
     <!-- 左侧侧边栏 -->
-    <Sidebar 
-      v-if="activeItem"
+    <uiSidebar
       ref="sidebarRef"
-      :menu-items="menuItems" 
-      :active-item="activeItem" 
-      @select-item="handleSelect" 
+      @select-item="handleSelect"
     />
 
     <!-- 右侧内容区 -->
-    <MainContent v-if="activeItem" :active-item="activeItem" />
-    
+    <uiMainContent v-if="activeItem" :active-item="activeItem" />
+
   </div>
 </template>
 
