@@ -13,16 +13,15 @@ interface MenuItem {
 
 // 定义菜单数据
 const menuItems: MenuItem[] = [
-  { id: 1, name: '市场行情', icon: 'ri-dashboard-line' },
-  { id: 2, name: '回测', icon: 'ri-user-settings-line' },
-  { id: 3, name: '订单列表', icon: 'ri-file-list-3-line' },
-  { id: 4, name: '回测分析', icon: 'ri-pie-chart-2-line' },
-  { id: 5, name: '设置', icon: 'ri-settings-3-line' },
+  { id: 1, name: '行  情', icon: 'ri-dashboard-line' },
+  { id: 2, name: '策  略', icon: 'ri-user-settings-line' },
+  { id: 3, name: '回  测', icon: 'ri-file-list-3-line' },
+  { id: 4, name: '订  单', icon: 'ri-pie-chart-2-line' },
+  { id: 5, name: '设  置', icon: 'ri-settings-3-line' },
 ]
 
 // Sidebar 组件引用
 const sidebarRef = ref<InstanceType<typeof Sidebar> | null>(null)
-// 先声明，稍后赋值
 const activeItem = ref<MenuItem | undefined>(undefined)
 
 const handleSelect = async (item: MenuItem) => {
@@ -36,8 +35,8 @@ const handleSelect = async (item: MenuItem) => {
   // } catch (error) {
   //   console.error('通知后端失败:', error)
   // }
-  const back = await postMessage(1001, item.id, { action: 'menu_select', menuName: item.name })
-  console.log("~~~按钮back~~~",back)
+  // const back = await postMessage(1001, item.id, { action: 'menu_select', menuName: item.name })
+  // console.log("~~~按钮back~~~",back)
 }
 
 // 组件挂载时初始化
@@ -45,13 +44,13 @@ onMounted(async () => {
   console.log('=== 系统初始化 ===')
   
   // 1. 初始化 activeItem
-  // activeItem.value = menuItems[0]
+  activeItem.value = menuItems[1]
   
   // 2. 消息测试
-  let backdata = await postMessage(1000)
-  console.log('~~~~~postMessage:~~~~~~~~~', backdata)
-  backdata = await sendMessage(1003)
-  console.log('~~~~sendMessage:~~~~', backdata)
+  // let backdata = await postMessage(1000)
+  // console.log('~~~~~postMessage:~~~~~~~~~', backdata)
+  // backdata = await sendMessage(1003)
+  // console.log('~~~~sendMessage:~~~~', backdata)
 
   // 3. 初始化侧边栏
   if (sidebarRef.value) {
