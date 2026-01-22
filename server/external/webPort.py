@@ -5,12 +5,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Any, List
 
-from typing import TYPE_CHECKING
-if TYPE_CHECKING:
-    from server.core.quant import quant
+# from typing import TYPE_CHECKING
+# if TYPE_CHECKING:
+#     from server.core.quant import quant
+# from server.external.msgHandler import msgHandler
 
-# 定义请求数据模型
-class MessageRequest(BaseModel):
+# 约定消息格式
+class msgRequest(BaseModel):
     id: int
     args: List[Any] = []
 
@@ -18,8 +19,9 @@ class MessageRequest(BaseModel):
 class web:
     """FastAPI服务器框架"""
     
-    def __init__(self, quant_instance: 'quant'):
-        self._quant = quant_instance
+    def __init__(self, fnHandler):
+        # self._quant = quant_instance
+        self._msgTransform = fnHandler
         self._app = self._create_app()
         self._server = None
     
@@ -32,21 +34,16 @@ class web:
                     allow_headers=["*"])
         #消息接收
         @app.post("/api/postMessage")
-        def post_message(msg: MessageRequest):
-            """
-            接收 POST 消息
-            msg.id: 消息 ID
-            msg.args: 参数列表
-            """
-            print(f"~111~~post_message~~~~~")
-            print(f"  消息ID: {msg.id}")
-            print(f"  参数列表: {msg.args}")
+        async def post_message(msg: msgRequest):
+            # rt = self._msgTransform.process(msg.id, msg.args)
+            rt = self._msgTransform(msg.id, msg.args)
+            print("~~~~~~back msg~~~~~~~",rt)
             return {
                 "status": 'success',
                 "message": 'post_message 接收成功',
                 "received": {
-                    "id": msg.id,
-                    "args": msg.args
+                    "id": 0,
+                    "args": 0
                 }
             }
         
@@ -57,9 +54,14 @@ class web:
             id: 消息 ID
             arg0, arg1: 可选参数
             """
-            print(f"~222~~get_Message~~~~~")
-            print(f"  消息ID: {id}")
-            print(f"  参数: arg0={arg0}, arg1={arg1}")
+            args = []
+            if arg0 is not None:
+                args.append(arg0)
+            if arg1 is not None:
+                args.append(arg1)
+            
+            if self._message_handler:
+                self._message_handler.handleMessage(id, args)
             return {
                 "status": 'success',
                 "message": 'get_Message 接收成功',
@@ -84,7 +86,6 @@ class web:
         # print('~~~~~',web_config.get('host'),web_config.get('port'))
         self._server = uvicorn.Server(config)
         await self._server.serve()
-
     def openWeb(self):
         if sys.platform.startswith("darwin"):#macos
             safari = webbrowser.get('safari')
