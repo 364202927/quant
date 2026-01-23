@@ -1,5 +1,5 @@
 import abc
-from server.utils import warn,switch, evtConnect, evtFire, kEvt_GetTime, kEvt_Time, time2ID, require,eTimeTs
+from server.utils import warn,switch, evtConnect, evtFire, kEvt_GetTime, kEvt_Time, time2ID, require,eTimeTs,timeFrame2Float
 kStrategyFile = 'server.strategy.'
 
 class taskHandle(metaclass=abc.ABCMeta):
@@ -77,7 +77,7 @@ class task:
             if self.__handle.process(tabId, timeKey):
                 return True
         # 绑定时间事件
-        time = float(timeKey[:-1]) * eTimeTs[timeKey[-1]]
+        time = timeFrame2Float(timeKey)
         timeName = time < 1 and '1sLess' or timeKey
         fnName = 'update_' + timeName
         if hasattr(self.__handle, fnName):

@@ -44,45 +44,28 @@ async def evtFireAsync(strEvt, *args):
     # 并发执行所有回调
     tasks = []
     for receiver in receivers:
-        try:
-            if inspect.iscoroutinefunction(receiver):# 异步回调：创建task
-                task = receiver(
-                    sender=strEvt,
-                    value=getValue(0),
-                    value1=getValue(1),
-                    value2=getValue(2),
-                    value3=getValue(3))
-                tasks.append(task)
-            else:# 同步回调
-                receiver(
-                    sender=strEvt,
-                    value=getValue(0),
-                    value1=getValue(1),
-                    value2=getValue(2),
-                    value3=getValue(3))
-        except Exception as e:
-            print(f"事件回调执行失败: {strEvt}, 错误: {e}")
+        # try:
+        if inspect.iscoroutinefunction(receiver):# 异步回调：创建task
+            task = receiver(
+                sender=strEvt,
+                value=getValue(0),
+                value1=getValue(1),
+                value2=getValue(2),
+                value3=getValue(3))
+            tasks.append(task)
+        else:# 同步回调
+            receiver(
+                sender=strEvt,
+                value=getValue(0),
+                value1=getValue(1),
+                value2=getValue(2),
+                value3=getValue(3))
+        # except Exception as e:
+        #     print(f"事件回调执行失败: {strEvt}, 错误: {e}")
     
     # 等待所有异步任务完成
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
-
-
-# 加载json
-def loadJson(filePath):
-    with open(filePath, "r", encoding="utf-8") as file:
-        fileData = json.load(file)
-    return fileData
-
-# 加载路径
-def joinPath(path, fileName):
-    fullPath = path + fileName
-    return fullPath
-
-
-def readFile(path, fileType):
-    pass
-
 
 # 返回文件后缀
 def getFileExtension(fileName):
@@ -126,19 +109,20 @@ def reviseTime(strTime, sconds):
 def diff_Pdtime(pdTime, seconds='now'):
     seconds = pd.Timestamp.now() if seconds == 'now' else seconds
     return abs((seconds - pdTime).total_seconds() / 60)
-    
 
-# str
+# str，替换
 def strReplace(symbolName, strRep=['/', '-']):
     return symbolName.replace(strRep[0], strRep[1])
 
+#字符串分割
+def split_by(src: str, sep: str) -> list[str]:
+    return [s.strip() for s in src.split(sep)]
 
 def slit(src, target):
     parts = src.split(target)
     if len(parts) > 1:
         return parts[0], parts[1]
     return False
-
 
 def aContainB(input, strOrTab):
     for strKey in strOrTab:
@@ -171,14 +155,14 @@ def switch(dice, key):
         # print("err：找不到key", dice, key)
         return False
     return dice.get(key)
-
-
 def switchFn(diceFn, key, **kwargs):
     if not diceFn.get(key):
         # print("switchFn err 没有接收函数", key, diceFn)
         return False
     return diceFn[key](**kwargs)
-
+# 若key1在dice里存在返回key1，否则返回key2
+def switchV(dice, key1, key2):
+    return dice.get(key1) and dice.get(key1) or dice.get(key2)
 
 def trySwitchFn(diceFn, key, attempts, **kwargs):
     rt = switchFn(diceFn, key, **kwargs)
@@ -201,18 +185,8 @@ def tryExecution(fn, attempts=3, sleepTime=0.2):
             time.sleep(sleepTime)
     return False, None
 
-
-# 若key1在dice里存在返回key1，否则返回key2
-def switchV(dice, key1, key2):
-    return dice.get(key1) and dice.get(key1) or dice.get(key2)
-
-
-def timeFrame2int(timeframe):
-    # keyTime = int(timeframe[:-1]) * eTimeTs[timeframe[-1]]
-    # return int(eTimeTs[timeframe])
-    return int(timeframe[:-1]) * eTimeTs[timeframe[-1]]
-
-
+def timeFrame2Float(timeframe):
+    return float(timeframe[:-1]) * eTimeTs[timeframe[-1]]
 def sec2min(seconds):
     minutes = seconds // 60
     return minutes
@@ -239,6 +213,22 @@ def curPath():
     caller_file = caller_frame.filename
     return os.path.dirname(os.path.realpath(caller_file)) + '/'
 
+# 加载json
+def loadJson(filePath):
+    with open(filePath, "r", encoding="utf-8") as file:
+        fileData = json.load(file)
+    return fileData
+
+# 加载路径
+def joinPath(path, fileName):
+    fullPath = path + fileName
+    return fullPath
+
+def readFile(path, fileType):
+    pass
+
+def writeFile(path, fileType, data):
+    pass
 
 # 加载
 def require(modPath):

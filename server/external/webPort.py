@@ -5,11 +5,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Any, List
 
-# from typing import TYPE_CHECKING
-# if TYPE_CHECKING:
-#     from server.core.quant import quant
-# from server.external.msgHandler import msgHandler
-
 # 约定消息格式
 class msgRequest(BaseModel):
     id: int

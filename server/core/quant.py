@@ -81,7 +81,7 @@ class quant:
             SyntaxError, TypeError, AttributeError, NameError,
             ImportError, ValueError, KeyError, IndexError
         )
-        #logic
+        #logic todo先不忽略错误
         # try:
         #     while True:
         #         await self.__timeMgr.run()
@@ -135,14 +135,3 @@ class quant:
                 taskList.append(fileName + '.' + className)
         log("加载文件：", taskList)
         self._newTask(taskList)
-
-    # # 返回共享数据 todo:这里做出修改，应该可获取全部任务（只能可读，不能修改）
-    # def getCta(self, ctaName):
-    #     allCta = {}
-    #     for id in self.__taskMgr:
-    #         task = self.__taskMgr[id]
-    #         className = task.__class__.__name__
-    #         allCta[className] = task.get("store")
-    #         if ctaName == className:
-    #             return allCta[className]
-    #     return allCta

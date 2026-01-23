@@ -1,22 +1,27 @@
 from server.utils.decoratorTool import singleton
 from server.utils.common import loadJson
-
 kConfigPath = "assets/config/user.json"
+kApikeyPath = "assets/config/apiKey"
+#todo:apiKey 结构
 
 
 @singleton
 class fileConfig:
-    __config = None
+    "文件配置管理器"
 
     def __init__(self):
         self.__config = loadJson(kConfigPath)
+        
         # 检测交易所
-        markets = self.markets()
-        for name in markets.keys():
-            if markets[name]['enable'] == 1:
-                return
-        print("交易所未被激活")
+        # markets = self.markets()
+        # for name in markets.keys():
+        #     if markets[name]['enable'] == 1:
+        #         return
+        # print("交易所未被激活")
         # exit()
+
+    def set(self, key, value):
+        pass
 
     def get(self, key=None):
         if not key:
@@ -29,12 +34,15 @@ class fileConfig:
             return config[secondKey]
         return config
 
-    def markets(self, key=""):
-        return self._disposition("market", key)
+    # def markets(self, key=""):
+    #     return self._disposition("market", key)
 
-    def thirdParty(self, key=""):
-        return self._disposition("thirdParty", key)
+    # def thirdParty(self, key=""):
+    #     return self._disposition("thirdParty", key)
 
+    def external(self, key=""):
+        return self._disposition("external", key)
+    
     def logger(self, key=""):
         return self._disposition("logger", key)
 

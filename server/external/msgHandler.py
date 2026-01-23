@@ -1,13 +1,26 @@
-# from typing import TYPE_CHECKING, List, Any
 from server.core.quant import quant
-
+from server.utils import eMsgId,switchFn
+from server.utils.fileConfig import g_config
 
 class msgHandler:
-    """消息处理器 - 接收并处理来自webport和cli的消息"""
+    "消息事件处理器"
     
-    def __init__(self, objQuant: 'quant'):
+    def __init__(self, objQuant:quant):
         self.__instance = objQuant
     
+    def idTransform(self, id, msg):
+        def initWeb():
+            #返回数据 1.设置面板.username  2.market数据 3.任务列表 4.下单列表
+            #流程1.quant如果任务没运行，先让web停止10秒发送协议
+
+            #1.设置数据
+            userName = g_config.info("username")
+            return
+        def initMarketTrends():
+            return
+        return switchFn({1000: initWeb,
+                  1001: initMarketTrends},
+                key=id)
 
     # 处理接口
     def process(self, id, msg):

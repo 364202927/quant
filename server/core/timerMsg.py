@@ -1,4 +1,4 @@
-from server.utils import evtConnect, evtFireAsync, eTimeTs, kEvt_GetTime, kEvt_Time, log
+from server.utils import evtConnect, evtFireAsync, eTimeTs, kEvt_GetTime, kEvt_Time, log,timeFrame2Float
 from datetime import datetime,timedelta
 import asyncio,heapq
 kMaxSleepTime = 60  # 最大休眠时间60秒
@@ -7,7 +7,7 @@ class schedule:
     def __init__(self, timeKey):
         self.__pool = []  # 任务ID列表
         self.__timeKey = timeKey
-        self.__interval = float(timeKey[:-1]) * eTimeTs[timeKey[-1]] # 间隔时间
+        self.__interval = timeFrame2Float(timeKey) # 间隔时间
         # print("~~~~interval~~~~",self.__interval,float(timeKey[:-1]),eTimeTs[timeKey[-1]])
         self.__nextRun = self._nextTime()
         # log(f"Schedule初始化:",timeKey,datetime.now().strftime('%m-%d %H:%M:%S'),'  next:',self.__nextRun.strftime('%m-%d %H:%M:%S'))

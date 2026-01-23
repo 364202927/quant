@@ -7,8 +7,8 @@ def main():
     # 启动
     launch = launcher()
     # # 测试任务
-    launch.onceProject(projectName='testStrategy')
-
+    launch.addProject(projectName='testStrategy')
+    launch.run()
     # *优先使用start文件启动
     # launch.start()
 

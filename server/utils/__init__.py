@@ -17,13 +17,18 @@ eSampleTs = {
     "1M": "M",
 }
 
-# 任务状态
-eTaskState = {
-    'eActive': 0,  # 挂起
-    'eWait': 1,  # 等待开单
-    'eRun': 2,  # 有单子在进行中
-    'eSell': 3,  # 强制结束任务，只能平仓，结束后转换为待激活
+eMsgId = {
+    #get数据，获取信息
+    1000, #web初始化
+    1001, #行情 
+    1002,
+    1003,
+    1004,
+
+    #set数据，设置信息
+    10000, #设置保存
 }
+
 
 # 事件
 kEvt_Time = 'evtTime'  # 任务时间设定
@@ -40,6 +45,7 @@ from server.utils.common import (
     evtConnect,
     evtFire,
     evtFireAsync,
+    split_by,
     slit,
     str2ms,
     reviseTime,
@@ -49,6 +55,7 @@ from server.utils.common import (
     getFileExtension,
     trySwitchFn,
     tryExecution,
+    timeFrame2Float,
 )
 from server.utils.logger import log, err, warn
 from server.utils.fileConfig import g_config
@@ -76,6 +83,7 @@ __all__ = [
     'getFileExtension',
     'trySwitchFn',
     'tryExecution',
+    'timeFrame2Float',
     # logger
     'log',
     'err',
@@ -96,4 +104,5 @@ __all__ = [
     'kEvt_GetTime',
     'kEvt_Time',
     'eSampleTs',
+    'eMsgId',
 ]
