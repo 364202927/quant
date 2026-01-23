@@ -1,39 +1,25 @@
 import abc
-
+from server.utils import pdData
 
 class baseIndicators(metaclass=abc.ABCMeta):
     '指标基类'
 
-    # __bindFn = None # 触发回调 todo:可以取消和signal
-    # _pd = None
-    #
-    def __init__(self, backFn):
-        # self.__bindFn = backFn
-        # self._pd = pdData()
+    def __init__(self):
+        self._pd = pdData()
+        # self._isTa = False  # 是否使用ta库计算
         self.init()
 
-    def get(self, key=''):
-        # return switch({'': self._pd.get()},
-        #           key=key)
-        # return self._pd.get()
-        if self[key]:
-            return self[key]
-
-    # 发送交易信息
-    # def signal(self):
-        # pass
-
-    # @abc.abstractmethod
-    # def info(self): pass
-
+    # def get(self, key=''):
+    #     # return switch({'': self._pd.get()},
+    #     #           key=key)
+    #     # return self._pd.get()
+    #     if self[key]:
+    #         return self[key]
     @abc.abstractmethod
-    def init(self):
-        pass
-
+    def init(self):pass
     @abc.abstractmethod
-    def delimit(self, **kWargs):
-        pass
-
+    def delimit(self, **kWargs):pass #指标参数设置
     @abc.abstractmethod
-    def calculate(self, sor_pd):
-        pass
+    def calculate(self, pd:pdData):pass
+    @abc.abstractmethod
+    def calculateTa(self, pd:pdData):pass

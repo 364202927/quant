@@ -1,104 +1,88 @@
-from server.utils import switch, evtConnect, evtFire, eTaskState, kEvt_GetTime, kEvt_Time, time2ID
-# from data.user.center import g_userCenter
-# from data.user.shareDate import g_share
+import abc
+from server.utils import warn,switch, evtConnect, evtFire, kEvt_GetTime, kEvt_Time, time2ID, require,eTimeTs
+kStrategyFile = 'server.strategy.'
 
-# todo:初次进程序读取上次任务
-# todo:当下单成功时，修改状态为run
-# todo:关闭任务，改变时间等还没完成
+class taskHandle(metaclass=abc.ABCMeta):
+    indicators = {}#共享指标
 
+    def __init__(self):
+        self.tacticsTime = []# 触发时间
+    
+    def regTime(self, *timeKeys):
+        self.tacticsTime = list(timeKeys) if timeKeys else []
+    
+    def shardIndicators(self,className:str): #根据类名获取指定指标
+        return self.indicators.get(className)        
+    def getTacticsTime(self):
+        return self.tacticsTime
+    def className(self):
+        return self.__class__.__name__
 
+#
 class task:
-    __shared = {}  # task间信息互传的类
-
-    def __init__(self, fnCta):
+    def __init__(self):
         self.info = ''
-        self.tacticsTime = []           # 触发时间
         self.__id = time2ID()                   # 任务id
-        self.__state = eTaskState.get("eActive")# 当前状态
-        self.__fnCta = fnCta
-        self.indicators = {}  # 绑定的策略{name:class,name2:class2}
-        
+        self.__handle = None
+        self.isActive = True
+        self.isFirst = False
         evtConnect(kEvt_GetTime, self)
-        # evtConnect(kEvt_Signal, self)
 
     def info(self, strInfo):
         self.info = strInfo
 
     def get(self, key=''):
-        return switch({'': self.tacticsTime,
+        return switch({'tacticsTime': self.__handle.getTacticsTime(),
                        'id': self.__id,
-                       # 'order':self.taskOrder,
-                       'className': self.__class__.__name__,
-                    #    'symbols': self.symbols,
+                       'className': self.__handle.className(),
                        'info': self.info,
-                       'name': self.__doc__,
-                       'indicators': self.indicators,
-                       'store': self.__shared},
+                       'name': self.__doc__},
                       key=key)
 
-    # 切换任务状态
-    def state(self):
-        return self.__state
+    def bind(self, className: str):
+        self.__handle = require(kStrategyFile + className)()
+        if not isinstance(self.__handle, taskHandle):
+            return False
+        self.__handle.init()
+        self.active()
+        return True
+
     # 激活任务
     def active(self):
-        if self.state() > eTaskState.get("eActive"):
-            return
-        self.__state = eTaskState.get("eWait")
-        # 判断第一次激活，向定时器注册任务
-        if len(self.indicators) == 0 and \
-                len(self.tacticsTime) == 0:
+        self.isActive = True
+        if not self.isFirst:# 第一次激活向定时器注册任务
             self._register()
-    def pause(self):
-        pass
-    
-    def regTime(self, *timeKeys):
-        self.tacticsTime = list(timeKeys) if timeKeys else []
-    
-    # 关闭任务 todo
-    def close(self):
-        # if self.state() == eTaskState.get("eWait") or \
-        # 	self.state() == eTaskState.get("eSell"):
-        # 	self.__state = eTaskState.get("eActive")
-        # 	print("~~todo关掉任务后把任务信息删掉~~~")
-        # elif self.state() == eTaskState.get("eRun"):
-        # 	self.__state = eTaskState.get("eSell")
+    def stop(self):
+        self.isActive = False
 
-        # elif self.state() == eTaskState.get("eSell"):
-        # 	self.__state = eTaskState.get("eSell")
-        pass
-
-    # def addStrategy(self, strTactics):
-    # 	strategy = require('strategy.' + strTactics)(self.__ex, self.__name)
-    # 	self.__strategys.append(strategy)
-        # self.regStrategy(strategy)
-
-    # def delStrategy(self, strTactics):
-    # 	pass
-    # def clear(self, strTactics):
-    # 	pass
-
-    # 注册时间，策略
+    # 只有第一次激活时注册时间事件
     def _register(self):
-        # g_share.regSymbols(self.__ex, strategy.symbol) #公用资源添加监控的币种
-        # g_userCenter.addTask(self)						#个人中心添加任务
-        self.init()
-        if len(self.tacticsTime) > 0:
-            evtFire(kEvt_Time, self.get('id'), self.get())  # 告诉定时器任务id和触发间隔
+        evtFire(kEvt_Time, self.get('id'), self.get('tacticsTime'))
+        self.isFirst = True
     
-    # 处理共享数据
-    def store(self, key, value):
-        self.__shared[key] = value
-
-    def take(self, key=''):
-        shared = self.get("store")
-        if key == '':
-            return shared
-        return shared[key]
-
-    def getCTA(self, name=''):
-        rtCta = self.__fnCta(name)
-        return rtCta
-    # 继承
-    # def init(self):初始化
-    # def evtSignal(self, indicatorsName):信号
-    # def evtTime(self):时间
+    # 事件处理
+    def evtProcess(self, key, *args):
+        timeKey = args[0]
+        tabId = args[1]
+        # 过滤只触发接收的时间戳
+        filter = set(self.__handle.getTacticsTime())
+        if timeKey not in filter:
+            return True
+        if not self.isActive:
+            if self.__handle.stopProcess:
+                self.__handle.stopProcess()
+            return True
+        #全时间回调接收，如返回ture不在触发其余时间绑定
+        if hasattr(self.__handle, "process"):
+            if self.__handle.process(tabId, timeKey):
+                return True
+        # 绑定时间事件
+        time = float(timeKey[:-1]) * eTimeTs[timeKey[-1]]
+        timeName = time < 1 and '1sLess' or timeKey
+        fnName = 'update_' + timeName
+        if hasattr(self.__handle, fnName):
+            fnEvt = getattr(self.__handle, fnName)
+            fnEvt(tabId, timeKey)
+            return True
+        warn('当前时间事件未接收:', fnName)
+        # self.__handle.evtTime(timeKey)

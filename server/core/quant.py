@@ -1,12 +1,13 @@
+import asyncio
+from server.core.task import task
+from typing import Dict, Any, Optional
 from server.core.timerMsg import timerMgr
 from server.utils import require, path2File, loadJson, log
-import asyncio
-from typing import Dict, Any, Optional
 
-kStrategyFile = 'server.strategy.'
+
+# kStrategyFile = 'server.strategy.'
 kStrategyFile2 = 'server/strategy/'
 kStartFile = 'assets.config.start.json'
-
 
 
 class quant:
@@ -31,29 +32,29 @@ class quant:
     
     async def get_all_tasks_status(self) -> Dict[str, Any]:
         """线程安全获取所有任务状态"""
-        async with self.__lock:
-            return {
-                task_name: {
-                    'state': task.state(),
-                    'info': task.get('info'),
-                    'id': task.get('id'),
-                    'className': task.get('className')
-                }
-                for task_name, task in self.__taskMgr.items()
-            }
+        # async with self.__lock:
+        #     return {
+        #         task_name: {
+        #             'state': task.state(),
+        #             'info': task.get('info'),
+        #             'id': task.get('id'),
+        #             'className': task.get('className')
+        #         }
+        #         for task_name, task in self.__taskMgr.items()
+        #     }
     
     async def get_task_status(self, task_name: str) -> Optional[Dict[str, Any]]:
         """获取单个任务状态"""
-        async with self.__lock:
-            task = self.__taskMgr.get(task_name)
-            if not task:
-                return None
-            return {
-                'state': task.state(),
-                'info': task.get('info'),
-                'indicators': task.get('indicators'),
-                'id': task.get('id')
-            }
+        # async with self.__lock:
+        #     objTask = self.__taskMgr.get(task_name)
+        #     if not objTask:
+        #         return None
+        #     return {
+        #         # 'state': task.state(),
+        #         'info': objTask.get('info'),
+        #         'indicators': objTask.get('indicators'),
+        #         'id': objTask.get('id')
+        #     }
     
     # def is_running(self) -> bool:
     #     """检查运行状态"""
@@ -81,19 +82,21 @@ class quant:
             ImportError, ValueError, KeyError, IndexError
         )
         #logic
-        try:
-            while True:
-                await self.__timeMgr.run()
-        except recoverable_errors as e:
-            log(f"[崩溃]: {type(e).__name__}: {e}")
-            # if attempt == max_retries:
-            #     raise
-            log("[恢复] 尝试重启...")
-            await asyncio.sleep(1)
-            self.__stop_event.clear()
-        except Exception as e:
-            log(f"[异常] {type(e).__name__}: {e}")
-            raise
+        # try:
+        #     while True:
+        #         await self.__timeMgr.run()
+        # except recoverable_errors as e:
+        #     log(f"[崩溃]: {type(e).__name__}: {e}")
+        #     # if attempt == max_retries:
+        #     #     raise
+        #     log("[恢复] 尝试重启...")
+        #     await asyncio.sleep(1)
+        #     self.__stop_event.clear()
+        # except Exception as e:
+        #     log(f"[异常] {type(e).__name__}: {e}")
+        #     raise
+        while True:
+            await self.__timeMgr.run()
     
     # def run(self, count=True):
     #     """兼容旧版本的同步运行接口"""
@@ -110,9 +113,10 @@ class quant:
     # 创建一个任务
     def _newTask(self, tabStrategy):
         for strategyName in tabStrategy:
-            task = require(kStrategyFile + strategyName)(self.getCta) # todo:需要判断这个文件是不是task用例子
-            self.__taskMgr[task.get("className")] = task
-            task.active()
+            objTask = task()
+            if not objTask.bind(strategyName):
+                continue
+            self.__taskMgr[objTask.get("className")] = task
 
     # 加载strategy文件下全部策略
     def loadTask(self, projectName):

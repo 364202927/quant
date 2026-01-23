@@ -25,11 +25,9 @@ from server.indicators.baseIndicators import *
 class boll(baseIndicators):
     '布林线指标'
 
-    # 默认指标
-    _maDay = 30  # 均线：交易时间线，股票是20天，币是30天
-    _stDev = 2  # 标准差：数字越大开口越阔，触发的信号越不频繁
-
     def init(self):
+        self._maDay = 30  # 均线：交易时间线，股票是20天，币是30天
+        self._stDev = 2  # 标准差：数字越大开口越阔，触发的信号越不频繁
         self._pd.setHead(['candle_begin_time', "median",
                          "std", "upper", "lower", 'bbw', '%B'])
 
@@ -39,10 +37,12 @@ class boll(baseIndicators):
         if kWargs.get('stdev'):
             self._stdev = kWargs['stdev']
 
-    def calculate(self, pd):
+    def calculate(self,  pd:pdData):
         self._pd.format(pd, style="copy")
         self._bollTrack(pd)
         return self._pd
+    def calculateTa(self, pd:pdData):
+        pass
 
     # 计算均线和boll上下轨
     def _bollTrack(self, sor_pd):

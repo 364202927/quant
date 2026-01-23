@@ -55,7 +55,6 @@ class testCTA(baseCTA):
             return open('short')
         return False
     # 测试模式平仓
-
     def testClose(self, longFn, shortFn):
         def close(dir):
             open_dir = self.__openl if dir == 'long' else self.__opens
@@ -88,6 +87,6 @@ class testCTA(baseCTA):
         return 0
 
     # 继承,测试函数
-    def testSignal(self, pf, count): pass  # 信号
-    def testEnd(self, orders): pass  # 测试结束
-    def evtTime(self, timeKey): pass  # 时间事件统一接收
+    # def testSignal(self, pf, count): pass  # 信号
+    # def testEnd(self, orders): pass  # 测试结束
+    # def evtTime(self, timeKey): pass  # 时间事件统一接收
