@@ -1,10 +1,9 @@
-import pickle,json,datetime,time,os,requests,inspect,asyncio,inspect
+import pickle,json,time,os,requests,inspect,asyncio,inspect,gzip,os,pathlib
 from importlib import import_module
 from pydispatch import dispatcher
 from server.utils import eTimeTs
+from datetime import datetime, timezone
 import pandas as pd
-
-
 savePath = "data/save/"
 
 def publicIp():
@@ -12,13 +11,11 @@ def publicIp():
     public_ip = response.json()['ip']
     return public_ip
 
-
 # 绑定消息
 def evtConnect(strEvt, obj):
     def rtMsg(sender, value, value1, value2, value3):
         obj.evtProcess(sender, value, value1, value2, value3)
     dispatcher.connect(rtMsg, signal=strEvt, weak=False)
-
 
 # 发送消息(最多3参数) - 同步版本
 def evtFire(strEvt, *args):
@@ -29,7 +26,6 @@ def evtFire(strEvt, *args):
     dispatcher.send(signal=strEvt, sender=strEvt, 
                     value=getValue(0), value1=getValue(1),
                     value2=getValue(2), value3=getValue(3))
-
 
 # 发送消息(最多3参数) - 异步版本
 async def evtFireAsync(strEvt, *args):
@@ -104,7 +100,6 @@ def reviseTime(strTime, sconds):
         return date + datetime.timedelta(seconds=abs(sconds))
     return date - datetime.timedelta(seconds=abs(sconds))
 
-
 # 时间差
 def diff_Pdtime(pdTime, seconds='now'):
     seconds = pd.Timestamp.now() if seconds == 'now' else seconds
@@ -124,13 +119,6 @@ def slit(src, target):
         return parts[0], parts[1]
     return False
 
-def aContainB(input, strOrTab):
-    for strKey in strOrTab:
-        if strKey in input:
-            return True
-    return False
-
-
 # find
 def lfind(lists, key, target):
     # for item in iter(lists):
@@ -139,15 +127,23 @@ def lfind(lists, key, target):
     # return None
     def compare(item):
         return item[key] == target
-    return fnfind(lists, compare)
-
-
-def fnfind(lists, fnJudge):
+    return listFind(lists, compare)
+def listFind(lists, fnJudge):
     for item in iter(lists):
         if fnJudge(item):
             return item
     return None
+def dictFind(dict, fnJudge):
+    for k, v in dict.items():
+        if fnJudge(k,v):
+            return k,v
+    return None
 
+def aContainB(input, strOrTab):
+    for strKey in strOrTab:
+        if strKey in input:
+            return True
+    return False
 
 # 分支调用
 def switch(dice, key):
@@ -190,7 +186,10 @@ def timeFrame2Float(timeframe):
 def sec2min(seconds):
     minutes = seconds // 60
     return minutes
-
+def utc_now():
+    local_now = datetime.now().astimezone()
+    utc_offset_seconds = local_now.utcoffset().total_seconds()
+    utc_offset_hours = int(utc_offset_seconds / 3600)
 
 # 搜索路径下的文件
 def path2File(path, fileType=''):
@@ -206,29 +205,97 @@ def path2File(path, fileType=''):
         print(e)
     return []
 
-
 # 当前文件的工作路径
 def curPath():
     caller_frame = inspect.stack()[1]
     caller_file = caller_frame.filename
     return os.path.dirname(os.path.realpath(caller_file)) + '/'
 
-# 加载json
-def loadJson(filePath):
-    with open(filePath, "r", encoding="utf-8") as file:
-        fileData = json.load(file)
-    return fileData
-
 # 加载路径
 def joinPath(path, fileName):
     fullPath = path + fileName
     return fullPath
 
-def readFile(path, fileType):
-    pass
+def readFile(pathFile):
+    if not os.path.exists(pathFile) or\
+          not os.path.isfile(pathFile): #检测文件是否存在
+        return None
+    
+    fileType, _ = getFileExtension(pathFile)
+    def _json():
+        with open(pathFile, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    def _pkl():
+        with open(pathFile, 'rb') as f:
+            return pickle.load(f)
+    def _txt():
+        with open(pathFile, 'r', encoding='utf-8') as f:
+            return f.read()
+    def _gz():
+        with gzip.open(pathFile, 'rb') as f:
+            return pickle.load(f)
+    def _h5():
+        with pd.HDFStore(pathFile, 'r') as store:
+            return {key: store[key] for key in store.keys()}
+    def _xlsx():
+        return pd.read_excel(pathFile, sheet_name=None)
+    def _parquet():
+        return pd.read_parquet(pathFile, engine='pyarrow')
+    return switchFn({
+        'json': _json,
+        'pkl': _pkl,
+        'txt': _txt,
+        'gz': _gz,
+        'h5': _h5,
+        'xlsx': _xlsx,
+        'parquet': _parquet
+    }, key=fileType)
 
-def writeFile(path, fileType, data):
-    pass
+def writeFile(data, pathFile):
+    if data is None or (isinstance(data, (list, dict)) and len(data) == 0):
+        return False
+
+    fileType, _ = getFileExtension(pathFile)
+    def _json():
+        with open(pathFile, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    def _pkl():
+        with open(pathFile, 'wb') as f:
+            pickle.dump(data, f)
+    def _txt():
+        with open(pathFile, 'w', encoding='utf-8') as f:
+            f.write(str(data))
+    def _gz():
+        with gzip.open(pathFile, 'wb') as f:
+            pickle.dump(data, f)
+    def _h5():
+        with pd.HDFStore(pathFile, 'w') as store:
+            if isinstance(data, dict):
+                for key, value in data.items():
+                    store.put(key, value)
+            else:
+                store.put('data', data)
+    def _xlsx():
+        if isinstance(data, dict):
+            with pd.ExcelWriter(pathFile) as writer:
+                for key, value in data.items():
+                    value.to_excel(writer, sheet_name=key)
+        else:
+            data.to_excel(pathFile)
+    def _parquet():
+        data.to_parquet(pathFile, engine='pyarrow', compression='snappy')
+    result = switchFn({
+        'json': _json,
+        'pkl': _pkl,
+        'txt': _txt,
+        'gz': _gz,
+        'h5': _h5,
+        'xlsx': _xlsx,
+        'parquet': _parquet
+    }, key=fileType)
+
+    # 如果 switchFn 返回 False（未找到对应的文件类型），返回 False，否则返回 True
+    return result is not False
 
 # 加载
 def require(modPath):
@@ -241,78 +308,6 @@ def require(modPath):
     return obj
 
 
-def pd2File(dict, filePath):
-        # ata_dict = {
-        #     'df1': pd.DataFrame({'A': [1, 2], 'B': ['x', 'y']}),
-        #     'df2': pd.DataFrame({'C': [3.0, 4.0], 'D': [True, False]}),
-        #     # ... 其他df3, df4, df5
-        # }
-        # # 方法1：保存为pickle文件
-        # with open('combined_data.pkl', 'wb') as f:
-        #     pickle.dump(data_dict, f)
-        # # 方法2：保存为joblib文件（适合大数据）
-        # dump(data_dict, 'combined_data.joblib')
-        # # 读取时
-        # with open('combined_data.pkl', 'rb') as f:
-        #     loaded_dict = pickle.load(f)
-        # h5
-        # with pd.HDFStore('combined_data.h5') as store:
-        #     store.put('df1', data_dict['df1'])
-        #     store.put('df2', data_dict['df2'])
-        #     # ... 其他DF
-        # # 读取时
-        # with pd.HDFStore('combined_data.h5') as store:
-        #     df1 = store.get('df1')
-        #     df2 = store.get('df2')
-    # xlsx
-        # with pd.ExcelWriter('combined_data.xlsx') as writer:
-        #     data_dict['df1'].to_excel(writer, sheet_name='df1')
-        #     data_dict['df2'].to_excel(writer, sheet_name='df2')
-        #     # ... 其他DF
-        # # 读取时
-        # df1 = pd.read_excel('combined_data.xlsx', sheet_name='df1')
-        # df2 = pd.read_excel('combined_data.xlsx', sheet_name='df2')
-    _, fileType = slit(filePath, '.')
-    path = savePath + filePath
-
-    def pkl():
-        with open(path, 'wb') as f:
-            pickle.dump(dict, f)
-
-    def h5():  # todo:未完成
-        with pd.HDFStore(path) as store:
-            for key, value in dict.items():
-                store.put(key, value)
-    #     store.put('df2', data_dict['df2'])
-
-    def xlsx():  # todo:未完成
-        with pd.ExcelWriter(path) as writer:
-            for key, value in dict.items():
-                dict[key].to_excel(writer, sheet_name=value)
-
-    switchFn({'pkl': pkl, 'h5': h5, 'xlsx': xlsx}, key=fileType)
-
-
-def loadPdFile(fileName):
-    _, fileType = slit(fileName, '.')
-    path = "data/save/" + fileName
-
-    def pkl():
-        with open(path, 'rb') as f:
-            return pickle.load(f)
-
-    def h5():  # todo:未完成
-        with pd.HDFStore(path) as store:
-            for key, value in dict.items():
-                store.put(key, value)
-    #     store.put('df2', data_dict['df2'])
-
-    def xlsx():  # todo:未完成
-        with pd.ExcelWriter(path) as writer:
-            for key, value in dict.items():
-                dict[key].to_excel(writer, sheet_name=value)
-
-    return switchFn({'pkl': pkl, 'h5': h5, 'xlsx': xlsx}, key=fileType)
 
 
 # 并行

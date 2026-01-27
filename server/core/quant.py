@@ -2,12 +2,12 @@ import asyncio
 from server.core.task import task
 from typing import Dict, Any, Optional
 from server.core.timerMsg import timerMgr
-from server.utils import require, path2File, loadJson, log
+from server.utils import require, path2File, readFile, log
 
 
 # kStrategyFile = 'server.strategy.'
 kStrategyFile2 = 'server/strategy/'
-kStartFile = 'assets.config.start.json'
+kStartFile = 'assets.config.start.json'  #todo:这里修改
 
 
 class quant:
@@ -127,7 +127,7 @@ class quant:
     # 根据策略文件加载
     def loadTaskList(self, file=kStartFile):
         taskList = []
-        config = loadJson(file)
+        config = readFile(file) #todo:修改
         for fileName in config:
             classTab = config[fileName]
             for i in range(len(classTab)):

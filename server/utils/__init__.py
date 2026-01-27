@@ -19,26 +19,29 @@ eSampleTs = {
 
 eMsgId = {
     #get数据，获取信息
-    1000, #web初始化
-    1001, #行情 
-    1002,
-    1003,
-    1004,
-
-    #set数据，设置信息
-    10000, #设置保存
+    'eWebInit':1000, #web初始化
+    'ePage_k':1001,  #行情 
+    'ePage_cta':1002,
+    'ePage_test':1003,
+    'ePage_order':1004,
+    #save数据，设置信息
+    'eSaveFile':10000, #保存
 }
-
-
 # 事件
 kEvt_Time = 'evtTime'  # 任务时间设定
 kEvt_GetTime = 'evtGetTime'  # 任务时间触发
 
 # 导出常用工具函数和类
+from server.utils.logger import log, err, warn
+from server.utils.fileConfig import g_config
+from server.utils.pdData import pdData
+from server.utils.science import inRange, binanceTimestamp, time2ID
+from server.utils.decoratorTool import singleton
 from server.utils.common import (
     require,
     path2File,
-    loadJson,
+    readFile,
+    writeFile,
     switch,
     switchFn,
     switchV,
@@ -56,18 +59,16 @@ from server.utils.common import (
     trySwitchFn,
     tryExecution,
     timeFrame2Float,
+    listFind,
+    dictFind
 )
-from server.utils.logger import log, err, warn
-from server.utils.fileConfig import g_config
-from server.utils.pdData import pdData
-from server.utils.science import inRange, binanceTimestamp, time2ID
-from server.utils.decoratorTool import singleton
 
 __all__ = [
     # common
     'require',
     'path2File',
-    'loadJson',
+    'readFile',
+    'writeFile',
     'switch',
     'switchFn',
     'switchV',
@@ -84,6 +85,8 @@ __all__ = [
     'trySwitchFn',
     'tryExecution',
     'timeFrame2Float',
+    'listFind',
+    'dictFind',
     # logger
     'log',
     'err',

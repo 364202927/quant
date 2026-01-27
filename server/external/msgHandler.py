@@ -15,16 +15,34 @@ class msgHandler:
 
             #1.设置数据
             userName = g_config.info("username")
+            api = g_config.marketsApi()
+
             return
         def initMarketTrends():
             return
-        return switchFn({1000: initWeb,
-                  1001: initMarketTrends},
-                key=id)
+        def startFile():
+            return
+        def backtesting():
+            return
+        def orders():
+            return
+        def saveConfig():#保存设置
+            g_config.setConfig(msg)
+            g_config.saveFile()
+            #todo:是否服务器
+            return
+        return switchFn({eMsgId['eWebInit']: initWeb,
+                        eMsgId['ePage_k']: initMarketTrends,
+                        eMsgId['ePage_cta']:startFile,
+                        eMsgId['ePage_test']:backtesting,
+                        eMsgId['ePage_order']:orders,
+                        eMsgId['eSaveFile']:saveConfig},
+                        key=id)
 
     # 处理接口
     def process(self, id, msg):
         # id = msg.get('id', None)
         # args = msg.get('args', [])
         print(f"~~~~~~~~~~[消息处理]~~~~~~~~ 消息ID: {id}, 参数: {msg}")
+        rt = self.idTransform(id,msg)
         return 0
