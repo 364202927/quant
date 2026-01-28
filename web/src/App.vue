@@ -1,56 +1,48 @@
 <script setup lang="ts">
 import type { MenuItem } from './types'
 import { userDataStore } from './types/userDataStore'
-import { ref,onMounted,provide} from 'vue'
+import { ref, onMounted, provide } from 'vue'
 import { postMessage } from './utils/common'
 import uiSidebar from './components/uiSidebar.vue'
 import uiMainContent from './components/uiMainContent.vue'
+import { eMsg } from "./types"
 
 
 // 当前激活的菜单项（用于内容区显示）
 const activeItem = ref<MenuItem | undefined>(undefined)
-
 // 侧边栏组件引用
 const sidebarRef = ref<InstanceType<typeof uiSidebar> | null>(null)
+// 用户数据
+const user = new userDataStore()
+provide('userDataStore', user)
+provide('sidebarRef', sidebarRef)
+onMounted(async () => {
+  const response = await postMessage(eMsg.eWebInit)
+  if (response.received?.args) {
+    user.initFromServer(response.received.args)
+    const resUser = response.received.args.user
+    const page = resUser.userName !== '' ? 1 : 5
+    sidebarRef.value?.setItem(page)
+    if (page !== 5)
+      sidebarRef.value?.setLock(false)
+    // console.log("~~~App.vue init~~~", page, user)
+  }
+})
 
 // 处理菜单选择通知
 const handleSelect = async (item: MenuItem) => {
   activeItem.value = item
   console.log('切换菜单项', item)
 }
-  // 演示：发送菜单切换事件到后端
-  // try {
-  //   await sendToBackend(item.id, { action: 'menu_select', menuName: item.name })
-  //   console.log('已通知后端切换菜单')
-  // } catch (error) {
-  //   console.error('通知后端失败:', error)
-  // }
-  // const back = await postMessage(1001, item.id, { action: 'menu_select', menuName: item.name })
-  // console.log("~~~按钮back~~~",back)
-
-// 将用户数据注入子组件
-const user = new userDataStore()
-provide('userDataStore', user)
-// init
-onMounted(async () => {
-  const data = await postMessage(1001)
-  console.log("~~~App.vue init~~~",data)
-})
 </script>
 
 <template>
   <!-- 外层布局容器 -->
   <div class="flex h-screen overflow-hidden bg-gray-50 text-gray-800">
-
     <!-- 左侧侧边栏 -->
-    <uiSidebar
-      ref="sidebarRef"
-      @select-item="handleSelect"
-    />
-
+    <uiSidebar ref="sidebarRef" @select-item="handleSelect" />
     <!-- 右侧内容区 -->
     <uiMainContent v-if="activeItem" :active-item="activeItem" />
-
   </div>
 </template>
 
@@ -62,7 +54,9 @@ body {
   padding: 0;
 }
 
-html, body, #app {
+html,
+body,
+#app {
   height: 100%;
   width: 100%;
   overflow: hidden;

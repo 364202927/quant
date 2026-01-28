@@ -37,8 +37,8 @@ class web:
                 "status": 'success',
                 "message": 'post_message 接收成功',
                 "received": {
-                    "id": 0,
-                    "args": 0
+                    "id": msg.id,
+                    "args": rt
                 }
             }
         
@@ -71,11 +71,11 @@ class web:
     
     async def run(self):
         """启动FastAPI服务器"""
-        web_config = g_config.thirdParty().get('web')
+        web_config = g_config.external('web')
         config = uvicorn.Config(
             self._app,
             host=web_config.get('host'),
-            port=web_config.get('port'),
+            port=int(web_config.get('port')),
             log_level="info"
         )
         # print('~~~~~',web_config.get('host'),web_config.get('port'))

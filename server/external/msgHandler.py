@@ -10,14 +10,23 @@ class msgHandler:
     
     def idTransform(self, id, msg):
         def initWeb():
-            #返回数据 1.设置面板.username  2.market数据 3.任务列表 4.下单列表
-            #流程1.quant如果任务没运行，先让web停止10秒发送协议
+            # 返回数据: user配置 + apiKey配置+start文件
+            info = g_config.info()
+            external = g_config.external()
+            user = {
+                "userName": info.get("userName", ""),
+                "ccxtRetry": info.get("ccxtRetry", 3),
+                "console_e": bool(external.get("console", {}).get("enable", 0)),
+                "tg_e": bool(external.get("tg", {}).get("enable", 0))
+            }            
+            apiKey = {
+                "market": g_config.marketsApi(),
+                "newsletter": g_config.newsletterApi(),
+                "ai": g_config.aiApi()
+            }
+            #todo:还有start文件
 
-            #1.设置数据
-            userName = g_config.info("username")
-            api = g_config.marketsApi()
-
-            return
+            return {"user": user, "apiKey": apiKey}
         def initMarketTrends():
             return
         def startFile():
@@ -27,9 +36,9 @@ class msgHandler:
         def orders():
             return
         def saveConfig():#保存设置
-            g_config.setConfig(msg)
+            g_config.setConfig(msg[0])
             g_config.saveFile()
-            #todo:是否服务器
+            #todo:是否重启服务器
             return
         return switchFn({eMsgId['eWebInit']: initWeb,
                         eMsgId['ePage_k']: initMarketTrends,
@@ -41,8 +50,6 @@ class msgHandler:
 
     # 处理接口
     def process(self, id, msg):
-        # id = msg.get('id', None)
-        # args = msg.get('args', [])
         print(f"~~~~~~~~~~[消息处理]~~~~~~~~ 消息ID: {id}, 参数: {msg}")
         rt = self.idTransform(id,msg)
-        return 0
+        return rt

@@ -25,7 +25,9 @@ userTemp={
     },
     "external": {
         "web": {
-            "enable": 0
+            "enable": 1,
+            "host": "0.0.0.0",
+            "port": "8000"
         },
         "console": {
             "enable": 0
@@ -52,27 +54,31 @@ class fileConfig:
 
     def __init__(self):
         self.__userConfig = readFile(kConfigPath)
-        self.__apiConfig = readFile(kApikeyPath)
-        self.__startConfig = readFile(kStartFile)
+        self.__apiConfig = readFile(kApikeyPath) or apiTemp.copy()
+        self.__startConfig = readFile(kStartFile) or {}
         # print("~~~~~~user.json~~~~~~~", self.__userConfig)
         # print("~~~~~~api.json~~~~~~~", self.__apiConfig)
         # print("~~~~~~start.json~~~~~~~", self.__startConfig)
 
     def setConfig(self, data: dict, configType: str | None = None):
         # from server.utils.logger import log
-        def _updateUserConfig():
-            self.__userConfig = userTemp
+        def _updateUserConfig():            
+            self.__userConfig = userTemp.copy()
             def setProperty(key, v):
                 def findUserProperty(uKey, uV):
                     if key in uV:
                         uV[key] = v
-                        return True  # 找到并赋值后立即退出内层循环
+                        return True
+                    if key=='external': #强制对external字段赋值
+                        for exK,exV in v.items():
+                            self.__userConfig['external'][exK] = exV
+                        return True
                 dictFind(self.__userConfig, findUserProperty)
             dictFind(data[kUserType], setProperty)
             # print('~~~~~~user.json~~~~~', self.__userConfig)
         
         def _updateApiKeyConfig():
-            self.__apiConfig = apiTemp
+            self.__apiConfig = apiTemp.copy()
             def setProperty(k, v):
                 if k in self.__apiConfig:
                     self.__apiConfig[k] = v
@@ -80,7 +86,7 @@ class fileConfig:
             # print("~~~~~~apiKey.json~~~~~~~~",self.__apiConfig)
 
         def _updateStartConfig():
-            self.__startConfig = data[kStartType]
+            self.__startConfig = data[kStartType] or {}
             # print("~~~~~~start.json~~~~~~~~",self.__startConfig)
         #logic
         handlers = {
@@ -136,11 +142,13 @@ class fileConfig:
     # startFile
     def startFiles(self):
         return self.__startConfig
-
+    
     def saveFile(self):
-        if writeFile(self.__userConfig, kConfigPath) and\
-            writeFile(self.__apiConfig, kApikeyPath) and\
-            writeFile(self.__startConfig, kStartFile):
-            print('文件保存成功')
+        if writeFile(self.__userConfig, kConfigPath):
+            print('user.json保存成功')
+        if writeFile(self.__apiConfig, kApikeyPath):
+            print("apikey保存成功")
+        if writeFile(self.__startConfig, kStartFile):
+            print('start.json保存成功')
 
 g_config = fileConfig()

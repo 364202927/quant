@@ -49,27 +49,21 @@ export interface BacktestOrder {
   profit: number
 }
 
-// 通知配置
-export interface NotificationConfig {
-  id: string
-  enable: boolean
-  token: string
-  chatId: string
-}
-
-// 交易所配置
-export interface ExchangeConfig {
-  id: string
-  enable: boolean
-  name: string
-  apiKey: string
-  secret: string
-  description: string
-}
-
 // 菜单项
 export interface MenuItem {
   id: number
   name: string
   icon: string
+}
+
+export enum eMsg {
+  // get 数据
+  eWebInit = 1000,     // web 初始化
+  ePage_k = 1001,      // 行情
+  ePage_cta = 1002,
+  ePage_test = 1003,
+  ePage_order = 1004,
+
+  // save 数据
+  eSaveFile = 10000,   // 同步后台
 }

@@ -1,30 +1,29 @@
 {
-    "info": {
-        "_info": "交易所关注币种，没有在filter的会被过滤",
-        "userName": "Agzer0",
-        "filter": [ "BTC/USDT", "ETH/USDT", "BNB/USDT", "OKB/USDT", "DOGE/USDT", "USDC/USDT" ],
-        "ccxtRetry": 1
+  "info": {
+    "userName": "",
+    "ccxtRetry": 0
+  },
+  "files": {
+    "marketsPath": "assets/markets/",
+    "configPath": "assets/config/"
+  },
+  "logger": {
+    "_info": "",
+    "send2Third": 0,
+    "outFilePath": "",
+    "level": 0
+  },
+  "external": {
+    "web": {
+      "enable": 1,
+      "host": "0.0.0.0",
+      "port": "8000"
     },
-    "files": {
-        "_info": "outpute到指定目录",
-        "marketsPath": "assets/markets/",
-        "dataPath": "assets/save/"
+    "console": {
+      "enable": true
     },
-    "logger": {
-        "_info": "",
-        "send2Third": 0,
-        "outFilePath": "",
-        "level": 0
-    },
-    "external": {
-        "web": {
-            "enable": 0,
-            "host": "0.0.0.0",
-            "port": 8000
-        },
-        "console": {
-            "enable": 1
-        }
-
+    "tg": {
+      "enable": 0
     }
+  }
 }
