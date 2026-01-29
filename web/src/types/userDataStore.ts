@@ -54,7 +54,7 @@ export class userDataStore {
         for (const [id, data] of Object.entries(dict))
             for (const [key, item] of Object.entries(data))
                 this.setApi(id, key, item)
-        console.log("~~~~~initFromServer~~~~~~~", this.user, this.notifs, this.exchanges, this.ais)
+        // console.log("~~~~~initFromServer~~~~~~~", this.user, this.notifs, this.exchanges, this.ais)
     }
 
     // 设置用户数据
@@ -98,24 +98,17 @@ export class userDataStore {
                 "console": { "enable": this.user.console_e },
                 "tg": { "enable": this.user.tg_e }
             }
-
-
         }
         const sendDict = {
             user: userData,
             apiKey: {
-                market: this.exchanges,
-                newsletter: this.notifs,
-                ai: this.ais
+                market: Object.fromEntries(this.exchanges),
+                newsletter: Object.fromEntries(this.notifs),
+                ai: Object.fromEntries(this.ais)
             },
             start: [],
         }
-        console.log("~~~~~~1~~~~~~~", sendDict)
-        // console.log("~~~~~2~~~~~", this.exchanges)
-        // console.log("~~~~~3~~~~~", this.notifs)
-        // console.log("~~~~~4~~~~~", this.ais)
-
+        console.log("~~~~~~update2Server~~~~~~~", sendDict)
         postMessage(eMsg.eSaveFile, sendDict)
-
     }
 }
