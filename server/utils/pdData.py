@@ -26,12 +26,7 @@ class pdData:
     _head = {}
     _strHead = {}
 
-    def __init__(
-        self,
-        head=["candle_begin_time", "open", "high", "low", "close", 'vol'],
-        read='',
-        xmlData=None
-    ):
+    def __init__(self,head=["candle_begin_time", "open", "high", "low", "close", 'vol'],read='',xmlData=None):
         self.setHead(head)
         if xmlData is not None:
             self.format(xmlData, style="xml")
@@ -130,22 +125,14 @@ class pdData:
         if headFormat:
             self._pf = self._pf[self._head]
     # 返回index的数据
-
     def get(self, cols='', key=''):
-        # print("~~get~~~",cols,key)
         if cols == '' and key == '':
-            # print("~~~a~~~")
             return self._pf
-        # elif cols >= 0 and key >= 0:
         if isinstance(cols, int) and isinstance(key, int):
-            # print("~~~b~~~")
             return self._pf.iloc[cols][key]
         elif key != '':
-            # print("~~~c~~~")
             return self._pf[key]
-        # elif cols != '':
         if isinstance(cols, int):
-            # print("~~~d~~~")
             return self._pf.iloc[cols]
 
     def copy(self):
@@ -164,17 +151,15 @@ class pdData:
     def set(self, key, value, cols=''):
         if cols == '':
             self._pf[key] = value
-        else:
-            self._pf.at[cols, key] = value
+            return
+        self._pf.at[cols, key] = value
     # 截取数据段
-
     def getHead(self, cols):
         max_col, max_row = self._pf.shape
         if cols > max_col:
             return self._pf
         return self._pf.head(cols)
-    # mpl的数据
-
+    # mpl的数据 todo:可不要
     def getMpl(self, cols='max'):
         if cols == 'max':
             cols = len(self._pf)
@@ -184,8 +169,8 @@ class pdData:
                            }, inplace=True)
         df.set_index("dataTime", inplace=True)
         return df
-    # 根本标签进行过滤
-
+    
+    # 对标签进行过滤
     def filter(self, *args: str):
         col = [col for col in self._pf.columns if col.startswith(args)]
         return self._pf[col]
@@ -220,7 +205,6 @@ class pdData:
     # 左右合并
     def pfMerge(self, dataTab, key="merage"):
         pf_l, pf_r = dataTab[0].copy(), dataTab[1].copy()
-
         def compared():  # 左==右
             pf = pd.merge(pf_l, pf_r,
                           left_on=pf_l.columns[0],
@@ -283,7 +267,6 @@ class pdData:
             return
         log("保存到文件：", fullPath, "数据：", self._pf.shape[0])
     # 读取文件
-
     def readFile(self, fileName, path=g_config.fils('marketsPath')):
         fileType, _ = getFileExtension(fileName)
         fullPath = joinPath(path, fileName)

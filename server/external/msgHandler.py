@@ -18,7 +18,7 @@ class msgHandler:
                 "ccxtRetry": info.get("ccxtRetry", 3),
                 "console_e": bool(external.get("console", {}).get("enable", 0)),
                 "tg_e": bool(external.get("tg", {}).get("enable", 0))
-            }            
+            }
             apiKey = {
                 "market": g_config.marketsApi(),
                 "newsletter": g_config.newsletterApi(),

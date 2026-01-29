@@ -1,12 +1,13 @@
 from server.market.baseExchange import *
+from server.utils.science import binanceTimestamp
 # from concurrent.futures import ThreadPoolExecutor
 
 kMaxLimit = 1000  # 现货最大k线
 kfMaxLimit = 1500  # 合约最大
 
 # batchOrders 批量下单，最多5个
-# https://www.binance.com/zh-CN/trade-rule 币种交易规则
-# https://binance-docs.github.io/apidocs/pm/cn  api
+# https://www.binance.com/zh-CN/trade-rule 币种交易规则(最小下单和最大数量等)
+# https://binance-docs.github.io/apidocs/pm/cn  统一账户api
 
 
 class binance(baseExchange):
@@ -88,8 +89,7 @@ class binance(baseExchange):
 
     def _futureCancal(self, **kwargs):
         return self._ccxt.papiDeleteUmOrder(
-            params={
-                'symbol': kwargs['symbol'],
+            params={'symbol': kwargs['symbol'],
                 'orderId': kwargs['orderId'],
                 'timestamp': binanceTimestamp()})
 
@@ -102,8 +102,8 @@ class binance(baseExchange):
         if rt:
             return info
         return []
+    
     # 查询账户
-
     def account(self):
         dict = {'total': {},
                 'used': {},
@@ -121,13 +121,6 @@ class binance(baseExchange):
                                         "total": portfolioAcc['accountEquity'],
                                         "free": portfolioAcc['totalAvailableBalance'],
                                         "used": portfolioAcc['accountInitialMargin']}
-        # 合约账户
-        # acc = self._ccxt.fapiPrivateV2GetAccount()['assets']
-        # for data in acc:
-        #     if float(data['walletBalance']) > 0:
-        #         self._info['acc']['total'].update({data['asset']:data['walletBalance']})
-        #         self._info['acc']['free'].update({data['asset']:data['maxWithdrawAmount']})
-        #         self._info['acc']['used'].update({data['asset']:data['initialMargin']})
         return self._info['acc']
 
     # spot现货，swap永续，future期权
@@ -139,10 +132,7 @@ class binance(baseExchange):
                 newSymbol, seTime, limit=limit == 0 and self._maxLimit or limit)
         elif category == "swap":  # dapi(币本位)、fapi(u本位)、eapi(欧式期权)
             self._maxLimit = kfMaxLimit
-            # print("~~~~~a~~~~~",seTime[0])
-            # print("~~~~~b~~~~~",seTime[1])
-            params = {
-                'symbol': newSymbol,
+            params = {'symbol': newSymbol,
                 'interval': timeframe,
                 'startTime': str2ms(seTime[0]),
                 'endTime': str2ms(seTime[1]),
@@ -162,16 +152,16 @@ class binance(baseExchange):
         if category == "spot":
             return self._ccxt.publicGetDepth(params=params)
         return self._ccxt.fapiPublicGetDepth(params=params)
+    
     # 获取成交历史
-
     def trades(self, symbol, limit):  # limit max = 1000
         category, newSymbol = slit(symbol, '_')
         params = {'symbol': newSymbol, 'limit': limit}
         if category == "spot":
             return self._ccxt.publicGetTrades(params=params)
         return self._ccxt.fapiPublicGetTrades(params=params)
+    
     # 最新币价
-
     def tickers(self, symbol):
         category, newSymbol = slit(symbol, '_')
         params = {'symbol': newSymbol}
@@ -185,5 +175,4 @@ class binance(baseExchange):
     def bookTickers(self, symbol):
         category, newSymbol = slit(symbol, '_')
         params = {'symbol': newSymbol}
-        return self._ccxt.fapiPublicGetTickerBookTicker(
-            params=params)  # todo:只做了u本位
+        return self._ccxt.fapiPublicGetTickerBookTicker(params=params)  # todo:只做了u本位

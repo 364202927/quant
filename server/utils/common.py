@@ -1,7 +1,7 @@
 import pickle,json,time,os,requests,inspect,asyncio,inspect,gzip,os,pathlib
 from importlib import import_module
 from pydispatch import dispatcher
-from server.utils import eTimeTs
+from server.utils import eTimeTs,err
 from datetime import datetime, timezone
 import pandas as pd
 savePath = "data/save/"
@@ -160,9 +160,9 @@ def switchFn(diceFn, key, **kwargs):
 def switchV(dice, key1, key2):
     return dice.get(key1) and dice.get(key1) or dice.get(key2)
 
-def trySwitchFn(diceFn, key, attempts, **kwargs):
-    rt = switchFn(diceFn, key, **kwargs)
-    return True, rt
+# def trySwitchFn(diceFn, key, attempts, **kwargs):
+#     rt = switchFn(diceFn, key, **kwargs)
+#     return True, rt
     ####
     # for i in range(attempts):
     #     try:
@@ -171,6 +171,18 @@ def trySwitchFn(diceFn, key, attempts, **kwargs):
     #     except Exception as e:
     #         time.sleep(0.1)
     # return False, strErr
+
+#全局tryCatch,方便使用捕抓崩溃
+isTry = False
+def tryCatch(fn):
+    import logger
+    if not isTry:
+        return fn()
+    #
+    try:
+        fn()
+    except Exception as e:
+        err("错误:",e)
 
 
 def tryExecution(fn, attempts=3, sleepTime=0.2):
@@ -306,9 +318,6 @@ def require(modPath):
     except AttributeError:
         print(className, "类创建失败，请检查路径", mod)
     return obj
-
-
-
 
 # 并行
 # def pool(fnCall, valueList, count = 2):

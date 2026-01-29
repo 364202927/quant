@@ -5,18 +5,19 @@ from server.utils.fileConfig import g_config
 from server.external.webPort import web
 from server.external.cli import cli
 from server.external.msgHandler import msgHandler
+from server.market import g_marketMgr
 
 
 class launcher:
     "启动器"
-    
+
     def __init__(self):
         self.__modules = []
         self.__quant = None 
         self.__idTransform = None
 
         self.init()
-    
+
     def init(self):
         allModule = ['web', 'console'] #todo:添加tg模块
         def create(key: str):
@@ -33,6 +34,11 @@ class launcher:
             if config.get(key).get('enable') == True:
                 self.__modules.append(create(key))
         log("Launcher初始化完成",self.__modules)
+        print("~~~~~~~~~~~~~~",len(g_config.marketsApi()))
+        if len(g_config.marketsApi()) == 0:
+            return
+        g_marketMgr.init()
+        
         
     #消息传递
     def _msgTransform(self, msgID: int, args: list = []):
@@ -63,7 +69,7 @@ class launcher:
     # 只执行一个指定的文件，通常用于测试任务
     def addProject(self, projectName: str):
         self.__quant.loadTask(projectName)
-        # self.run()
+
     # 使用start文件启动
     def start(self):
         self.__quant.loadTaskList()

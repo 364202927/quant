@@ -3,10 +3,8 @@ from indicators.baseIndicators import *
 
 class ma(baseIndicators):
     '移动均线'
-
-    _sma, _ema, _wma, _tema = [], [], [], []
-
     def init(self):
+        self._sma, self._ema, self._wma, self._tema = [], [], [], []
         self._pd.setHead(['candle_begin_time'])
 
     def delimit(self, **kWargs):

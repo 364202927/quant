@@ -1,4 +1,7 @@
 import abc
+import talib
+import numpy as np
+import pandas as pd
 from server.utils import pdData
 
 class baseIndicators(metaclass=abc.ABCMeta):
@@ -6,15 +9,8 @@ class baseIndicators(metaclass=abc.ABCMeta):
 
     def __init__(self):
         self._pd = pdData()
-        # self._isTa = False  # 是否使用ta库计算
         self.init()
 
-    # def get(self, key=''):
-    #     # return switch({'': self._pd.get()},
-    #     #           key=key)
-    #     # return self._pd.get()
-    #     if self[key]:
-    #         return self[key]
     @abc.abstractmethod
     def init(self):pass
     @abc.abstractmethod

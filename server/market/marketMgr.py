@@ -4,20 +4,20 @@ from server.utils import singleton, g_config, require
 @singleton
 class marketMgr:
     '交易所管理器'
-    # __exchangeMgr = None
 
     def init(self):
         self.__exchangeMgr = {}
-
-        for name in g_config.markets():
-            market_config = g_config.markets()[name]
+        #创建交易所
+        for name in g_config.marketsApi():
+            market_config = g_config.marketsApi()[name]
             if market_config['enable'] == 1:
                 self._newExchange(name, market_config)
+        if len(self.__exchangeMgr) == 0:
+            print("~~~~~没有交易所激活~~~~~~")
+        #todo:接收下单信息
 
     def _newExchange(self, exName, config):
-        exchange = require(
-            'server.market.' + config['exchange']
-        )(config['description'])
+        exchange = require('server.market.' + config['exchange'])(config['description'])
         exchange._id = exName
         exchange.enroll(config)
         self.__exchangeMgr[exName] = exchange
