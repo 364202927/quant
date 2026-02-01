@@ -1,7 +1,7 @@
 import pickle,json,time,os,requests,inspect,asyncio,inspect,gzip,os,pathlib
 from importlib import import_module
 from pydispatch import dispatcher
-from server.utils import eTimeTs,err
+from server.utils import eTimeTs
 from datetime import datetime, timezone
 import pandas as pd
 savePath = "data/save/"
@@ -68,7 +68,6 @@ def getFileExtension(fileName):
     name, extension = os.path.splitext(fileName)
     return extension[1:], name
 
-
 # 时间转换
 def str2ms(strTime: str, utc=0):
     date = str2time(strTime)
@@ -76,22 +75,18 @@ def str2ms(strTime: str, utc=0):
         date += datetime.timedelta(hours=utc)
     return int(date.timestamp() * 1000)
 
-
 def str2time(strTime: str):
     def now():
         return datetime.datetime.now()
-
     def pre():
         time_val = 5 * int(eTimeTs['m'])
         return reviseTime('now', -time_val)
-
-    if isinstance(strTime, datetime.datetime):  # 时间直接返回
-        return strTime
+    # if isinstance(strTime, datetime.datetime):  # 时间直接返回
+    #     return strTime
     rt = switchFn({"now": now, "pre5": pre}, key=strTime)
     if not rt:
-        return datetime.datetime.strptime(strTime, '%Y-%m-%d %H:%M:%S')
+        return datetime.strptime(strTime, '%Y-%m-%d %H:%M:%S')
     return rt
-
 
 # 修正时间，+-(秒)
 def reviseTime(strTime, sconds):
@@ -99,11 +94,10 @@ def reviseTime(strTime, sconds):
     if sconds > 0:
         return date + datetime.timedelta(seconds=abs(sconds))
     return date - datetime.timedelta(seconds=abs(sconds))
-
 # 时间差
-def diff_Pdtime(pdTime, seconds='now'):
-    seconds = pd.Timestamp.now() if seconds == 'now' else seconds
-    return abs((seconds - pdTime).total_seconds() / 60)
+def diff_Pdtime(pdTime, resTime='now'):
+    time = pd.Timestamp.now() if resTime == 'now' else pd.to_datetime(resTime,format="%Y-%m-%d %H:%M:%S")
+    return abs((time - pdTime).total_seconds())
 
 # str，替换
 def strReplace(symbolName, strRep=['/', '-']):
@@ -156,11 +150,11 @@ def switchFn(diceFn, key, **kwargs):
         # print("switchFn err 没有接收函数", key, diceFn)
         return False
     return diceFn[key](**kwargs)
+def trySwitchFn(diceFn, key, **kwargs):
+    return tryCatch(switchFn(diceFn,key))
 # 若key1在dice里存在返回key1，否则返回key2
 def switchV(dice, key1, key2):
     return dice.get(key1) and dice.get(key1) or dice.get(key2)
-
-# def trySwitchFn(diceFn, key, attempts, **kwargs):
 #     rt = switchFn(diceFn, key, **kwargs)
 #     return True, rt
     ####
@@ -175,23 +169,13 @@ def switchV(dice, key1, key2):
 #全局tryCatch,方便使用捕抓崩溃
 isTry = False
 def tryCatch(fn):
-    import logger
+    from server.utils import err
     if not isTry:
         return fn()
-    #
     try:
-        fn()
+        return fn()
     except Exception as e:
         err("错误:",e)
-
-
-def tryExecution(fn, attempts=3, sleepTime=0.2):
-    for i in range(attempts):
-        try:
-            return True, fn()
-        except Exception:
-            time.sleep(sleepTime)
-    return False, None
 
 def timeFrame2Float(timeframe):
     return float(timeframe[:-1]) * eTimeTs[timeframe[-1]]
@@ -201,17 +185,15 @@ def sec2min(seconds):
 def utc_now():
     local_now = datetime.now().astimezone()
     utc_offset_seconds = local_now.utcoffset().total_seconds()
-    utc_offset_hours = int(utc_offset_seconds / 3600)
+    return int(utc_offset_seconds / 3600)
 
 # 搜索路径下的文件
 def path2File(path, fileType=''):
     try:
         items = os.listdir(path)
-        files = [
-            item for item in items
+        files = [item for item in items
             if os.path.isfile(os.path.join(path, item))
-            and item.endswith(fileType)
-        ]
+            and item.endswith(fileType)]
         return files
     except Exception as e:
         print(e)
@@ -227,12 +209,11 @@ def curPath():
 def joinPath(path, fileName):
     fullPath = path + fileName
     return fullPath
-
+# 文件操作
 def readFile(pathFile):
     if not os.path.exists(pathFile) or\
           not os.path.isfile(pathFile): #检测文件是否存在
         return None
-    
     fileType, _ = getFileExtension(pathFile)
     def _json():
         with open(pathFile, 'r', encoding='utf-8') as f:
@@ -262,11 +243,9 @@ def readFile(pathFile):
         'xlsx': _xlsx,
         'parquet': _parquet
     }, key=fileType)
-
 def writeFile(data, pathFile):
     if data is None or (isinstance(data, (list, dict)) and len(data) == 0):
         return False
-
     fileType, _ = getFileExtension(pathFile)
     def _json():
         with open(pathFile, 'w', encoding='utf-8') as f:

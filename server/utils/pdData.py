@@ -1,6 +1,6 @@
 import pandas as pd
 from functools import reduce
-from server.utils.common import switchFn, joinPath, getFileExtension
+from server.utils.common import switchFn, joinPath, getFileExtension,readFile,writeFile
 from server.utils.fileConfig import g_config
 from server.utils.logger import err, log
 from server.utils import eSampleTs
@@ -18,15 +18,14 @@ pd.set_option('display.float_format', '{:.3f}'.format)  # 全局设定3位小数
 # pd.to_datetime(pd.to_numeric(time, errors='coerce'),unit='ms') #todo时间转换
 # 读取数据用iloc，写入用at
 
+# todo:save2File,readFile 改
 
 class pdData:
     "pd数据处理和格式化"
-    _pf = None  # DataFrame
-    # 默认k线头部
-    _head = {}
-    _strHead = {}
 
     def __init__(self,head=["candle_begin_time", "open", "high", "low", "close", 'vol'],read='',xmlData=None):
+        self._pf = None  # DataFrame
+        self._head,self._strHead = {},{}
         self.setHead(head)
         if xmlData is not None:
             self.format(xmlData, style="xml")
@@ -49,25 +48,25 @@ class pdData:
             else:
                 self._pf[tabLabel[i]].astype(tabType[i])
 
-    def setPf(self, pf=None, typeKey='', dropTab=[]):
-        # todo:bug,需要从新设headTab
-        if pf is not None:
-            self._pf = pf
+    # def setPf(self, pf=None, typeKey='', dropTab=[]):
+    #     # todo:bug,需要从新设headTab
+    #     if pf is not None:
+    #         self._pf = pf
 
-        def signal():  # 信号赋值合并多空去掉重复信号  #todo:这里需要重写
-            self._pf['signal'] = self._pf[['signal_long', 'signal_short']].sum(
-                axis=1, min_count=1, skipna=True)
-            temp = self._pf[self._pf['signal'].notnull()][['signal']]
-            # 对符合条件的k线进行过滤，确保只加入开单的k线
-            temp = temp[temp['signal'] != temp['signal'].shift(1)]
-            self._pf['signal'] = temp['signal']
-            self._pf.drop(['signal_long', 'signal_short'],
-                          axis=1, inplace=True)
-        switchFn({'signal': signal,
-                  },
-                 key=typeKey)
-        if len(dropTab) > 0:
-            self._pf.drop(dropTab, axis=1, inplace=True)
+    #     def signal():  # 信号赋值合并多空去掉重复信号  #todo:这里需要重写
+    #         self._pf['signal'] = self._pf[['signal_long', 'signal_short']].sum(
+    #             axis=1, min_count=1, skipna=True)
+    #         temp = self._pf[self._pf['signal'].notnull()][['signal']]
+    #         # 对符合条件的k线进行过滤，确保只加入开单的k线
+    #         temp = temp[temp['signal'] != temp['signal'].shift(1)]
+    #         self._pf['signal'] = temp['signal']
+    #         self._pf.drop(['signal_long', 'signal_short'],
+    #                       axis=1, inplace=True)
+    #     switchFn({'signal': signal,
+    #               },
+    #              key=typeKey)
+    #     if len(dropTab) > 0:
+    #         self._pf.drop(dropTab, axis=1, inplace=True)
 
     def remove(self, index):
         self._pf.drop(index=index, inplace=True)
@@ -128,7 +127,7 @@ class pdData:
     def get(self, cols='', key=''):
         if cols == '' and key == '':
             return self._pf
-        if isinstance(cols, int) and isinstance(key, int):
+        if isinstance(cols, int):# and isinstance(key, int):
             return self._pf.iloc[cols][key]
         elif key != '':
             return self._pf[key]
@@ -137,17 +136,14 @@ class pdData:
 
     def copy(self):
         return self._pf.copy()
-
     def empty(self):
         if self._pf is None:
             return True
         return len(self._pf) == 0
-
     def size(self):
         if self._pf is None:
             return 0
         return len(self._pf)
-
     def set(self, key, value, cols=''):
         if cols == '':
             self._pf[key] = value
@@ -160,15 +156,15 @@ class pdData:
             return self._pf
         return self._pf.head(cols)
     # mpl的数据 todo:可不要
-    def getMpl(self, cols='max'):
-        if cols == 'max':
-            cols = len(self._pf)
-        df = self.getHead(cols).copy()
-        df.rename(columns={'candle_begin_time': 'dataTime',
-                           'vol': 'volume'
-                           }, inplace=True)
-        df.set_index("dataTime", inplace=True)
-        return df
+    # def getMpl(self, cols='max'):
+    #     if cols == 'max':
+    #         cols = len(self._pf)
+    #     df = self.getHead(cols).copy()
+    #     df.rename(columns={'candle_begin_time': 'dataTime',
+    #                        'vol': 'volume'
+    #                        }, inplace=True)
+    #     df.set_index("dataTime", inplace=True)
+    #     return df
     
     # 对标签进行过滤
     def filter(self, *args: str):
@@ -241,12 +237,12 @@ class pdData:
             # rule = "right"
             # if timeframe == "w" or timeframe == 'm':
             #     rule = "left"
-            self._pf = self._pf.resample(rule=eSampleTs[timeframe], on=self._frist()).agg(  # ,label=rule, closed=rule
-                {self._head[1]: 'first',
-                 self._head[2]: 'max',
-                 self._head[3]: 'min',
-                 self._head[4]: 'last',
-                 self._head[5]: 'sum'})
+            self._pf = self._pf.resample(rule=eSampleTs[timeframe], on=self._frist()).agg({  # ,label=rule, closed=rule
+                                                                                self._head[1]: 'first',
+                                                                                self._head[2]: 'max',
+                                                                                self._head[3]: 'min',
+                                                                                self._head[4]: 'last',
+                                                                                self._head[5]: 'sum'})
         self._pf = self._pf[self._pf['vol'] > 0]        # 去除成交量为0的交易周期
         self._pf.reset_index(inplace=True)
         return self._pf
@@ -256,41 +252,25 @@ class pdData:
         if self._pf.shape[0] == 0:
             err("保存失败：", fileName, "数据：", self._pf.shape[0])
             return
-        fileType, _ = getFileExtension(fileName)
         fullPath = joinPath(path, fileName)
-        if fileType == 'csv':
-            self._pf.to_csv(fullPath, index=False)
-        elif fileType == 'pkl':
-            self._pf.to_pickle(fullPath)
-        else:
-            err("未支持保存此文件", fileName)
-            return
-        log("保存到文件：", fullPath, "数据：", self._pf.shape[0])
+        if writeFile(self._pf, fullPath):
+            log("保存到文件：", fullPath, "数据：", self._pf.shape[0])
     # 读取文件
     def readFile(self, fileName, path=g_config.fils('marketsPath')):
-        fileType, _ = getFileExtension(fileName)
         fullPath = joinPath(path, fileName)
-        try:
-            if fileType == 'csv':
-                self._pf = pd.read_csv(filepath_or_buffer=fullPath,
-                                       encoding='gbk',
-                                       parse_dates=[self._frist()])
-            elif fileType == 'pkl':
-                self._pf = pd.read_pickle(fullPath)
-        except Exception as ex:
+        pf = readFile(fullPath)
+        if pf is None or\
+            pf.empty:
             return False
-        #
+        self._pf = pf
         self.setHead(self._pf.columns.tolist())
         self._pf.drop_duplicates(subset=[self._frist()], inplace=True)  # 去重
-        # self._pf.dropna(subset=[self._head[1]], inplace=True)  # 去除一天都没有交易的周期
         errpf = self._pf[self._pf['vol'] <= 0]
         if errpf.shape[0] > 0:
             print("vol数据存在错误或缺失:")
             # print(errpf)
             print('\n')
 
-        # self._pf = self._pf[self._pf['vol'] > 0]        #todo: 去除成交量为0的交易周期
-        self._pf[self._frist()] = pd.to_datetime(
-            self._pf[self._frist()], unit='ms')
+        self._pf[self._frist()] = pd.to_datetime(self._pf[self._frist()], unit='ms')
         self._pf.reset_index(inplace=True, drop=True)  # 重置索引
         return True

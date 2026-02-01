@@ -10,7 +10,6 @@ class msgRequest(BaseModel):
     id: int
     args: List[Any] = []
 
-
 class web:
     """FastAPI服务器框架"""
     
