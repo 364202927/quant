@@ -1,58 +1,113 @@
 import time
-from indicators.baseIndicators import *
-from server.utils import diff_Pdtime,reviseTime
+from server.indicators.baseIndicators import *
+from server.utils import diff_Pdtime, reviseTime, log, err,timeFrame2Float,utc_now
+from server.market import g_marketMgr
+kFileType = '.parquet'
+
 
 class kLine(baseIndicators):
-    '整理k线'
 
     def init(self):
-        self._ex = None  # 交易所
-        self._symbols = {}  # 交易对
+        self._ex = None       # 交易所实例
+        self._symbols = {}    # {symbol: pdData} 各交易对K线数据
+    #
+    def delimit(self, exName: str, symbols: list[str]) -> None:
+        self._ex = g_marketMgr.get(exName)
+        if not self._ex:
+            log(f"获取指标失败,交易所不存在: {exName}")
+            return
+        # 加载全部交易对K线数据
+        for symbol in symbols:
+            self._symbols[symbol] = self.newest_kLine(symbol,False)
+        # print("~~~~kLine delimit symbols~~~~",self._symbols)
 
-    def delimit(self, **kwargs) -> None:
-        self._ex = kwargs.get('ex', self._ex)
-        self._symbols = kwargs.get('stDev', self._symbols)
+    def calculate(self, *args: baseIndicators) -> pdData:
+        pdResults = {}
+        for symbol, pd in self._symbols.items():
+            pdResults[symbol] = pd
+            for indicator in args:
+                pdResults[symbol] = indicator.calculateTa(pdResults[symbol])
+        return pdResults
+    def calculateTa(self,*args: baseIndicators) -> pdData:
+        return self.calculate(args)
 
-    def calculate(self):
-        pass
-    def calculateTa(self, pd:pdData):pass
-   
-    # def repairKline(self, symbol, fileName):
-    #     return 0
+    def getSymbol(self, symbol: str = ''):
+        if symbol == '':
+            return self._symbols
+        return self._symbols.get(symbol)
+    #返回历史数据
+    def historyCandles(self, symbol: str, seTime: list, timeFrame: str = '5m', cover: bool = False) -> pd.DataFrame:
+        def rtData(pdata: pdData):
+            if cover:
+                self._symbols[symbol] = pdata
+            if timeFrame != '5m':
+                pdata.resample(timeFrame,seTime)
+            return pdData(data=pdata, style='copy')
+        #默认只保存5分钟周期,超过5分钟从交易所取
+        if timeFrame != '5m':
+           return pdData(data=self._ex.getKline(symbol, seTime, timeFrame), style='copy')
+        #获取历史数据并剪裁
+        fileName = self._ex.name()+'_'+ symbol + kFileType
+        fullPd = pdData()
+        fullPd.readFile(fileName,True)
+        fullPd.resample(seTime) 
+        timeRange = fullPd.detection(seTime)
+        # print("~~~~检查缺失数据~~~~~",len(timeRange),timeRange)
+        if len(timeRange) == 0:
+            return rtData(fullPd)
+        #缺失的值再次从交易所获取
+        allData = [fullPd.get()]
+        for tr in timeRange:
+            # print("~~~~~缺失数据时间范围~~~~~",tr[0], tr[1])
+            fixPd = pdData()#从交易所获取时间是原始时区
+            kLine = self._ex.getKline(symbol, [tr[0].strftime("%Y-%m-%d %H:%M:%S"), tr[1].strftime("%Y-%m-%d %H:%M:%S")])
+            fixPd.format(kLine, style ='copy', utc = utc_now()) #对齐到当前国家时区
+            # print("~~~~~补全数据~~~~~",fixPd.get())
+            allData.append(fixPd.get())
+        history = pdData(style='concat',data=allData)
+        # print("~~~~再次检查缺失~~~~~",len(history.detection(timeFrame,seTime)),history.detection(timeFrame,seTime))
+        history.save2File(self._ex.name()+'_'+ symbol + kFileType)
+        return rtData(history)
 
-    # #
-    # def ticker(self, symbol, timeframe='5m'):  # todo:不要
-    #     return self.ex.ticker(symbol, timeframe)
+    # 返回最新的k线cover是否覆盖self._symbols
+    def newest_kLine(self, symbol: str, cover: bool = True) -> pd.DataFrame:
+        def coverLocal(pd: pdData):
+            if cover:
+                self._symbols[symbol] = pd
+            return pd
+        # 读取历史数据
+        timeFrame = '5m'
+        fileName = self._ex.name()+'_'+ symbol + kFileType
+        pd = pdData(read = fileName)
+        if pd.empty():
+            pd.pfConcat(self._ex.getKline(symbol, [], timeFrame),False)
+            # pd.save2File(fileName)
+            return coverLocal(pd)
+        #文件存在,数据不是最新
+        lastTime = pd.get(-1, 'candle_begin_time')
+        # print("~~~~~~~加载到旧数据~~~~~~~~",pd.get())
+        if diff_Pdtime(lastTime) < timeFrame2Float(timeFrame):#数据是最新的
+            return coverLocal(pd)
+        fillPd = self._ex.getKline(symbol, [], timeFrame)
+        pd.pfConcat(fillPd)
+        # pd.save2File(fileName)
+        return coverLocal(pd)
     
+    #返回最新的k线,优先加载文件补全最新k线,不存在历史数据只加载最新的
+    # def updateSymbol(self, symbol: str, timeframe: str = '5m', limit: int = 100) -> pd.DataFrame:
+        # """用最新行情刷新K线，保留最近limit条"""a
+        # kData = self._symbols.get(symbol)
+        # if not kData:
+        #     return pd.DataFrame()
+        # newKline = self._ex.getKline(symbol, ['pre5', 'now'], timeframe)
+        # tmpPd = pdData()
+        # tmpPd.format(newKline, style='candle')
+        # kData.pfConcat(tmpPd.get())
+        # pf = kData.get()
+        # return pf.tail(limit).reset_index(drop=True)
 
-    # 获取币种历史 (spot现货，swap永续，future期权) , [开始,结束时间], 时间粒度, 保存到文件
-    def getHistoryCandles(self, symbol, seTime, timeframe='5m', fileType=""):
-        # pd = pdData()
-        # pf = self.getKline(symbol, seTime)
-        # pd.setPf(pf)
-        # allData = [pf]
-        # # 判断是否必要再获取
-        # diff_seconds = diff_Pdtime(pd.get(-1, 0))
-        # if diff_seconds < 5:
-        #     return pd.get()
-
-        # print("开始从交易所获取k线")
-        # while 1:
-        #     isSeq = pd.get(0, 0) < pd.get(-1, 0)
-        #     startTime = isSeq and pd.get(-1, 0) or pd.get(0, 0)
-        #     end = startTime
-        #     pf = self.getKline(symbol, [str(startTime), str(seTime[1])])
-        #     pd.setPf(pf)
-        #     allData.append(pf)
-        #     print(">>k线数量:", pf.shape[0], "  时间：",end, "~", reviseTime(seTime[1], -10))
-        #     if self._maxLimit > pf.shape[0] or end >= reviseTime(
-        #             seTime[1], -10):
-        #         break
-        #     time.sleep(0.1) #这里需要暂停一下,
-        # pd.format(allData, style='concat')
-        # if fileType != "":  # 保存到文件
-        #     pd.save2File(self.name() + "_" + symbol + fileType)
-        # if timeframe != '5m':  # 时间粒度
-        #     pd.resample(timeframe)
-        # return pd.get()
+    #只更新最新的K线数据,并合并到self._symbols上
+    def updateSymbols(self) -> None:
+        # for symbol in self._symbols.keys():
+        #     self.newest_kLine(symbol, True)
         pass

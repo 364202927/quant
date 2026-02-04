@@ -1,178 +1,282 @@
 from server.market.baseExchange import *
 from server.utils.science import binanceTimestamp
-# from concurrent.futures import ThreadPoolExecutor
+from server.utils import timeFrame2Float, sec2min
+import json
 
-kMaxLimit = 1000  # 现货最大k线
+kMaxLimit = 1000   # 现货最大 K 线
 kfMaxLimit = 1500  # 合约最大
 
-# batchOrders 批量下单，最多5个
-# https://www.binance.com/zh-CN/trade-rule 币种交易规则(最小下单和最大数量等)
-# https://binance-docs.github.io/apidocs/pm/cn  统一账户api
+kMarket, kLimit = 'MARKET', 'LIMIT'
+kUm, kCm, kEo = 'um', 'cm', 'eo'  # U本位、币本位、期权
+
+STATUS_MAP = {'NEW': 'open', 'FILLED': 'closed', 'CANCELED': 'cancel'}
 
 
 class binance(baseExchange):
-    _name = "币安"
 
-    def __init__(self, description):
+    def __init__(self, description: str):
         super().__init__(description, kfMaxLimit)
 
-    def _accFutures(self, account):
-        return account['futures']['free']
+    def account(self) -> dict:
+        accDict = {'total': {}, 'used': {}, 'free': {}}
+        tryCatch(lambda: super(binance, self).account())
 
-    def _futureFind(self, **kwargs):
-        # papiGetUmOpenOrder #查挂单
-        # papiGetUmOrder
-        params = {'symbol': kwargs.get('symbol'),
-                  # 获取历史条数
-                  'limit': kwargs.get('limit') and kwargs.get('limit') or 1,
-                  'timestamp': binanceTimestamp()}
-        if kwargs.get('orderId'):
-            params['orderId'] = kwargs.get('orderId')
-        rt = self._ccxt.papiGetUmAllOrders(params=params)
-        # um账号成交记录
-        # todo改成:papiGetUmUserTrades
-        # 批量返回
-        if kwargs.get('limit') and int(kwargs['limit']) > 0:
-            return rt
-        rt = rt[0]
-        statusTransform = {
-            'NEW': 'open',
-            'FILLED': 'closed',
-            'CANCELED': 'cancel'}  # 状态转换到和现货一样
-        # print("~~~~findFuture~~~~", rt)
-        return {'status': statusTransform[rt.get('status')],
-                'time': rt.get('time'),
-                'updateTime': rt.get('updateTime'),
-                'orderId': rt.get('orderId'),
-                'positionSide': rt.get('positionSide'),
-                'origQty': rt.get('status') == 'NEW' and -1 or rt.get('origQty'),
-                'avgPrice': rt.get('avgPrice'),
-                'cumQuote': rt.get('cumQuote')}
-
-    # 只有统一账号才可下单 um(u本位)和cm(币本位,不支持)
-    def _futureOrder(self, **kwargs):
-        state = kwargs['state']
-        symbol = kwargs['symbol']['id']
-        params = {'symbol': symbol,
-                  'timestamp': binanceTimestamp()}
-        if state == 'buy' or state == 'sell':
-            params.update({
-                'side': state.upper(),  # 订单方向，buy sell
-                'positionSide': kwargs['posSide'],  # 持仓方向
-                'quantity': int(kwargs['amount']),  # 委托数量
-                'type': 'LIMIT',
-                'timeInForce': 'GTC'})
-            if kwargs.get('price'):
-                params['price'] = kwargs.get('price')
-            # if not kwargs.get('price'): #市价
-            else:  # 市价
-                params['type'] = 'MARKET'
-                del params['timeInForce']
-            # todo：添加止损单
-            # 设置倍数
-            if kwargs.get("lv"):
-                rt = self._ccxt.papiPostUmLeverage(
-                    params={
-                        'symbol': symbol,
-                        'leverage': kwargs.get("lv"),
-                        'timestamp': binanceTimestamp()})
-        elif state == 'cancel':
-            params['orderId'] = kwargs['id']
-        rt = switchFn({'buy': self._ccxt.papiPostUmOrder,  # U本位fapiPrivatePostOrder
-                       'sell': self._ccxt.papiPostUmOrder,
-                       # (symbol,orderId,timestamp)
-                       'cancel': self._ccxt.papiDeleteUmOrder,
-                       'bill': self._ccxt.papiPostUmOrder},
-                      key=state,
-                      params=params)
-        return self._futureFind(symbol=symbol, orderId=rt['orderId'])
-
-    def _futureCancal(self, **kwargs):
-        return self._ccxt.papiDeleteUmOrder(
-            params={'symbol': kwargs['symbol'],
-                'orderId': kwargs['orderId'],
-                'timestamp': binanceTimestamp()})
-
-    # 查询持仓
-    def checkPosition(self):
-        def risk():
-            return self._ccxt.papiGetUmPositionRisk(
-                params={'timestamp': binanceTimestamp()})
-        rt, info = tryExecution(risk)
-        if rt:
-            return info
-        return []
-    
-    # 查询账户
-    def account(self):
-        dict = {'total': {},
-                'used': {},
-                'free': {}}
-        super().account()  # 现货账号
-        for key, sub_dict in self._info['acc'].items():
+        for key, sub_dict in self._info.get('acc', {}).items():
             for sub_key, sub_value in sub_dict.items():
                 if sub_value > 0:
-                    name = sub_key
-                    dict[key][name] = sub_value
-        self._info['acc'] = dict
-        # 统一账户
-        portfolioAcc = self._ccxt.sapiGetPortfolioAccount()
-        self._info['acc']['futures'] = {"uniMMR": portfolioAcc['uniMMR'],  # 统一账号的风险
-                                        "total": portfolioAcc['accountEquity'],
-                                        "free": portfolioAcc['totalAvailableBalance'],
-                                        "used": portfolioAcc['accountInitialMargin']}
-        return self._info['acc']
+                    accDict[key][sub_key] = sub_value
+        self._info['acc'] = accDict
 
-    # spot现货，swap永续，future期权
-    def getKline(self, symbol, seTime, timeframe='5m', limit=0):
+        portfolioAcc = tryCatch(lambda: self._ccxt.sapiGetPortfolioAccount())
+        if portfolioAcc:
+            self._info['acc']['futures'] = {
+                'uniMMR': portfolioAcc['uniMMR'],
+                'total': portfolioAcc['accountEquity'],
+                'free': portfolioAcc['totalAvailableBalance'],
+                'used': portfolioAcc['accountInitialMargin']}
+        return self._info['acc']
+    
+    def _accFutures(self, account: dict) -> float:
+        return account['futures']['free']
+
+
+    def _futureFind(self, **kwargs):
+        """查询合约订单"""
+        category = kwargs.get('category', kUm)
+        symbol = kwargs.get('symbol')
+        params = {
+            'symbol': symbol,
+            'limit': kwargs.get('limit', 1),
+            'timestamp': binanceTimestamp()
+        }
+        if kwargs.get('orderId'):
+            params['orderId'] = kwargs['orderId']
+
+        rt = tryCatch(lambda: switchFn({
+            kUm: self._ccxt.papiGetUmAllOrders,
+            kCm: self._ccxt.papiGetCmAllOrders
+        }, key=category, params=params))
+
+        if not rt:
+            return None
+
+        if kwargs.get('limit') and int(kwargs['limit']) > 1:
+            return rt
+
+        order = rt[0] if rt else {}
+        return {
+            'status': STATUS_MAP.get(order.get('status'), order.get('status')),
+            'time': order.get('time'),
+            'updateTime': order.get('updateTime'),
+            'orderId': order.get('orderId'),
+            'positionSide': order.get('positionSide'),
+            'origQty': -1 if order.get('status') == 'NEW' else order.get('origQty'),
+            'avgPrice': order.get('avgPrice'),
+            'cumQuote': order.get('cumQuote')
+        }
+
+    def _futureOrder(self, **kwargs):
+        """合约下单 (U本位/币本位)"""
+        state = kwargs['state']
+        symbol = kwargs['symbol']['id']
+        category = kwargs.get('category', kUm)
+
+        params = {'symbol': symbol, 'timestamp': binanceTimestamp()}
+
+        if state in (kBuy, kSell):
+            isLimit = kwargs.get('price') is not None
+            params.update({
+                'side': state.upper(),
+                'positionSide': kwargs['posSide'],
+                'quantity': kwargs['amount'],
+                'type': kLimit if isLimit else kMarket
+            })
+
+            if isLimit:
+                params['price'] = kwargs['price']
+                params['timeInForce'] = kwargs.get('timeInForce', 'GTC')
+
+            if kwargs.get('lv'):
+                lvParams = {'symbol': symbol, 'leverage': kwargs['lv'], 'timestamp': binanceTimestamp()}
+                tryCatch(lambda: switchFn({
+                    kUm: self._ccxt.papiPostUmLeverage,
+                    kCm: self._ccxt.papiPostCmLeverage
+                }, key=category, params=lvParams))
+
+        elif state == 'cancel':
+            params['orderId'] = kwargs['orderId']
+
+        orderApi = self._ccxt.papiPostUmOrder if category == kUm else self._ccxt.papiPostCmOrder
+        cancelApi = self._ccxt.papiDeleteUmOrder if category == kUm else self._ccxt.papiDeleteCmOrder
+
+        rt = tryCatch(lambda: switchFn({
+            kBuy: orderApi, kSell: orderApi, 'cancel': cancelApi
+        }, key=state, params=params))
+
+        if not rt:
+            return None
+        return self._futureFind(category=category, symbol=symbol, orderId=rt.get('orderId'))
+
+    def _futureCancal(self, **kwargs):
+        """取消合约订单"""
+        category = kwargs.get('category', kUm)
+        params = {
+            'symbol': kwargs['symbol'],
+            'orderId': kwargs['orderId'],
+            'timestamp': binanceTimestamp()
+        }
+        return tryCatch(lambda: switchFn({
+            kUm: self._ccxt.papiDeleteUmOrder,
+            kCm: self._ccxt.papiDeleteCmOrder
+        }, key=category, params=params))
+
+    def _batchOrders(self, category: str, orders: list[dict]):
+        """批量下单，最多5单"""
+        batchList = []
+        for order in orders:
+            isLimit = order.get('price') is not None
+            item = {
+                'symbol': order['symbol'],
+                'side': order['side'].upper(),
+                'positionSide': order['posSide'],
+                'quantity': str(order['amount']),
+                'type': kLimit if isLimit else kMarket
+            }
+            if isLimit:
+                item['price'] = str(order['price'])
+                item['timeInForce'] = order.get('timeInForce', 'GTC')
+            batchList.append(item)
+
+        params = {'batchOrders': json.dumps(batchList), 'timestamp': binanceTimestamp()}
+        return tryCatch(lambda: switchFn({
+                                kUm: self._ccxt.papiPostUmBatchOrders,
+                                kCm: self._ccxt.papiPostCmBatchOrders}, 
+                            key=category, params=params))
+
+    def optionOrder(self, state: str, **kwargs):
+        """期权下单 state: 'buy'/'sell'/'cancel'"""
+        symbol = kwargs['symbol']
+        params = {'symbol': symbol, 'timestamp': binanceTimestamp()}
+
+        if state in (kBuy, kSell):
+            isLimit = kwargs.get('price') is not None
+            params.update({
+                'side': state.upper(),
+                'quantity': kwargs['amount'],
+                'type': kLimit if isLimit else kMarket})
+            if isLimit:
+                params['price'] = kwargs['price']
+                params['timeInForce'] = kwargs.get('timeInForce', 'GTC')
+            if kwargs.get('clientOrderId'):
+                params['clientOrderId'] = kwargs['clientOrderId']
+        elif state == 'cancel':
+            params['orderId'] = kwargs['orderId']
+
+        return tryCatch(lambda: switchFn({
+            kBuy: self._ccxt.papiPostEoOrder,
+            kSell: self._ccxt.papiPostEoOrder,
+            'cancel': self._ccxt.papiDeleteEoOrder
+        }, key=state, params=params))
+
+    def optionFind(self, symbol: str, orderId: str | None = None, limit: int = 1):
+        """查询期权订单"""
+        params = {'symbol': symbol, 'limit': limit, 'timestamp': binanceTimestamp()}
+        if orderId:
+            params['orderId'] = orderId
+        return tryCatch(lambda: self._ccxt.papiGetEoHistoryOrders(params=params))
+
+    def checkPosition(self, category: str = kUm, symbol: str | None = None):
+        """查询持仓"""
+        params = {'timestamp': binanceTimestamp()}
+        if symbol:
+            params['symbol'] = symbol
+        return tryCatch(lambda: switchFn({
+            kUm: self._ccxt.papiGetUmPositionRisk,
+            kCm: self._ccxt.papiGetCmPositionRisk
+        }, key=category, params=params))
+
+    def _marketKline(self, symbol: str, seTime: list, timeframe: str = '5m', limit: int = 0):
         category, newSymbol = slit(symbol, '_')
-        if category == 'spot':
+        if category == kSpot:
             self._maxLimit = kMaxLimit
-            kLineData = super().getKline(
-                newSymbol, seTime, limit=limit == 0 and self._maxLimit or limit)
-        elif category == "swap":  # dapi(币本位)、fapi(u本位)、eapi(欧式期权)
+            kLineData = super()._marketKline(newSymbol, seTime, limit=limit if limit else self._maxLimit)
+        elif category == kSwap:
             self._maxLimit = kfMaxLimit
             params = {'symbol': newSymbol,
                 'interval': timeframe,
-                'startTime': str2ms(seTime[0]),
-                'endTime': str2ms(seTime[1]),
-                'limit': limit == 0 and kfMaxLimit or limit}
-            if newSymbol[-5:] == '_PERP':  # 币本位
-                kLineData = self._ccxt.dapiPublicGetKlines(params=params)
-            else:
-                kLineData = self._ccxt.fapiPublicGetKlines(params=params)
+                'limit': limit if limit else kfMaxLimit}
+            if len(seTime) > 0:
+                params['startTime'] = str2ms(seTime[0])
+                params['endTime'] = str2ms(seTime[1])
+            api = self._ccxt.dapiPublicGetKlines if newSymbol.endswith('_PERP') else self._ccxt.fapiPublicGetKlines #期权和合约
+            kLineData = tryCatch(lambda: api(params=params))
+            if not kLineData:
+                return None
+        else:
+            print('币安还没完成以下币种获取:',symbol)
+            return None
+        #格式化k线
         pd = pdData()
-        pd.format(kLineData, style='candle', utc=self._utc)
+        pd.format(kLineData, utc = self._utc) #对齐当前国家时区
         return pd.get()
 
-    # 获取现货或u本位深度
-    def depth(self, symbol, limit):  # limit(5,10,20,50,100,500,1000)
+    def depth(self, symbol: str, limit: int):
+        """深度数据"""
         category, newSymbol = slit(symbol, '_')
         params = {'symbol': newSymbol, 'limit': limit}
-        if category == "spot":
-            return self._ccxt.publicGetDepth(params=params)
-        return self._ccxt.fapiPublicGetDepth(params=params)
-    
-    # 获取成交历史
-    def trades(self, symbol, limit):  # limit max = 1000
-        category, newSymbol = slit(symbol, '_')
-        params = {'symbol': newSymbol, 'limit': limit}
-        if category == "spot":
-            return self._ccxt.publicGetTrades(params=params)
-        return self._ccxt.fapiPublicGetTrades(params=params)
-    
-    # 最新币价
-    def tickers(self, symbol):
-        category, newSymbol = slit(symbol, '_')
-        params = {'symbol': newSymbol}
-        if category == "spot":
-            return self._ccxt.publicGetTickerPrice(
-                params={'symbol': newSymbol})
-        return self._ccxt.fapiPublicGetTickerPrice(params=params)
-        # /fapi/v1/ticker/price
+        return tryCatch(lambda: switchFn({
+            'spot': self._ccxt.publicGetDepth,
+            'swap': self._ccxt.fapiPublicGetDepth
+        }, key=category, params=params))
 
-    # 获取最优价
-    def bookTickers(self, symbol):
+    def trades(self, symbol: str, limit: int):
+        """成交历史"""
+        category, newSymbol = slit(symbol, '_')
+        params = {'symbol': newSymbol, 'limit': limit}
+        return tryCatch(lambda: switchFn({
+            'spot': self._ccxt.publicGetTrades,
+            'swap': self._ccxt.fapiPublicGetTrades
+        }, key=category, params=params))
+
+    def tickers(self, symbol: str):
+        """最新币价"""
         category, newSymbol = slit(symbol, '_')
         params = {'symbol': newSymbol}
-        return self._ccxt.fapiPublicGetTickerBookTicker(params=params)  # todo:只做了u本位
+        return tryCatch(lambda: switchFn({
+            'spot': self._ccxt.publicGetTickerPrice,
+            'swap': self._ccxt.fapiPublicGetTickerPrice
+        }, key=category, params=params))
+
+    def bookTickers(self, symbol: str):
+        """最优价"""
+        category, newSymbol = slit(symbol, '_')
+        params = {'symbol': newSymbol}
+        return tryCatch(lambda: switchFn({
+            'spot': self._ccxt.publicGetTickerBookTicker,
+            'swap': self._ccxt.fapiPublicGetTickerBookTicker
+        }, key=category, params=params))
+
+    def fundingRate(self, symbol: str, category: str = kUm):
+        """资金费率"""
+        _, newSymbol = slit(symbol, '_')
+        params = {'symbol': newSymbol}
+        return tryCatch(lambda: switchFn({
+            kUm: self._ccxt.fapiPublicGetFundingRate,
+            kCm: self._ccxt.dapiPublicGetFundingRate
+        }, key=category, params=params))
+
+    def setPositionMode(self, dualSide: bool = True, category: str = kUm):
+        """设置持仓模式 dualSide: True=双向持仓, False=单向持仓"""
+        params = {'dualSidePosition': str(dualSide).lower(), 'timestamp': binanceTimestamp()}
+        return tryCatch(lambda: switchFn({
+            kUm: self._ccxt.papiPostUmPositionSideDual,
+            kCm: self._ccxt.papiPostCmPositionSideDual
+        }, key=category, params=params))
+
+    def setMarginType(self, symbol: str, marginType: str = 'CROSSED', category: str = kUm):
+        """设置保证金类型 marginType: 'CROSSED'(全仓) 或 'ISOLATED'(逐仓)"""
+        params = {'symbol': symbol, 'marginType': marginType, 'timestamp': binanceTimestamp()}
+        return tryCatch(lambda: switchFn({
+            kUm: self._ccxt.papiPostUmMarginType,
+            kCm: self._ccxt.papiPostCmMarginType
+        }, key=category, params=params))

@@ -8,8 +8,8 @@ eTimeTs = {
 
 # pd采样
 eSampleTs = {
-    "15m": "15T",
-    "30m": "30T",
+    "15m": "15min",
+    "30m": "30min",
     "1h": "H",
     "4h": "4H",
     "1D": "D",
@@ -57,11 +57,12 @@ from server.utils.common import (
     joinPath,
     getFileExtension,
     trySwitchFn,
-    tryExecution,
     timeFrame2Float,
+    sec2min,
     listFind,
     dictFind,
-    utc_now
+    utc_now,
+    tryCatch
 )
 
 __all__ = [
@@ -84,8 +85,9 @@ __all__ = [
     'joinPath',
     'getFileExtension',
     'trySwitchFn',
-    'tryExecution',
     'timeFrame2Float',
+    'sec2min',
+    'tryCatch',
     'listFind',
     'dictFind',
     # logger

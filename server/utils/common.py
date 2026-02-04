@@ -77,7 +77,7 @@ def str2ms(strTime: str, utc=0):
 
 def str2time(strTime: str):
     def now():
-        return datetime.datetime.now()
+        return datetime.now()
     def pre():
         time_val = 5 * int(eTimeTs['m'])
         return reviseTime('now', -time_val)
@@ -95,9 +95,9 @@ def reviseTime(strTime, sconds):
         return date + datetime.timedelta(seconds=abs(sconds))
     return date - datetime.timedelta(seconds=abs(sconds))
 # 时间差
-def diff_Pdtime(pdTime, resTime='now'):
-    time = pd.Timestamp.now() if resTime == 'now' else pd.to_datetime(resTime,format="%Y-%m-%d %H:%M:%S")
-    return abs((time - pdTime).total_seconds())
+def diff_Pdtime(pdBegin, endTime='now'):
+    time = pd.Timestamp.now() if endTime == 'now' else pd.to_datetime(endTime,format="%Y-%m-%d %H:%M:%S")
+    return (time - pdBegin).total_seconds()
 
 # str，替换
 def strReplace(symbolName, strRep=['/', '-']):
@@ -231,9 +231,11 @@ def readFile(pathFile):
         with pd.HDFStore(pathFile, 'r') as store:
             return {key: store[key] for key in store.keys()}
     def _xlsx():
-        return pd.read_excel(pathFile, sheet_name=None)
+        return pd.read_excel(pathFile,  engine='openpyxl')
     def _parquet():
         return pd.read_parquet(pathFile, engine='pyarrow')
+    def _csv():
+        return pd.read_csv(pathFile)
     return switchFn({
         'json': _json,
         'pkl': _pkl,
@@ -241,7 +243,8 @@ def readFile(pathFile):
         'gz': _gz,
         'h5': _h5,
         'xlsx': _xlsx,
-        'parquet': _parquet
+        'parquet': _parquet,
+        'csv': _csv
     }, key=fileType)
 def writeFile(data, pathFile):
     if data is None or (isinstance(data, (list, dict)) and len(data) == 0):
@@ -270,11 +273,13 @@ def writeFile(data, pathFile):
         if isinstance(data, dict):
             with pd.ExcelWriter(pathFile) as writer:
                 for key, value in data.items():
-                    value.to_excel(writer, sheet_name=key)
+                    value.to_excel(writer, engine='openpyxl', index=False)
         else:
-            data.to_excel(pathFile)
+            data.to_excel(pathFile, engine='openpyxl', index=False)
     def _parquet():
         data.to_parquet(pathFile, engine='pyarrow', compression='snappy')
+    def _csv():
+        data.to_csv(pathFile, index=False)
     result = switchFn({
         'json': _json,
         'pkl': _pkl,
@@ -282,7 +287,8 @@ def writeFile(data, pathFile):
         'gz': _gz,
         'h5': _h5,
         'xlsx': _xlsx,
-        'parquet': _parquet
+        'parquet': _parquet,
+        'csv': _csv
     }, key=fileType)
 
     # 如果 switchFn 返回 False（未找到对应的文件类型），返回 False，否则返回 True
