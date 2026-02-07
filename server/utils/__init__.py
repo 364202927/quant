@@ -31,13 +31,20 @@ eMsgId = {
 kEvt_Time = 'evtTime'  # 任务时间设定
 kEvt_GetTime = 'evtGetTime'  # 任务时间触发
 
+#log
+kLog,kError,kInfo,kWarn = 'log','err','info','warn'
+
 # 导出常用工具函数和类
-from server.utils.logger import log, err, warn
+from server.utils.recordBuffer import recordBuffer
 from server.utils.fileConfig import g_config
 from server.utils.pdData import pdData
 from server.utils.science import inRange, binanceTimestamp, time2ID
 from server.utils.decoratorTool import singleton
 from server.utils.common import (
+    log,
+    info,
+    warn,
+    err,
     require,
     path2File,
     readFile,
@@ -67,6 +74,10 @@ from server.utils.common import (
 
 __all__ = [
     # common
+    'log',
+    'info',
+    'warn',
+    'err',
     'require',
     'path2File',
     'readFile',
@@ -90,10 +101,18 @@ __all__ = [
     'tryCatch',
     'listFind',
     'dictFind',
-    # logger
-    'log',
-    'err',
-    'warn',
+    # recordBuffer
+    'recordBuffer',
+    # 'log',
+    # 'err',
+    # 'warn',
+    # 'logln',
+    # 'logFormat',
+    # 'get_logs',
+    # 'save_logs',
+    # 'record_order',
+    # 'get_orders',
+    # 'save_orders',
     # fileConfig
     'g_config',
     # pdData

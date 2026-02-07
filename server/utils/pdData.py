@@ -2,9 +2,9 @@ import os
 import pandas as pd
 import numpy as np
 from functools import reduce
-from server.utils.common import switchFn, getFileExtension, readFile, writeFile, utc_now
+from server.utils.common import switchFn, getFileExtension, readFile, writeFile, utc_now, err, log
 from server.utils.fileConfig import g_config
-from server.utils.logger import err, log
+# from server.utils.recordBuffer import err, log
 from server.utils import eSampleTs
 
 # pd.set_option('display.max_rows', None)  # 最大显示行

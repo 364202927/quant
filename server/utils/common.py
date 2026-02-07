@@ -1,15 +1,37 @@
-import pickle,json,time,os,requests,inspect,asyncio,inspect,gzip,os,pathlib
+import pickle,json,time,os,requests,inspect,asyncio,inspect,gzip,os,pathlib,pprint
 from importlib import import_module
 from pydispatch import dispatcher
-from server.utils import eTimeTs
+from server.utils import eTimeTs,kLog,kInfo,kError,kWarn
 from datetime import datetime, timezone
 import pandas as pd
-savePath = "data/save/"
+
+#log显示时间,其他显示 类+调用位置
+def _logBase(tag: str, *args) -> None:
+    from server.utils.fileConfig import g_config,kLogBufType
+    des = '['+str2time('strNow')+']'
+    if tag != kLog:
+        frame_info = inspect.getframeinfo(inspect.stack()[2].frame)
+        fileName = os.path.splitext(os.path.basename(frame_info.filename))[0]
+        des = f"[{fileName}.{frame_info.function}:{frame_info.lineno}]"
+    message = ''.join(map(str,args))
+    g_config.get(kLogBufType).push(msg = des + message, tags = tag)
+def log(*msgs) -> None:
+    _logBase(kLog, *msgs)
+def info(*msgs) -> None:
+    _logBase(kInfo, *msgs)
+def warn(*msgs) -> None:
+    _logBase(kWarn, *msgs)
+def err(*msgs) -> None:
+    _logBase(kError, *msgs)
+def logFormat(value) -> None:
+    pprint.pprint(value)
+
 
 def publicIp():
-    response = requests.get('https://api.ipify.org?format=json')
-    public_ip = response.json()['ip']
-    return public_ip
+    # response = requests.get('https://api.ipify.org?format=json')
+    # public_ip = response.json()['ip']
+    # return public_ip
+    pass
 
 # 绑定消息
 def evtConnect(strEvt, obj):
@@ -81,12 +103,15 @@ def str2time(strTime: str):
     def pre():
         time_val = 5 * int(eTimeTs['m'])
         return reviseTime('now', -time_val)
-    # if isinstance(strTime, datetime.datetime):  # 时间直接返回
-    #     return strTime
-    rt = switchFn({"now": now, "pre5": pre}, key=strTime)
-    if not rt:
-        return datetime.strptime(strTime, '%Y-%m-%d %H:%M:%S')
-    return rt
+    def strNow():
+        return now().strftime('%Y-%m-%d %H:%M:%S')
+    if isinstance(strTime, datetime):  # 时间直接返回
+        return strTime
+    # rt = switchFn({"now": now, "pre5": pre}, key=strTime)
+    # if not rt:
+    #     return datetime.strptime(strTime, '%Y-%m-%d %H:%M:%S')
+    # return rt
+    return switchFn({"now": now, "pre5": pre,'strNow': strNow}, key=strTime)
 
 # 修正时间，+-(秒)
 def reviseTime(strTime, sconds):
@@ -169,7 +194,6 @@ def switchV(dice, key1, key2):
 #全局tryCatch,方便使用捕抓崩溃
 isTry = False
 def tryCatch(fn):
-    from server.utils import err
     if not isTry:
         return fn()
     try:
@@ -209,6 +233,12 @@ def curPath():
 def joinPath(path, fileName):
     fullPath = path + fileName
     return fullPath
+# 生成带时间后缀的文件名: path/{suffix}.{ext}
+def genFileName(path: str, file_split: str, ext: str) -> str:
+    fmt = {'Y': '%Y', 'D': '%Y-%m-%d'}.get(file_split, '')
+    suffix = datetime.now().strftime(fmt) if fmt else ''
+    name = f"{suffix}.{ext}" if suffix else f"data.{ext}"
+    return joinPath(path, name)
 # 文件操作
 def readFile(pathFile):
     if not os.path.exists(pathFile) or\

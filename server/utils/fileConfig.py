@@ -1,12 +1,16 @@
 from server.utils.decoratorTool import singleton
 from server.utils.common import readFile, writeFile, switch, dictFind
+from server.utils.recordBuffer import recordBuffer
 kMarketPath = "assets/markets/"
 kDataPath = 'assets/config/'
-kUserType,kApiType,kStartType = 'user','apiKey','start'
+kLogPath = "assets/log/"
+kOrderPath = "assets/order/"
+kUserType,kApiType,kStartType,kLogBufType,kOrderBufType = 'user','apiKey','start','logBuffer','orderBuffer'
 kConfigPath = kDataPath+kUserType+".json"
 kApikeyPath = kDataPath+kApiType+".gz"
 kStartFile = kDataPath+kStartType+".json"
 
+kBufferSize = 1000
 #user.json模版
 userTemp={
     "info": {
@@ -19,9 +23,7 @@ userTemp={
     },
     "logger": {
         "_info": "",
-        "send2Third": 0,
-        "outFilePath": "",
-        "level": 0
+        "outFilePath": "logs/",
     },
     "external": {
         "web": {
@@ -56,6 +58,8 @@ class fileConfig:
         self.__userConfig = readFile(kConfigPath)
         self.__apiConfig = readFile(kApikeyPath) or apiTemp.copy()
         self.__startConfig = readFile(kStartFile) or {}
+        self.__logBuf = recordBuffer(kLogPath,max_size=kBufferSize)
+        self.__orderBuf = recordBuffer(kOrderPath,max_size=kBufferSize)
         # print("~~~~~~user.json~~~~~~~", self.__userConfig)
         # print("~~~~~~api.json~~~~~~~", self.__apiConfig)
         # print("~~~~~~start.json~~~~~~~", self.__startConfig)
@@ -88,7 +92,7 @@ class fileConfig:
         def _updateStartConfig():
             self.__startConfig = data[kStartType] or {}
             # print("~~~~~~start.json~~~~~~~~",self.__startConfig)
-        #logic
+        #logic,todo:改成switchFn
         handlers = {
             kUserType: _updateUserConfig,
             kApiType: _updateApiKeyConfig,
@@ -109,10 +113,14 @@ class fileConfig:
     def get(self, configType, key=None):
         config = switch({kUserType:self.__userConfig,
                         kApiType:self.__apiConfig,
-                        kStartType:self.__startConfig},
+                        kStartType:self.__startConfig,
+                        kLogBufType:self.__logBuf,
+                        kOrderBufType:self.__orderBuf},
                         key=configType)
         if not config:
             return
+        if key is None:
+            return config
         return config[key]
         
     def _disposition(self, configType, key, secondKey):
@@ -124,8 +132,8 @@ class fileConfig:
     #config数据
     def external(self, key=""):
         return self._disposition(kUserType,"external", key)
-    def logger(self, key=""):
-        return self._disposition(kUserType,"logger", key)
+    # def logger(self, key=""):
+    #     return self._disposition(kUserType,"logger", key)
     def fils(self, key=""):
         return self._disposition(kUserType,"files", key)
     def info(self, key=''):
@@ -142,7 +150,13 @@ class fileConfig:
     # startFile
     def startFiles(self):
         return self.__startConfig
-    
+
+    # # buffer
+    # def logBuf(self):
+    #     return self.__logBuf
+    # def orderBuf(self):
+    #     return self.__orderBuf
+
     def saveFile(self):
         if writeFile(self.__userConfig, kConfigPath):
             print('user.json保存成功')
@@ -150,5 +164,13 @@ class fileConfig:
             print("apikey保存成功")
         if writeFile(self.__startConfig, kStartFile):
             print('start.json保存成功')
+    
+    def saveBuffer(self, bufType=None):
+        if bufType:
+            buf = switch({kLogBufType: self.__logBuf, kOrderBufType: self.__orderBuf}, key=bufType)
+            if buf: buf.save2File()
+        else:
+            self.__logBuf.save2File()
+            self.__orderBuf.save2File()
 
 g_config = fileConfig()
