@@ -1,5 +1,5 @@
 from server.market import g_marketMgr
-from server.utils import pdData, switchFn, switchV, slit, inRange, binanceTimestamp, err
+from server.utils import pdData, switchFn, switchV, slit, inRange, binanceTimestamp, err#, record_order
 
 kBuy = 'buy'
 kSell = "sell"
@@ -154,6 +154,17 @@ class baseTrade:
         switchFn({'open': open,
                   'closed': close},
                  key=rtData.get('status'))
+
+        # 记录下单日志
+        side = dir.split('_')[0] if '_' in dir else dir
+        pos_side = dir.split('_')[1] if '_' in dir else None
+        # record_order(
+        #     rtData,
+        #     self.__class__.__name__,  # task名
+        #     side,                      # buy/sell
+        #     pos_side or '',           # LONG/SHORT
+        #     symbol
+        # )
 
     def _setOpenAmt(self, index, value):
         self._openOrders.get().loc[index, 'holdAmt'] = value

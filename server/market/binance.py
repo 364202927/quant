@@ -1,16 +1,15 @@
 from server.market.baseExchange import *
 from server.utils.science import binanceTimestamp
-from server.utils import timeFrame2Float, sec2min
+from server.utils import timeFrame2Float, sec2min,logFormat
 import json
 
 kMaxLimit = 1000   # 现货最大 K 线
 kfMaxLimit = 1500  # 合约最大
-
-kMarket, kLimit = 'MARKET', 'LIMIT'
-kUm, kCm, kEo = 'um', 'cm', 'eo'  # U本位、币本位、期权
+kPm = 'PortfolioMargin'
+# kMarket, kLimit = 'MARKET', 'LIMIT'
+# kUm, kCm, kEo = 'um', 'cm', 'eo'  # U本位、币本位、期权
 
 STATUS_MAP = {'NEW': 'open', 'FILLED': 'closed', 'CANCELED': 'cancel'}
-
 
 class binance(baseExchange):
 
@@ -19,17 +18,17 @@ class binance(baseExchange):
 
     def account(self) -> dict:
         accDict = {'total': {}, 'used': {}, 'free': {}}
-        tryCatch(lambda: super(binance, self).account())
-
+        # tryCatch(lambda: super(binance, self).account())
+        # print('bianacc')
+        super().account()
         for key, sub_dict in self._info.get('acc', {}).items():
             for sub_key, sub_value in sub_dict.items():
                 if sub_value > 0:
                     accDict[key][sub_key] = sub_value
+        #资金大于10w刀使用的是pm3查询不是sapiGetPortfolioAccount
         self._info['acc'] = accDict
-
-        portfolioAcc = tryCatch(lambda: self._ccxt.sapiGetPortfolioAccount())
-        if portfolioAcc:
-            self._info['acc']['futures'] = {
+        portfolioAcc = self._ccxt.sapiGetPortfolioAccount()
+        self._info['acc'][kPm] = {
                 'uniMMR': portfolioAcc['uniMMR'],
                 'total': portfolioAcc['accountEquity'],
                 'free': portfolioAcc['totalAvailableBalance'],
@@ -37,7 +36,10 @@ class binance(baseExchange):
         return self._info['acc']
     
     def _accFutures(self, account: dict) -> float:
-        return account['futures']['free']
+        return account[kPm]['free']
+    
+    def _portfolioMargin(self,account: dict) -> float:
+        return account[kPm]['free']
 
 
     def _futureFind(self, **kwargs):
@@ -213,7 +215,7 @@ class binance(baseExchange):
             if not kLineData:
                 return None
         else:
-            print('币安还没完成以下币种获取:',symbol)
+            err('币安还没完成以下币种获取:',symbol)
             return None
         #格式化k线
         pd = pdData()

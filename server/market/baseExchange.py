@@ -1,15 +1,15 @@
 import ccxt
 import time
 import pandas as pd
-from server.utils import (switch, switchFn, tryCatch, aContainB, slit, str2ms, pdData, err, log, inRange, utc_now, reviseTime, timeFrame2Float,diff_Pdtime)
+from server.utils import switch, switchFn, tryCatch, aContainB, slit, str2ms, pdData, err, log, inRange, utc_now, reviseTime, timeFrame2Float,diff_Pdtime,logFormat
 
-kFilter = ["BTC/USDT", "ETH/USDT", "BNB/USDT", "OKB/USDT", "DOGE/USDT", "USDC/USDT"]
+kFilter = []#["BTC/USDT", "ETH/USDT", "BNB/USDT", "OKB/USDT", "DOGE/USDT", "USDC/USDT"]
 kSpot, kSwap = 'spot', 'swap'
 kBuy, kSell, kFind = 'buy', 'sell', 'find'
-
+kMarket, kLimit = 'MARKET', 'LIMIT'
+kUm, kCm, kEo = 'um', 'cm', 'eo'  # U本位、币本位、期权
 
 class baseExchange:
-    """交易所基类，定义通用接口和默认实现"""
 
     def __init__(self, description: str, maxLimit: int):
         self.__description = description
@@ -18,34 +18,30 @@ class baseExchange:
         self._id = ''
         self._info = {}
 
-    def name(self) -> str:
-        return self.__class__.__name__
+    # def name(self) -> str:
+    #     return self.__class__.__name__
 
     def get(self, key: str):
         return switch({
-            'id': self._id,
+            'id': self.__class__.__name__,
             'des': self.__description,
             'ccxt': self._ccxt,
             'acc': self._info['acc'],
-            'coinInfo': self._info['coin']
-        }, key=key)
+            'coinInfo': self._info['coin']}, key=key)
 
     def enroll(self, config: dict):
-        """注册交易所，初始化 ccxt 实例"""
         self.create(config)
         self._utc = utc_now()
 
     def create(self, config: dict):
         exchangeClass = getattr(ccxt, type(self).__name__)
         self._ccxt = exchangeClass({
-            # 'apiKey': config['apiKey'],
-            # 'secret': config['secret'],
+            'apiKey': config['apiKey'],
+            'secret': config['secret'],
             'timeout': 3000,
-            'enableRateLimit': True
-        })
+            'enableRateLimit': True})
 
     def showApi(self):
-        """打印 ccxt 支持的 API 信息"""
         print("ccxt版本：", ccxt.__version__, "public/private + get/post + path, 驼峰编码")
         print("~~~~ccxt私有~~~~~\n", dir(self._ccxt))
         print('\n~~~~支持信息~~~~~~\n', self._ccxt.has)
@@ -67,22 +63,27 @@ class baseExchange:
         return float(self._accFutures(account))
 
     def markets(self, reset: bool = False) -> dict:
-        """获取市场币种信息"""
         if not reset and self._info.get('coin'):
             return self._info['coin']
 
         self._info['coin'] = {}
         markets = self._ccxt.loadMarkets()
         for symbol, market in markets.items():
-            if aContainB(symbol, kFilter) and market['active']:
-                self._info['coin'][symbol] = {
+            if market['active']:#aContainB(symbol, kFilter) and market['active']:
+                # self._info['coin'][symbol] = {
+                #     'id': market['id'],
+                #     # 'pair': market['info'].get('pair'),
+                #     'type': market['type'],
+                #     'amount': market['limits']['amount'],
+                #     'price': market['limits']['price'],
+                #     'cost': market['limits']['cost']}
+                if not self._info['coin'][market['type']]:
+                    self._info['coin'][market['type']] = {}
+                self._info['coin'][market['type']][symbol]= {
                     'id': market['id'],
-                    'pair': market['info'].get('pair'),
-                    'type': market['type'],
                     'amount': market['limits']['amount'],
                     'price': market['limits']['price'],
-                    'cost': market['limits']['cost']
-                }
+                    'cost': market['limits']['cost']}
         return self._info['coin']
 
     def coinInfo(self, symbol: str) -> tuple:
@@ -190,14 +191,13 @@ class baseExchange:
     def _futureCancal(self, **kwargs): pass
     def _batchOrders(self, category, orders): pass
     def _marketKline(self, symbol: str, seTime: list, timeframe: str = '5m', limit: int = 0):
-        effectiveLimit = limit if limit > 0 else self._maxLimit
+        # effectiveLimit = limit if limit > 0 else self._maxLimit
         time = None
         if len(seTime) > 0 :
             time = str2ms(seTime[0])
-        return self._ccxt.fetch_ohlcv(symbol=symbol,timeframe=timeframe,since=time,limit=effectiveLimit)
+        return self._ccxt.fetch_ohlcv(symbol=symbol,timeframe=timeframe,since=time,limit=limit)
 
     def _sporOrder(self, **kwargs):
-        """现货下单"""
         state = kwargs['state']
         symbol = kwargs['symbol'].get('id')
         amount = kwargs.get('amount')

@@ -3,7 +3,7 @@ from server.utils.common import publicIp
 # import webbrowser
 
 def main():
-    print("当前ip地址:", publicIp())
+    # print("当前ip地址:", publicIp())
     # 启动
     launch = launcher()
     # # 测试任务

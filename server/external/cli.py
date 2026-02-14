@@ -1,6 +1,6 @@
 import asyncio, re, ast, sys, threading
 from server.utils.fileConfig import g_config,kLogBufType
-from server.utils import kLog,kInfo,kError,kWarn,warn
+from server.utils import kLog,kInfo,kError,kWarn,warn,log
 
 _IS_WIN = sys.platform == 'win32'
 if _IS_WIN:
@@ -132,7 +132,7 @@ class cli:
                 
     async def _handle_command(self, cmd: str):
         if cmd == 'h':
-            print("\n  可用命令:"
+            log("可用命令:"
                   "\n  <id> [arg1,arg2,...] - 发送消息（id为整数）"
                   "\n  h                   - 显示帮助")
             return
