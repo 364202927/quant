@@ -25,13 +25,25 @@ def err(*msgs) -> None:
     _logBase(kError, *msgs)
 def logFormat(value) -> None:
     pprint.pprint(value)
+def logJson(value) -> None:
+    print(json.dumps(value, indent=4, ensure_ascii=False))
 
 
 def publicIp():
-    # response = requests.get('https://api.ipify.org?format=json')
-    # public_ip = response.json()['ip']
-    # return public_ip
-    pass
+    response = requests.get('https://api.ipify.org?format=json')
+    public_ip = response.json()['ip']
+    return public_ip
+
+def spot(symbol: str):
+    return 'spot_'+symbol
+def swapU(symbol: str):                 #u本位
+    return 'swap_'+symbol+':USDT'
+def swapC(symbol: str):                 #币本位永续
+    return 'delivery_'+symbol+'/USD:'+ symbol
+def futureU(symbol: str, timeIndex = 0):#交割合约,币种结算时间排序,0是最近
+    return f'future_{symbol}-{timeIndex}'
+def futureC(symbol: str,  timeIndex = 0):#币本位交割合约
+    return swapC(symbol) + f'-{timeIndex}'
 
 # 绑定消息
 def evtConnect(strEvt, obj):
@@ -107,11 +119,10 @@ def str2time(strTime: str):
         return now().strftime('%Y-%m-%d %H:%M:%S')
     if isinstance(strTime, datetime):  # 时间直接返回
         return strTime
-    # rt = switchFn({"now": now, "pre5": pre}, key=strTime)
-    # if not rt:
-    #     return datetime.strptime(strTime, '%Y-%m-%d %H:%M:%S')
-    # return rt
-    return switchFn({"now": now, "pre5": pre,'strNow': strNow}, key=strTime)
+    rt = switchFn({"now": now, "pre5": pre,'strNow': strNow}, key=strTime)
+    if not rt:
+        return datetime.strptime(strTime, '%Y-%m-%d %H:%M:%S')
+    return rt
 
 # 修正时间，+-(秒)
 def reviseTime(strTime, sconds):
@@ -164,15 +175,17 @@ def aContainB(input, strOrTab):
             return True
     return False
 
-# 分支调用
+# 分支调用,如不存在触发default
 def switch(dice, key):
     if not dice.get(key):
-        # print("err：找不到key", dice, key)
+        if dice['default']: 
+            return dice['default']
         return False
     return dice.get(key)
 def switchFn(diceFn, key, **kwargs):
     if not diceFn.get(key):
-        # print("switchFn err 没有接收函数", key, diceFn)
+        if diceFn['default']:
+            return diceFn['default'](**kwargs)
         return False
     return diceFn[key](**kwargs)
 def trySwitchFn(diceFn, key, **kwargs):

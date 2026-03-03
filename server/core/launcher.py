@@ -36,38 +36,34 @@ class launcher:
 
         log("Launcher初始化完成", self.__modules)
 
-        # 初始化市场管理器
+        # 交易所更新
         if g_config.marketsApi():
             g_marketMgr.init()
             g_marketMgr.userAccount(isUpdate=True)
-
+    # 消息引导
     def _msgTransform(self, msgID: int, args: list | None = None):
-        """消息传递到 handler"""
         if self.__idTransform:
             return self.__idTransform.process(msgID, args or [])
         return None
-
+    # 通常用于测试任务
+    def addProject(self, projectName: str) -> None:
+        self.__quant.loadTask(projectName)
     def run(self) -> None:
-        """启动异步事件循环"""
         asyncio.run(self._async_run())
-
     async def _async_run(self) -> None:
-        """并发运行所有模块"""
         tasks = [module.run() for module in self.__modules]
         try:
             await asyncio.gather(*tasks)
         except KeyboardInterrupt:
             log("用户中断，正在退出...")
-
-    def getModules(self, className: str):
-        for module in self.__modules:
-            if module.__class__.__name__ == className:
-                return module
-        return None
-
-    def addProject(self, projectName: str) -> None:
-        self.__quant.loadTask(projectName)
-
+    
+    # def getModules(self, className: str):
+    #     for module in self.__modules:
+    #         if module.__class__.__name__ == className:
+    #             return module
+    #     return None
+    
+    # 根据任务链表读取
     def start(self) -> None:
         self.__quant.loadTaskList()
         self.run()

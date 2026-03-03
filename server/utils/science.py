@@ -1,4 +1,5 @@
 import math,time,random
+from decimal import Decimal, ROUND_UP
 from server.utils.common import switchFn
 
 # 是否落在范围
@@ -22,26 +23,6 @@ def time2ID():
 def binanceTimestamp():
     return int(time.time() * 1000)
 
-# 检测单一k线形态
-def patternType(pd, type):
-    def bullish():  # 阳线
-        return pd['close'] > pd['open']
-    def bearish():  # 阴线
-        return pd['close'] < pd['open']
-    def hammer():  # 锤子线
-        real_body = abs(pd['close'] - pd['open'])
-        lower_shadow = pd['open'] - pd['low'] if pd['open'] < pd['close'] else pd['close'] - pd['low']
-        upper_shadow = pd['high'] - pd['close'] if pd['open'] < pd['close'] else pd['high'] - pd['open']
-        return lower_shadow > 2 * real_body and upper_shadow < real_body
-    def InvHammer():  # 倒锤子线
-        real_body = abs(pd['close'] - pd['open'])
-        lower_shadow = pd['open'] - pd['low'] if pd['open'] < pd['close'] else pd['close'] - pd['low']
-        upper_shadow = pd['high'] - pd['close'] if pd['open'] < pd['close'] else pd['high'] - pd['open']
-        return upper_shadow > 2 * real_body and lower_shadow < real_body
-    return switchFn({'up': bullish,
-                     'down': bearish},
-                    key=type)
-
 # 检测pf是否包含有标签
 def labIsin(df, tabLab):
     labels = {col: i for i, col in enumerate(df.columns)}
@@ -49,16 +30,6 @@ def labIsin(df, tabLab):
         if not labels.get(label):
             return False
     return True
-
-# k线是否交叉
-def crossUp(index, targeMa, preMa):
-    if targeMa.iloc[index] > preMa.iloc[index] and targeMa.iloc[index - 1] <= preMa.iloc[index - 1]:
-        return True
-    return False
-def crossDown(index, targeMa, preMa):
-    if targeMa.iloc[index] < preMa.iloc[index] and targeMa.iloc[index - 1] >= preMa.iloc[index - 1]:
-        return True
-    return False
 
 # 合约收益
 def contractProfit(openPrice, closePrice, amount):
@@ -69,6 +40,16 @@ def floatingProfit(openPrice, closePrice, dir):
     if dir == 'LONG':
         return (closePrice - openPrice) / openPrice * 100
     return (openPrice - closePrice) / openPrice * 100
+#除出来的结果会比a稍微大一点,精确到3位小数
+def division(a:float, b:float, step = 0, precision:str = '0.001'):
+    if b == 0:
+        return
+    raw_quantity = Decimal(a) / Decimal(b)
+    num = float(raw_quantity.quantize(Decimal(precision), rounding=ROUND_UP))  # （强制向上进位）
+    if step > 0:
+        num = math.ceil(num / step) * step
+    return num
+
 # 浮盈
 # def floating_PL(positionSide, entry, mark, amt):
     # 浮动亏损 = (开仓价 - 当前标记价格) * 合约数量（对于多头）

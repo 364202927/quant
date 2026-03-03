@@ -38,7 +38,7 @@ kLog,kError,kInfo,kWarn = 'log','err','info','warn'
 from server.utils.recordBuffer import recordBuffer
 from server.utils.fileConfig import g_config
 from server.utils.pdData import pdData
-from server.utils.science import inRange, binanceTimestamp, time2ID
+from server.utils.science import inRange, binanceTimestamp, time2ID,division
 from server.utils.decoratorTool import singleton
 from server.utils.common import (
     log,
@@ -46,6 +46,12 @@ from server.utils.common import (
     warn,
     err,
     logFormat,
+    logJson,
+    spot,
+    swapU,
+    swapC,
+    futureU,
+    futureC,
     require,
     path2File,
     readFile,
@@ -80,6 +86,12 @@ __all__ = [
     'warn',
     'err',
     'logFormat',
+    'logJson',
+    'spot',
+    'swapU',
+    'swapC',
+    'futureU',
+    'futureC',
     'require',
     'path2File',
     'readFile',
@@ -112,6 +124,7 @@ __all__ = [
     'inRange',
     'binanceTimestamp',
     'time2ID',
+    'division',
     # decoratorTool
     'singleton',
     # enumeration

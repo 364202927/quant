@@ -1,31 +1,64 @@
-from server.strategy.base.testCTA import *
+from server.strategy.base.baseCTA import *
+from server.strategy.base.realTrade import *
 # from server.utils import pdData, log
 # from datetime import datetime
+import time
 
-class test(testCTA):
+class test(baseCTA, realTrade):
     "测试用法"
 
-    _kLinePd = None  # 原始数据
-
     def info(self):
-        return "demo+测试代码"
+        return "demo+k线数据,交易所成交"
 
     def init(self):
-        self.regTime('1s', "1m")
+        self.regTime('1s', "1m")    #注册时间
+        self.settingTrade(exName=['binanceMain'], def_lv = 1) #默认下单设置
         # 初始化指标
         self.regIndicators({'candles':'other.kLine',
                             'vwap':'volume.vwap',
                             'boll':'oscillators.boll'})
-        
-        info("~~~~init test~~~~")
+        print("~~~~init test~~~~")
         # 指标合并计算
         # self.candles.delimit(exName = 'binanceMain',symbols = ['spot_BTCUSDT','swap_BTCUSDT'])
         # candles = self.candles.calculate(self.vwap, self.boll)
         # print("~~~spot_BTCUSDT~~~~~\n",candles['spot_BTCUSDT'].get())
-        # print("~~~swap_BTCUSDT~~~~~\n",candles['swap_BTCUSDT'].get())    
+        # print("~~~swap_BTCUSDT~~~~~\n",candles['swap_BTCUSDT'].get())
         # 获取历史数据
         # kLine = self.candles.historyCandles(symbol = 'spot_BTCUSDT', seTime = ['2020-1-01 00:00:00','2020-05-01 00:00:00'], timeFrame = '15m')
         # print("~~~historyCandles 15m~~~~~\n",kLine.get())
+        
+        #现货
+        # self.buy('DOGE/USDT', totelPrice = 1)                            #市价买入1u,如totelPrice少于最少下单按最少下单
+        # time.sleep(10)
+        # self.buy('DOGE/USDT', totelPrice = 'bet:10', orderBook=0)        #以现货总仓位的10%,挂单最优价买入
+        # time.sleep(10)
+        # self.buy('DOGE/USDT', totelPrice = 1, price = 0.07)               #挂单价0.07,总单价1u
+        # time.sleep(10)
+        # self.cencel('DOGE/USDT')
+        # self.sell('DOGE/USDT')                                            #默认全卖
+        # time.sleep(10)
+        #合约
+        self.openLong(swapU('DOGE/USDT'), totelPrice = 'bet:5',price = 0.07,lv=2)      #u本位永续,bet:10是总仓位的10%
+        # self.openLong(swapU('DOGE/USDT'), totelPrice = 1)
+        # time.sleep(20)
+        # self.openShort(swapU('DOGE/USDT'), totelPrice = 1,isMarket=True)                #市价买入(立即吃单)
+        # time.sleep(20)
+        # self.openShort(futureU('BTC/USDT', timeIndex = 1), totelPrice = 1)              #u本位交割开空
+        # self.closePos(swapU('DOGE/USDT'),dir=kLong)
+        # self.closePos(swapU('DOGE/USDT'),dir=kShort)
+        # self.closePos(swapU('DOGE/USDT'),dir='open')
+        
+        exit()
+
+
+        #未完成 
+        # 记录下单数据
+        # 现货平仓,  ok
+        # u本位平仓, ok
+        # 取消订单,  
+        # 查订单     
+        
+
 
 
     def update_1sLess(self, id, timeKey):

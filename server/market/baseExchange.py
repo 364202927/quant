@@ -1,13 +1,7 @@
 import ccxt
-import time
 import pandas as pd
-from server.utils import switch, switchFn, tryCatch, aContainB, slit, str2ms, pdData, err, log, inRange, utc_now, reviseTime, timeFrame2Float,diff_Pdtime,logFormat
-
-kFilter = []#["BTC/USDT", "ETH/USDT", "BNB/USDT", "OKB/USDT", "DOGE/USDT", "USDC/USDT"]
-kSpot, kSwap = 'spot', 'swap'
-kBuy, kSell, kFind = 'buy', 'sell', 'find'
-kMarket, kLimit = 'MARKET', 'LIMIT'
-kUm, kCm, kEo = 'um', 'cm', 'eo'  # U本位、币本位、期权
+from server.market.consts import kSpot, kSwap, kFuture, kDelivery, kBuy, kSell, kShort,kLong,kMarket, kLimit
+from server.utils import switch, switchFn, tryCatch, aContainB, slit, str2ms, pdData, err, log, inRange, utc_now, reviseTime, timeFrame2Float, diff_Pdtime, logFormat,trySwitchFn
 
 class baseExchange:
 
@@ -16,10 +10,7 @@ class baseExchange:
         self._maxLimit = maxLimit
         self._ccxt = None
         self._id = ''
-        self._info = {}
-
-    # def name(self) -> str:
-    #     return self.__class__.__name__
+        self._info = {'acc': {}, 'coin': {}, 'api': {}}
 
     def get(self, key: str):
         return switch({
@@ -30,16 +21,8 @@ class baseExchange:
             'coinInfo': self._info['coin']}, key=key)
 
     def enroll(self, config: dict):
-        self.create(config)
+        self._create(config)
         self._utc = utc_now()
-
-    def create(self, config: dict):
-        exchangeClass = getattr(ccxt, type(self).__name__)
-        self._ccxt = exchangeClass({
-            'apiKey': config['apiKey'],
-            'secret': config['secret'],
-            'timeout': 3000,
-            'enableRateLimit': True})
 
     def showApi(self):
         print("ccxt版本：", ccxt.__version__, "public/private + get/post + path, 驼峰编码")
@@ -50,63 +33,82 @@ class baseExchange:
     def account(self) -> dict:
         info = self._ccxt.fetch_balance()
         self._info['acc'] = {
-            'total': info['total'],
-            'used': info['used'],
-            'free': info['free']}
+            'total': {coin: amount for coin, amount in info['total'].items() if amount > 0},
+            'used': {coin: amount for coin, amount in info['used'].items() if amount > 0},
+            'free': {coin: amount for coin, amount in info['free'].items() if amount > 0}}
         return self._info['acc']
 
-    def accFree(self, isSpot: bool = False) -> float:
-        """返回账户可用余额"""
+    #余额查询
+    def accFree(self, isSpot: bool = False, coin: str = ''):
         account = self.get("acc")
         if isSpot:
-            return float(account['free']['USDT'])
-        return float(self._accFutures(account))
+            amt = float(account['free']['USDT'])
+            if coin == 'all':return account['free']
+            if coin != '':
+                amt = account['free'].get(coin) or 0
+            return amt
+        return self._accPm(account, coin)
 
+    #当前交易所的所有币种
     def markets(self, reset: bool = False) -> dict:
-        if not reset and self._info.get('coin'):
-            return self._info['coin']
-
-        self._info['coin'] = {}
+        kSymbol = 'coin'
+        if not reset and self._info.get(kSymbol):
+            return self._info[kSymbol]
+        self._info[kSymbol] = {kSpot: {}, kSwap: {}, kFuture: {}, kDelivery: {}}
         markets = self._ccxt.loadMarkets()
         for symbol, market in markets.items():
-            if market['active']:#aContainB(symbol, kFilter) and market['active']:
-                # self._info['coin'][symbol] = {
-                #     'id': market['id'],
-                #     # 'pair': market['info'].get('pair'),
-                #     'type': market['type'],
-                #     'amount': market['limits']['amount'],
-                #     'price': market['limits']['price'],
-                #     'cost': market['limits']['cost']}
-                if not self._info['coin'][market['type']]:
-                    self._info['coin'][market['type']] = {}
-                self._info['coin'][market['type']][symbol]= {
+            if market['active']:
+                self._info[kSymbol][market['type']][symbol] = {
                     'id': market['id'],
-                    'amount': market['limits']['amount'],
+                    'symbol':symbol,
+                    'step':market['precision']['amount'],
+                    'market': market['limits']['market'],
+                    'amount': market['limits']['amount'],   #币个数
                     'price': market['limits']['price'],
                     'cost': market['limits']['cost']}
-        return self._info['coin']
+        return self._info[kSymbol]
 
+    # 获取币信息
     def coinInfo(self, symbol: str) -> tuple:
-        """解析 symbol 返回 (category, symbolInfo)"""
         category, newSymbol = slit(symbol, '_')
+        def _find():
+            res = slit(newSymbol, '-')
+            sel = 0
+            futureSymbol = newSymbol if res == False else res[0]
+            # print("~~~res~~~~~~",res, futureSymbol)# ,market.get(category))
+            # 过滤出同一基础合约的所有到期/交割键，按日期后缀排序后选择目标键
+            keys = [market.get(category).get(futureSymbol)]
+            # print("~~~keys~~~~",keys)
+            if keys[0]== None:
+                keys = [k for k in market.get(category).keys() if k.split(':')[0] == futureSymbol]
+                if not keys:
+                    return category, None
+                keys.sort(key=lambda k: k.split('-')[-1])
+                sel = int(res[1])
+            # print("~~~~~~~all~~~~~~~~", keys, sel)
+            # target_key = keys[sel]
+            return market.get(category).get(keys[sel])
+        #
         market = self.get("coinInfo")
-        info = market.get(newSymbol)
-        if info:
-            return category, info
-        return category, newSymbol
+        info = switchFn({kDelivery: _find,
+                        kFuture: _find,
+                        'default': lambda: market.get(category).get(newSymbol)
+                        }, key=category)
+        # print("~~~~~info2~~~~",newSymbol, market.get(category).get(newSymbol))
+        # if info:
+        return category, info
+        # return None
 
     #symbol: 交易对,seTime: [开始时间, 结束时间],timeframe: K线周期,limit: 单次获取数量，0表示使用交易所最大值
     def getKline(self, symbol: str, seTime: list, timeframe: str = '5m', limit: int = 0):
         dateFrame = self._marketKline(symbol, seTime, timeframe, limit)
         lastTime = dateFrame.iloc[-1].candle_begin_time
-        # 没有结束时间或者是最新的时间则返回
         timeInterval = timeFrame2Float(timeframe)
         if len(seTime) < 2 or \
             diff_Pdtime(lastTime, seTime[1]) < timeInterval:
             return dateFrame
         end = pd.Timestamp(seTime[1])
         if lastTime >= end:
-            # print("~~~~异常~~~~~~~",lastTime.strftime("%Y-%m-%d %H:%M:%S"),end.strftime("%Y-%m-%d %H:%M:%S"))
             return dateFrame
         # 按时间范围获取全部数据
         allData = [dateFrame]
@@ -120,95 +122,117 @@ class baseExchange:
             print(f" 时间: {nextTime} ~ {endTime},跳出判断:{diff_Pdtime(nextTime, endTime)}<{timeInterval}")
             if diff_Pdtime(nextTime, endTime) <= timeInterval:
                 break
-            time.sleep(0.1)
         # 合并全部数据
         allpd = pdData()
         allpd.format(allData, style='concat')
         return allpd.get()
 
-    def order(self, state: str, **kwargs):
-        """
-        统一订单接口
-        state: 'find' | 'buy' | 'sell' | 'cancel'
-        """
-        category, symbolInfo = self.coinInfo(kwargs['symbol'])
-        kwargs['symbol'] = symbolInfo['id']
-
+    #订单接口state:  'buy' | 'sell' | 'cancel'
+    def order(self, state: str, symbol: str, totelPrice, amount: float, price: float | None = None, isMarket=False, inForce='GTC', posSide: str | None = None, lv: int = 1):
+        category, symbolInfo = self.coinInfo(symbol)
+        kwargs = {'state': state, 'symbol': symbolInfo['id']}
+        isSpot = category == kSpot
+        def _validateOrderParams(symbolInfo: dict):
+            if amount and not inRange([symbolInfo['amount'].get('min'), symbolInfo['amount'].get('max')], amount):
+                print(symbol, ":amount取值范围为:", symbolInfo['amount'])
+                return False
+            if price and not inRange([symbolInfo['price'].get('min'), symbolInfo['price'].get('max')], price):
+                print(symbol, ":price取值范围为:", symbolInfo['price'])
+                return False
+            totle = amount * price if amount and price else totelPrice
+            if not inRange([symbolInfo['cost'].get('min'), symbolInfo['cost'].get('max')], totle):
+                print(symbol, ":总下单金额范围:", symbolInfo['cost'], '当前价格:', totle)
+                return False
+            # freeMoney = self.accFree(isSpot)
+            # if totle > freeMoney:
+            #     print(symbol, ":下单金额不足:", totle, '余额:', freeMoney)
+            #     return False
+            return True
+        #参数调整
+        def _setkWargs():
+            nonlocal kwargs
+            kwargs.update(symbol=symbolInfo, totelPrice=totelPrice, amount=amount, price=price)
+            if isSpot:
+                return
+            kwargs.update(symbol=symbol, lv=lv, posSide=posSide, isMarket=isMarket, inForce=inForce)
+            kwargs.pop('totelPrice', None)
+        def _setCancel():
+            nonlocal kwargs
+            kwargs = {'id':totelPrice, 'symbol':symbolInfo.get('symbol')}
+            # print("~~~~~~~~~~~~~~~~~~",kwargs)
+            if isSpot:
+                return
+            kwargs['symbol'] = symbol
+        #logic
         if state in (kBuy, kSell):
-            self._validateOrderParams(symbolInfo, kwargs)
+            if not _validateOrderParams(symbolInfo):
+                return
+        switchFn({
+            # kFind: lambda kwargs:{'symbol':symbol,'orderId':totelPrice}, #
+                    'cancel': _setCancel,
+                    'default': _setkWargs
+                }, key=state)
+        print('~~~~~base~~~~~~~~~~', state, kwargs)
+        # exit()
+        return switchFn({
+            # kFind: self._findOrder,#self._ccxt.fetchOrder if isSpot else self._findOrder,
+                        kBuy: self._sporOrder if isSpot else self._contractOrder,
+                        kSell: self._sporOrder if isSpot else self._contractOrder,
+                        'cancel': self._ccxt.cancelOrder if isSpot else self._cancelOrder
+                        }, key=state, **kwargs)
 
-        if state in (kBuy, kSell) or (state == 'cancel' and category == kSwap):
-            kwargs['state'] = state
-            if state == 'cancel':
-                kwargs['symbol'] = symbolInfo['id']
-            else:
-                kwargs['symbol'] = symbolInfo
-
-        isSpot = (category == kSpot)
-        handlers = {
-            kFind: self._ccxt.fetchOrder if isSpot else self._futureFind,
-            kBuy: self._sporOrder if isSpot else self._futureOrder,
-            kSell: self._sporOrder if isSpot else self._futureOrder,
-            'cancel': self._ccxt.cancelOrder if isSpot else self._futureCancal
-        }
-        return switchFn(handlers, key=state, **kwargs)
-
-    def _validateOrderParams(self, symbolInfo: dict, kwargs: dict):
-        """校验订单参数范围"""
-        symbol = kwargs.get('symbol', '')
-        amount = kwargs.get('amount')
-        price = kwargs.get('price')
-
-        amountRange = [symbolInfo['amount'].get('min'), symbolInfo['amount'].get('max')]
-        if not inRange(amountRange, amount):
-            err(symbol, ":amount取值范围为:", symbolInfo['amount'])
-
-        if price:
-            priceRange = [symbolInfo['price'].get('min'), symbolInfo['price'].get('max')]
-            if not inRange(priceRange, price):
-                err(symbol, ":price取值范围为:", symbolInfo['price'])
-
-            costRange = [symbolInfo['cost'].get('min'), symbolInfo['cost'].get('max')]
-            if not inRange(costRange, price * amount):
-                err(symbol, ":总下单金额范围:", symbolInfo['cost'])
-
+    #批量下单
     def batchOrders(self, category: str, orders: list[dict]) -> list:
-        """批量下单，最多5单"""
         if not orders or len(orders) > 5:
             err("batchOrders: 订单数量需在1-5之间")
             return []
         return self._batchOrders(category, orders)
 
-    # 子类需实现的接口
+    # 子类可继承接口
+    def _create(self, config: dict):
+        self._info['api'] = {'apiKey': config['apiKey'], 'secret': config['secret']}
     def checkPosition(self, symbol, position): pass
-    def bookTickers(self, symbol): pass
+    def orderBook(self, symbol: str, limit: int = 5): pass
     def depth(self, symbol, limit): pass
     def trades(self, symbol, limit): pass
     def tickers(self, symbol): pass
-    def _accFutures(self, account) -> float: return 0
-    def _futureFind(self, **kwargs): pass
-    def _futureOrder(self, **kwargs): pass
-    def _futureCancal(self, **kwargs): pass
+    def findOrder(self, symbol: str, orderId: str | None = None,isPos = True,isOpen = False): pass 
+    def _accPm(self, account, coin) -> float: return 0
+    def _contractOrder(self, state: str, symbol: dict, amount: float, isMarket, inForce, price: float | None = None, lv: int = 1, posSide: str | None = None): pass
+    def _cancelOrder(self, symbol: str, id: str): pass
     def _batchOrders(self, category, orders): pass
     def _marketKline(self, symbol: str, seTime: list, timeframe: str = '5m', limit: int = 0):
-        # effectiveLimit = limit if limit > 0 else self._maxLimit
         time = None
-        if len(seTime) > 0 :
+        if len(seTime) > 0:
             time = str2ms(seTime[0])
-        return self._ccxt.fetch_ohlcv(symbol=symbol,timeframe=timeframe,since=time,limit=limit)
+        return self._ccxt.fetch_ohlcv(symbol=symbol, timeframe=timeframe, since=time, limit=limit)
 
-    def _sporOrder(self, **kwargs):
-        state = kwargs['state']
-        symbol = kwargs['symbol'].get('id')
-        amount = kwargs.get('amount')
-        price = kwargs.get('price')
-        orderType = 'limit' if price else 'market'
+    def _sporOrder(self, state: str, symbol, totelPrice=None, amount=None, price=None):
+        params = {'symbol': symbol.get('id'),
+                  'side': state,
+                  'type': kMarket,
+                   'amount':None, 
+                   'price':None,
+                   'params':{'quoteOrderQty': totelPrice}}
+        if amount and price:
+            params.update(type=kLimit, amount=amount, price=price)
+            del params['params']
+        # if state == kSell:
+        #     params['params']['reduceOnly'] = True
+        print("~~~~~_sporOrder~~~~~~", params)
+        # exit()
+        rt = tryCatch(lambda: self._ccxt.create_order(**params))
+        # print("~~~~~_sporRt~~~~~~~~", rt)
+        # if not rt:
+        #     return None
 
-        rt = tryCatch(lambda: self._ccxt.create_order(symbol, orderType, state, amount, price))
-        if not rt:
-            return None
-
-        rt['orderId'] = rt['info'].get('orderId')
-        if rt.get('trades'):
-            rt['fee'] = rt['trades'][0]['info'].get('commission')
+        # rt['orderId'] = rt['info'].get('orderId')
+        # if rt.get('trades'):
+        #     rt['fee'] = rt['trades'][0]['info'].get('commission')
         return rt
+        
+        #现货返回值
+        # {'info': {'symbol': 'DOGEUSDT', 'orderId': '13856448896', 'orderListId': '-1', 'clientOrderId': 'x-TKT5PX2F583f2601e4dfe7ae40fac2', 'transactTime': '1771961066709', 'price': '0.00000000', 'origQty': '10.00000000', 'executedQty': '10.00000000', 'origQuoteOrderQty': '1.00000000', 'cummuulativeQuoteQty': '0.91830000', 'status': 'FILLED', 'timeInForce': 'GTC', 'type': 'MARKET', 'side': 'BUY', 'workingTime': '1771961066709', 'fills': [{'price': '0.09183000', 'qty': '10.00000000', 'commission': '0.00000117', 'commissionAsset': 'BNB', 'tradeId': '1485337765'}], 'selfTradePreventionMode': 'EXPIRE_MAKER'}, 'id': '13856448896', 'clientOrderId': 'x-TKT5PX2F583f2601e4dfe7ae40fac2', 'timestamp': 1771961066709, 'datetime': '2026-02-24T19:24:26.709Z', 'lastTradeTimestamp': 1771961066709, 'lastUpdateTimestamp': 1771961066709, 'symbol': 'DOGE/USDT', 'type': 'market', 'timeInForce': 'GTC', 'postOnly': False, 'reduceOnly': None, 'side': 'buy', 'price': 0.09183, 'triggerPrice': None, 'amount': 10.0, 'cost': 0.9183, 'average': 0.09183, 'filled': 10.0, 'remaining': 0.0, 'status': 'closed', 'fee': {'currency': 'BNB', 'cost': 1.17e-06}, 'trades': [{'info': {'price': '0.09183000', 'qty': '10.00000000', 'commission': '0.00000117', 'commissionAsset': 'BNB', 'tradeId': '1485337765'}, 'timestamp': None, 'datetime': None, 'symbol': 'DOGE/USDT', 'id': '1485337765', 'order': None, 'type': None, 'side': None, 'takerOrMaker': None, 'price': 0.09183, 'amount': 10.0, 'cost': 0.9183, 'fee': {'currency': 'BNB', 'cost': 1.17e-06}, 'fees': [{'currency': 'BNB', 'cost': 1.17e-06}]}], 'fees': [{'currency': 'BNB', 'cost': 1.17e-06}], 'stopPrice': None, 'takeProfitPrice': None, 'stopLossPrice': None}
+        #挂单
+        # {'symbol': 'DOGEUSDT', 'side': 'BUY', 'executedQty': '0', 'orderId': '93887302283', 'goodTillDate': '0', 'avgPrice': '0.000000', 'origQty': '72', 'clientOrderId': 'kCQ039jj39sYlllzsjy186', 'positionSide': 'LONG', 'cumQty': '0', 'updateTime': '1772028578356', 'type': 'LIMIT', 'reduceOnly': False, 'price': '0.070000', 'cumQuote': '0.000000', 'selfTradePreventionMode': 'EXPIRE_MAKER', 'timeInForce': 'GTC', 'status': 'NEW', 'priceMatch': 'NONE'}
+        # {'symbol': 'ETHUSDT_260327', 'side': 'BUY', 'executedQty': '0.000', 'orderId': '1245346799', 'goodTillDate': '0', 'avgPrice': '0.00000', 'origQty': '0.004', 'clientOrderId': 'lZK7HYPb8TeYfdBvY5s57', 'positionSide': 'LONG', 'cumQty': '0.000', 'updateTime': '1772039694055', 'type': 'LIMIT', 'reduceOnly': False, 'price': '1500.00', 'cumQuote': '0.00000', 'selfTradePreventionMode': 'EXPIRE_MAKER', 'timeInForce': 'GTC', 'status': 'NEW', 'priceMatch': 'NONE'}

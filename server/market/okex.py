@@ -24,7 +24,7 @@ class okex(baseExchange):
     #     logFormat(self._ccxt.has)
 
     # SPOT：币币,MARGIN：币币杠杆,SWAP：永续合约,FUTURES：交割合约,OPTION：期权
-    def futureOrder(self, **kwargs):
+    def optionOrder(self, **kwargs):
         state = kwargs['state']
         symbol = strReplace(kwargs['symbol'])
         params = {'instId': symbol}

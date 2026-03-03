@@ -7,12 +7,12 @@ import json
 class recordBuffer:
     "日志buffer"
 
-    def __init__(self, filePath: str = '', max_size: int = 1000):
+    def __init__(self, filePath: str = '', max_size: int = 1024):
         self._buffer: deque[dict] = deque(maxlen=max_size)
         self._filePath = filePath
         self._printIdx = 0  # 记录已打印位置
-        if filePath:
-            self.readFile(filePath, isFull=True)
+        # if filePath: #todo先移除
+        #     self.readFile(filePath, isFull=True)
     #
     def push(self, **kwargs: Any) -> None:
         time = kwargs.get('time') and kwargs.get('time')or str2time('strNow')

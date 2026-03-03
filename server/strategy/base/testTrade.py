@@ -1,8 +1,5 @@
 from strategy.base.baseTrade import *
 
-# todo:冷静期
-
-
 class testTrade(baseTrade):
     "测试交易"
 
