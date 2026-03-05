@@ -1,6 +1,7 @@
 from server.utils.decoratorTool import singleton
-from server.utils.common import readFile, writeFile, switch, dictFind
 from server.utils.recordBuffer import recordBuffer
+from server.utils.common import readFile, writeFile, switch, dictFind
+
 kMarketPath = "assets/markets/"
 kDataPath = 'assets/config/'
 kLogPath = "assets/log/"

@@ -1,32 +1,10 @@
-import pickle,json,time,os,requests,inspect,asyncio,inspect,gzip,os,pathlib,pprint
+import pickle,json,time,os,requests,inspect,asyncio,inspect,gzip,pathlib
 from importlib import import_module
 from pydispatch import dispatcher
-from server.utils import eTimeTs,kLog,kInfo,kError,kWarn
+from server.utils import eTimeTs
 from datetime import datetime, timezone
+from pathlib import Path
 import pandas as pd
-
-#log显示时间,其他显示 类+调用位置
-def _logBase(tag: str, *args) -> None:
-    from server.utils.fileConfig import g_config,kLogBufType
-    des = '['+str2time('strNow')+']'
-    if tag != kLog:
-        frame_info = inspect.getframeinfo(inspect.stack()[2].frame)
-        fileName = os.path.splitext(os.path.basename(frame_info.filename))[0]
-        des = f"[{fileName}.{frame_info.function}:{frame_info.lineno}]"
-    message = ''.join(map(str,args))
-    g_config.get(kLogBufType).push(msg = des + message, tags = tag)
-def log(*msgs) -> None:
-    _logBase(kLog, *msgs)
-def info(*msgs) -> None:
-    _logBase(kInfo, *msgs)
-def warn(*msgs) -> None:
-    _logBase(kWarn, *msgs)
-def err(*msgs) -> None:
-    _logBase(kError, *msgs)
-def logFormat(value) -> None:
-    pprint.pprint(value)
-def logJson(value) -> None:
-    print(json.dumps(value, indent=4, ensure_ascii=False))
 
 
 def publicIp():
@@ -212,6 +190,7 @@ def tryCatch(fn):
     try:
         return fn()
     except Exception as e:
+        from server.utils import err
         err("错误:",e)
 
 def timeFrame2Float(timeframe):
@@ -235,17 +214,28 @@ def path2File(path, fileType=''):
     except Exception as e:
         print(e)
     return []
-
 # 当前文件的工作路径
 def curPath():
     caller_frame = inspect.stack()[1]
     caller_file = caller_frame.filename
     return os.path.dirname(os.path.realpath(caller_file)) + '/'
-
 # 加载路径
 def joinPath(path, fileName):
     fullPath = path + fileName
     return fullPath
+
+def getRootName(cls, rootDir: str) -> str:
+    try:
+        # 获取传入类所在的文件
+        strategy_file = Path(inspect.getfile(cls))
+        # 向上查找指定的基目录并返回其下一级目录名
+        for parent in strategy_file.parents:
+            if parent.name == rootDir:
+                return strategy_file.relative_to(parent).parts[0]
+    except (TypeError, OSError):
+        pass
+    return ''
+    
 # 生成带时间后缀的文件名: path/{suffix}.{ext}
 def genFileName(path: str, file_split: str, ext: str) -> str:
     fmt = {'Y': '%Y', 'D': '%Y-%m-%d'}.get(file_split, '')

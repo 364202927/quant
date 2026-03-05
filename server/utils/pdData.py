@@ -2,10 +2,11 @@ import os
 import pandas as pd
 import numpy as np
 from functools import reduce
-from server.utils.common import switchFn, getFileExtension, readFile, writeFile, utc_now, err, log
-from server.utils.fileConfig import g_config
-# from server.utils.recordBuffer import err, log
 from server.utils import eSampleTs
+from server.utils.logger import err, log
+from server.utils.fileConfig import g_config
+from server.utils.common import switchFn, getFileExtension, readFile, writeFile, utc_now
+
 
 # pd.set_option('display.max_rows', None)  # 最大显示行
 pd.set_option('expand_frame_repr', False)  # 当列太多时不换行
@@ -324,6 +325,7 @@ class pdData:
             if (t_end - times.iloc[-1]) > threshold: # 尾部缺失
                 missing.append((times.iloc[-1] + freq_delta, t_end))
             return offsetUtc(missing)
+        
         #logic
         if self._pf is None or self._pf.empty:
             return []
@@ -338,7 +340,6 @@ class pdData:
             freq_delta = calc_freq_delta(times)
             missing = detect_gaps(times, t_start, t_end, freq_delta, freq_delta * 10)
             return missing
-
         # 全量异常数据检测
         gap_tolerance = 10
         freq_delta = pd.Timedelta(timeFrame)

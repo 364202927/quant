@@ -1,7 +1,6 @@
 import asyncio
-from server.utils.common import log
 from server.core.quant import quant
-from server.utils.fileConfig import g_config
+from server.utils import g_config,log
 from server.external import web, cli, msgHandler, telegram, feishu
 from server.market import g_marketMgr
 
@@ -37,9 +36,9 @@ class launcher:
         log("Launcher初始化完成", self.__modules)
 
         # 交易所更新
-        if g_config.marketsApi():
-            g_marketMgr.init()
-            g_marketMgr.userAccount(isUpdate=True)
+        # if g_config.marketsApi():
+        #     g_marketMgr.init()
+        #     g_marketMgr.userAccount(isUpdate=True)
     # 消息引导
     def _msgTransform(self, msgID: int, args: list | None = None):
         if self.__idTransform:
@@ -56,14 +55,8 @@ class launcher:
             await asyncio.gather(*tasks)
         except KeyboardInterrupt:
             log("用户中断，正在退出...")
-    
-    # def getModules(self, className: str):
-    #     for module in self.__modules:
-    #         if module.__class__.__name__ == className:
-    #             return module
-    #     return None
-    
-    # 根据任务链表读取
+
+    # 根据start.json读取任务
     def start(self) -> None:
         self.__quant.loadTaskList()
         self.run()
