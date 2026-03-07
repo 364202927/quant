@@ -1,6 +1,6 @@
 import abc
 from server.utils import pdData, require, err, warn, info, log, spot, swapU, swapC, futureU, futureC, getRootName, slit, str2time
-from server.market.consts import kLong, kShort, kSwap, kFuture, kDelivery, kSpot
+from server.market.consts import kLong, kShort, kSwap, kFuture, kDelivery, kSpot, kBuy, kSell
 from server.core.task import taskHandle
 from server.utils.fileConfig import g_config, kLogBufType, kOrderBufType, recordBuffer
 kIndicatorsFile = 'server.indicators.'
@@ -72,9 +72,10 @@ class baseCTA(taskHandle):
         if qty == 0:
             return
 
-        # 解析持仓方向
+        # 解析持仓方向和交易动作
         result = slit(dir_str, '_')
-        posSide = result[1] if result else dir_str
+        state = result[0] if result else dir_str     # 'buy' or 'sell'
+        posSide = result[1] if result else dir_str   # 'LONG' or 'SHORT'
 
         key = f'{category}_{symbol}_{exName}_{posSide}'
 
@@ -83,17 +84,26 @@ class baseCTA(taskHandle):
 
         book = self._transactionTrail[key]
 
+        # 判断开仓/平仓: LONG+buy=开仓, SHORT+sell=开仓, 其余=平仓
+        isOpen = (posSide == kLong and state == kBuy) or (posSide == kShort and state == kSell)
+
+        # 保存修改前的持仓量，用于平仓结算
+        oldRemainQty = book['remainQty']
+
         # 更新持仓数据
-        oldTotal = book['avgPrice'] * book['remainQty']
-        book['remainQty'] += qty
-        book['avgPrice'] = (oldTotal + avgPrice * qty) / book['remainQty'] if book['remainQty'] else 0
-        book['totalCost'] += avgPrice * qty
+        if isOpen:
+            oldTotal = book['avgPrice'] * book['remainQty']
+            book['remainQty'] += qty
+            book['avgPrice'] = (oldTotal + avgPrice * qty) / book['remainQty'] if book['remainQty'] else 0
+            book['totalCost'] += avgPrice * qty
+        else:
+            book['remainQty'] -= qty
         book['records'].append({'uid': uid, 'orderId': data.get('orderId', ''), 'dir': dir_str})
 
         # 平仓结算
         if book['remainQty'] <= 0:
             direction = 1 if posSide == kLong else -1
-            totalQty = abs(book['remainQty']) + qty  # 原持仓量
+            totalQty = oldRemainQty  # 平仓前的持仓量
             pnl = (avgPrice - book['avgPrice']) * totalQty * direction
             pnlRate = pnl / book['totalCost'] if book['totalCost'] else 0
             self._history.append({
