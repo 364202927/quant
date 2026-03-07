@@ -132,17 +132,36 @@ class baseCTA(taskHandle):
         self._bufOrder.save2File()
 
     def reLoad(self, exName: str | list[str] = '', days: int = 7):
-        """加载历史记录并对账
-        a. 读取文件恢复 _bufOrder
-        b. 从 _bufOrder 重建 _transactionTrail
-        c. 调用 checkPos 与交易所对账
-        """
+        """加载历史记录并与交易所对账"""
         self._bufOrder.readFile(days)
         self._transactionTrail.clear()
-        for record in self._bufOrder.get(strategy=self._strategy):
+        self._history.clear()
+
+        # 遍历合约记录，重建轨迹
+        all_records = self._bufOrder.get(strategy=self._strategy)
+        if not all_records:
+            return
+
+        for record in all_records:
             tags = record.get('tags', {})
-            if tags.get('status') == 'closed':
-                self._updateBook(record, record['id'])
+            category = tags.get('category', '')
+            if category in (kSpot, ''):
+                continue  # 现货和空类别跳过
+            exName_r = tags.get('exName', '')
+            dir_str = tags.get('dir', '')
+            result = slit(dir_str, '_')
+            posSide = result[1] if result else dir_str
+            symbol = tags.get('symbol', '')
+            key = f'{category}_{symbol}_{exName_r}_{posSide}'
+            # 初始化 _transactionTrail（如不存在）
+            if key not in self._transactionTrail:
+                self._transactionTrail[key] = {
+                    'records': [], 'remainQty': 0.0, 'avgPrice': 0.0,
+                    'totalCost': 0.0, 'lv': int(record.get('data', {}).get('lv', 1)),
+                    'openTime': record.get('time', str2time('strNow'))}
+            self._updateBook(record, record['id'], exName_r)
+
+        # 与交易所对账
         targets = self._exName if exName == '' else (exName if isinstance(exName, list) else [exName])
         for name in targets:
             self.checkPos(name)
