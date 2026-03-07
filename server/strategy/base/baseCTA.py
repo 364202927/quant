@@ -62,8 +62,9 @@ class baseCTA(taskHandle):
 
         if 'close' in dir_str:
             # 平仓扣减
+            exName = tags.get('exName', '')
             posSide = tags.get('positionSide', '')
-            key = f'{category}_{symbol}_{posSide}'
+            key = f'{category}_{symbol}_{exName}_{posSide}'
             book = self._transactionTrail.get(key)
             if not book:
                 return
@@ -88,9 +89,10 @@ class baseCTA(taskHandle):
                 del self._transactionTrail[key]
         else:
             # 开仓加仓位
+            exName = tags.get('exName', '')
             result = slit(dir_str, '_')
             posSide = result[1] if result else dir_str
-            key = f'{category}_{symbol}_{posSide}'
+            key = f'{category}_{symbol}_{exName}_{posSide}'
             if key not in self._transactionTrail:
                 self._transactionTrail[key] = {
                     'records': [], 'remainQty': 0.0, 'avgPrice': 0.0,
@@ -114,10 +116,11 @@ class baseCTA(taskHandle):
         for record in all_records:
             tags = record.get('tags', {})
             category, symbol = tags.get('category', ''), tags.get('symbol', '')
+            exName = tags.get('exName', '')
             dir_str = tags.get('dir', '')
             result = slit(dir_str, '_')
             posSide = result[1] if result else dir_str
-            key = f'{category}_{symbol}_{posSide}'
+            key = f'{category}_{symbol}_{exName}_{posSide}'
             if key not in trails:
                 trails[key] = {'opens': [], 'closes': []}
             if 'close' in dir_str:

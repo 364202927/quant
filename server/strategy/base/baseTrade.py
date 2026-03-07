@@ -8,21 +8,17 @@ from server.market.consts import *
 #todo 3.交易成功单子记录
 # 下单时间,策略类名,交易所名,币类型,币种,orderId,lv,方向(buy_long),委托价格price,成交价格avgPrice,总金额cumQuote, 手续费, 状态
 #todo:4.交易成功后,没有更新持仓数据
-#todo:5.需要把真实交易部分从baseTrade转到realTrade
+#todo:5.需要把真实交易部分从baseTrade转到realTrade ok
 #todo:6.读取和记录当前单子 ok
 
 class baseTrade:
     "交易基类"
 
+    #交易初始化        
     def settingTrade(self, **kwargs):
         self._exName = kwargs.get('exName', '')
         self._defLv = kwargs.get('def_lv', 1)
         #读取旧日志
-        # 佛系挂单等价格：选 GTC (默认)
-        # 撸盘口手续费优惠：选 GTX (Post Only)
-        # 只要当下的现货/仓位，不留挂单：选 IOC
-        # 强迫症，要么全给我，要么一个都别给：选 FOK
-
 
     #现货  totelPrice总下单价, orderBook为下单方式-1为市价,(0~5)是订单本价格,price单价,exName同时在多交易所下单
     def buy(self, symbol:str, totelPrice:float|str, orderBook:int = 0, price:float|None = None, inForce = 'GTC',exName:list[str]=[]):
@@ -104,12 +100,45 @@ class baseTrade:
             # print("~~~~~__Trade send~~~~~~",state, dir, total, orderPrice, amount)
             #send
             rt = self.order(state=state,posSide=dir,symbol=symbol,ex=ex,lv=lv,totelPrice=total,amount = amount, price = orderPrice,isMarket = isMarket,inForce=inForce)
-            print("~~rt~~", rt)
-            print('\n')
 
     #下单方向,币种,交易所,下单方式,委托价格,委托数量
     def order(self, state:str, symbol:str, ex:BaseException, lv:int,totelPrice:float, price:float|None, amount:float|None, isMarket:bool, inForce:str, posSide:str|None):
         pass
+
+    def checkPos(self, exName: str):
+        """定时轮询交易所持仓，对比 _transactionTrail 中未成交记录并更新"""
+        ex = g_marketMgr.get(exName)
+        if not ex:
+            return
+        for key, book in list(self._transactionTrail.items()):
+            for rec in book['records']:
+                uid = rec['uid']
+                record = self._bufOrder.get(id=uid)
+                if not record or record.get('tags', {}).get('status') != 'open':
+                    continue
+                orderId = rec.get('orderId', '')
+                if not orderId:
+                    continue
+                # key = 'swap_DOGE/USDT_LONG' → category='swap', symbol='DOGE/USDT'
+                parts = key.split('_', 1)
+                category = parts[0]
+                symbolPart = parts[1].rsplit('_', 1)[0] if len(parts) > 1 else ''
+                fullSymbol = f'{category}_{symbolPart}'
+                rtOpen, rtPos = ex.findOrder(symbol=fullSymbol, orderId=int(orderId), isPos=False, isOpen=True)
+                matched = None
+                for o in rtOpen:
+                    if str(o.get('orderId')) == str(orderId):
+                        matched = o
+                        break
+                if not matched:
+                    continue
+                status = matched.get('status', '')
+                if status in ('closed', 'cancel'):
+                    self.updateRecord(uid, status=status,
+                                      avgPrice=float(matched.get('avgPrice', 0)),
+                                      origQty=float(matched.get('origQty', 0)),
+                                      cumQuote=float(matched.get('cumQuote', 0)),
+                                      fee=float(matched.get('fee', 0)))
 
     #当前挂单最优价
     def _BBO(self, ex:BaseException, symbol:str, dir:str, order:int):
