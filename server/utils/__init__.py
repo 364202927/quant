@@ -72,7 +72,8 @@ from server.utils.common import (
     listFind,
     dictFind,
     utc_now,
-    tryCatch
+    tryCatch,
+    str2time
 )
 
 __all__ = [
@@ -110,6 +111,7 @@ __all__ = [
     'timeFrame2Float',
     'sec2min',
     'tryCatch',
+    'str2time',
     'listFind',
     'dictFind',
     'recordBuffer',

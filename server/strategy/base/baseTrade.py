@@ -1,5 +1,5 @@
 from server.market import g_marketMgr
-from server.utils import pdData, switchFn, switchV, slit, inRange, binanceTimestamp, err,logFormat,division,spot
+from server.utils import pdData, switchFn, switchV, slit, inRange, binanceTimestamp, err,logFormat,division,spot,str2time
 from server.market.consts import *
 
 
@@ -106,39 +106,36 @@ class baseTrade:
         pass
 
     def checkPos(self, exName: str):
-        """定时轮询交易所持仓，对比 _transactionTrail 中未成交记录并更新"""
+        """定时轮询交易所持仓，同步更新 _transactionTrail"""
         ex = g_marketMgr.get(exName)
         if not ex:
             return
-        for key, book in list(self._transactionTrail.items()):
-            for rec in book['records']:
-                uid = rec['uid']
-                record = self._bufOrder.get(id=uid)
-                if not record or record.get('tags', {}).get('status') != 'open':
-                    continue
-                orderId = rec.get('orderId', '')
-                if not orderId:
-                    continue
-                # key = 'swap_DOGE/USDT_LONG' → category='swap', symbol='DOGE/USDT'
-                parts = key.split('_', 1)
-                category = parts[0]
-                symbolPart = parts[1].rsplit('_', 1)[0] if len(parts) > 1 else ''
-                fullSymbol = f'{category}_{symbolPart}'
-                rtOpen, rtPos = ex.findOrder(symbol=fullSymbol, orderId=int(orderId), isPos=False, isOpen=True)
-                matched = None
-                for o in rtOpen:
-                    if str(o.get('orderId')) == str(orderId):
-                        matched = o
-                        break
-                if not matched:
-                    continue
-                status = matched.get('status', '')
-                if status in ('closed', 'cancel'):
-                    self.updateRecord(uid, status=status,
-                                      avgPrice=float(matched.get('avgPrice', 0)),
-                                      origQty=float(matched.get('origQty', 0)),
-                                      cumQuote=float(matched.get('cumQuote', 0)),
-                                      fee=float(matched.get('fee', 0)))
+
+        # 获取交易所全部持仓
+        _, pos_orders = ex.findOrder(symbol='', isPos=True, isOpen=True)
+
+        # 遍历持仓，更新 _transactionTrail
+        for pos in pos_orders:
+            category = pos.get('category', '')
+            symbol = pos.get('symbol', '')
+            posSide = pos.get('positionSide', '')
+            remainQty = float(pos.get('positionAmt', 0))
+
+            key = f'{category}_{symbol}_{exName}_{posSide}'
+
+            if key not in self._transactionTrail:
+                # key 不存在，创建新条目（交易所有仓位但本地无记录）
+                self._transactionTrail[key] = {
+                    'records': [],
+                    'remainQty': abs(remainQty),
+                    'avgPrice': float(pos.get('entryPrice', 0)),
+                    'totalCost': 0.0,
+                    'lv': int(pos.get('leverage', 1)),
+                    'openTime': str2time('strNow')}
+            else:
+                # 更新现有条目的持仓数量
+                book = self._transactionTrail[key]
+                book['remainQty'] = abs(remainQty)
 
     #当前挂单最优价
     def _BBO(self, ex:BaseException, symbol:str, dir:str, order:int):
