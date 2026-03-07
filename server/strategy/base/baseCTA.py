@@ -125,32 +125,8 @@ class baseCTA(taskHandle):
         print("~~~返回订单记录~~~",buff)
     
     def historyOrders(self) -> list[dict]:
-        """从 _bufOrder 拼凑完整交易轨迹"""
-        all_records = self._bufOrder.get(strategy=self._strategy)
-        trails: dict[str, dict] = {}
-        for record in all_records:
-            tags = record.get('tags', {})
-            category, symbol = tags.get('category', ''), tags.get('symbol', '')
-            exName = tags.get('exName', '')
-            dir_str = tags.get('dir', '')
-            result = slit(dir_str, '_')
-            posSide = result[1] if result else dir_str
-            key = f'{category}_{symbol}_{exName}_{posSide}'
-            if key not in trails:
-                trails[key] = {'opens': [], 'closes': []}
-            if 'close' in dir_str:
-                trails[key]['closes'].append(record)
-            else:
-                trails[key]['opens'].append(record)
-        result = []
-        for key, group in trails.items():
-            result.append({
-                'key': key,
-                'opens': group['opens'],
-                'closes': group['closes'],
-                'openCount': len(group['opens']),
-                'closeCount': len(group['closes'])})
-        return result
+        """返回已完成的交易历史"""
+        return self._history
 
     def archive(self):
         self._bufOrder.save2File()
