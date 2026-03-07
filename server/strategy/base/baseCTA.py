@@ -1,6 +1,6 @@
 import abc
 from server.utils import pdData, require, err, warn, info, log, spot, swapU, swapC, futureU, futureC, getRootName, slit, str2time
-from server.market.consts import kLong, kShort
+from server.market.consts import kLong, kShort, kSwap, kFuture, kDelivery, kSpot
 from server.core.task import taskHandle
 from server.utils.fileConfig import g_config, kLogBufType, kOrderBufType, recordBuffer
 kIndicatorsFile = 'server.indicators.'
@@ -27,82 +27,87 @@ class baseCTA(taskHandle):
     #记录
     def record(self, exName: str, category: str, symbol: str, orderId: str, lv: int, dir: str,
                orderPrice: float = 0, avgPrice: float = 0, origQty: float = 0,
-               cumQuote: float = 0, fee: float = 0, status: str = 'open') -> str:
+               cumQuote: float = 0, fee: float = 0) -> str:
         tags = {'strategy': self._strategy, 'exName': exName, 'category': category,
-                'symbol': symbol, 'dir': dir, 'status': status}
-        return self._bufOrder.push(tags=tags, lv=lv, orderPrice=orderPrice, avgPrice=avgPrice,
+                'symbol': symbol, 'dir': dir}
+        uid = self._bufOrder.push(tags=tags, lv=lv, orderPrice=orderPrice, avgPrice=avgPrice,
                                    origQty=origQty, cumQuote=cumQuote, fee=fee, orderId=orderId, **tags)
+        # 合约时初始化轨迹
+        if category in (kSwap, kFuture, kDelivery):
+            posSide = dir.split('_')[1] if '_' in dir else dir
+            key = f'{category}_{symbol}_{exName}_{posSide}'
+            if key not in self._transactionTrail:
+                self._transactionTrail[key] = {
+                    'records': [], 'remainQty': 0.0, 'avgPrice': 0.0,
+                    'totalCost': 0.0, 'lv': lv, 'openTime': str2time('strNow')}
+        return uid
     #更新记录
-    def updateRecord(self, uid: str, status: str = '', orderPrice: float = 0,
+    def updateRecord(self, uid: str, orderPrice: float = 0,
                      avgPrice: float = 0, origQty: float = 0, cumQuote: float = 0,
                      fee: float = 0, orderId: str = ''):
         params = {'orderPrice': orderPrice, 'avgPrice': avgPrice, 'origQty': origQty,
                   'cumQuote': cumQuote, 'fee': fee}
         if orderId != '':
             params['orderId'] = orderId
-        if status != '':
-            tags = self._bufOrder.get(id=uid)
-            if tags:
-                tags['tags']['status'] = status
         self._bufOrder.update(uid, **params)
-        if status == 'closed':
-            record = self._bufOrder.get(id=uid)
-            if record:
-                self._updateBook(record, uid)
+        # 合约时更新持仓轨迹
+        record = self._bufOrder.get(id=uid)
+        if record:
+            category = record['tags'].get('category', '')
+            if category in (kSwap, kFuture, kDelivery):
+                exName = record['tags'].get('exName', '')
+                self._updateBook(record, uid, exName)
 
-    def _updateBook(self, record: dict, uid: str):
-        """成交后更新 _transactionTrail"""
+    def _updateBook(self, record: dict, uid: str, exName: str):
+        """更新合约持仓轨迹和PnL计算"""
         tags = record['tags']
         data = record['data']
-        category, symbol, dir_str = tags['category'], tags['symbol'], tags['dir']
+        category = tags.get('category', '')
+        symbol = tags.get('symbol', '')
+        dir_str = tags.get('dir', '')
+
+        # 提取成交数据
         avgPrice = float(data.get('avgPrice', 0))
         qty = float(data.get('origQty', 0))
-        orderId = str(data.get('orderId', ''))
-        lv = int(data.get('lv', 1))
+        if qty == 0:
+            return
 
-        if 'close' in dir_str:
-            # 平仓扣减
-            exName = tags.get('exName', '')
-            posSide = tags.get('positionSide', '')
-            key = f'{category}_{symbol}_{exName}_{posSide}'
-            book = self._transactionTrail.get(key)
-            if not book:
-                return
-            book['records'].append({'uid': uid, 'orderId': orderId, 'dir': dir_str})
-            totalQty = book['remainQty']
-            book['remainQty'] -= qty
-            if book['remainQty'] <= 0:
-                direction = 1 if posSide == kLong else -1
-                pnl = (avgPrice - book['avgPrice']) * totalQty * direction
-                pnlRate = pnl / book['totalCost'] if book['totalCost'] else 0
-                self._history.append({
-                    'key': key,
-                    'records': book['records'],
-                    'avgPrice': book['avgPrice'],
-                    'closePrice': avgPrice,
-                    'totalQty': totalQty,
-                    'lv': book['lv'],
-                    'pnl': round(pnl, 6),
-                    'pnlRate': round(pnlRate, 6),
-                    'openTime': book.get('openTime', ''),
-                    'closeTime': str2time('strNow')})
-                del self._transactionTrail[key]
-        else:
-            # 开仓加仓位
-            exName = tags.get('exName', '')
-            result = slit(dir_str, '_')
-            posSide = result[1] if result else dir_str
-            key = f'{category}_{symbol}_{exName}_{posSide}'
-            if key not in self._transactionTrail:
-                self._transactionTrail[key] = {
-                    'records': [], 'remainQty': 0.0, 'avgPrice': 0.0,
-                    'totalCost': 0.0, 'lv': lv, 'openTime': str2time('strNow')}
-            book = self._transactionTrail[key]
-            oldTotal = book['avgPrice'] * book['remainQty']
-            book['remainQty'] += qty
-            book['avgPrice'] = (oldTotal + avgPrice * qty) / book['remainQty'] if book['remainQty'] else 0
-            book['totalCost'] += avgPrice * qty
-            book['records'].append({'uid': uid, 'orderId': orderId, 'dir': dir_str})
+        # 解析持仓方向
+        result = slit(dir_str, '_')
+        posSide = result[1] if result else dir_str
+
+        key = f'{category}_{symbol}_{exName}_{posSide}'
+
+        if key not in self._transactionTrail:
+            return  # 异常情况，不处理
+
+        book = self._transactionTrail[key]
+
+        # 更新持仓数据
+        oldTotal = book['avgPrice'] * book['remainQty']
+        book['remainQty'] += qty
+        book['avgPrice'] = (oldTotal + avgPrice * qty) / book['remainQty'] if book['remainQty'] else 0
+        book['totalCost'] += avgPrice * qty
+        book['records'].append({'uid': uid, 'orderId': data.get('orderId', ''), 'dir': dir_str})
+
+        # 平仓结算
+        if book['remainQty'] <= 0:
+            direction = 1 if posSide == kLong else -1
+            totalQty = abs(book['remainQty']) + qty  # 原持仓量
+            pnl = (avgPrice - book['avgPrice']) * totalQty * direction
+            pnlRate = pnl / book['totalCost'] if book['totalCost'] else 0
+            self._history.append({
+                'key': key,
+                'records': book['records'],
+                'avgPrice': book['avgPrice'],
+                'closePrice': avgPrice,
+                'totalQty': totalQty,
+                'lv': book['lv'],
+                'pnl': round(pnl, 6),
+                'pnlRate': round(pnlRate, 6),
+                'openTime': book.get('openTime', ''),
+                'closeTime': str2time('strNow')})
+            del self._transactionTrail[key]
 
     #当前还在的持仓的单子
     def overView(self):
