@@ -1,10 +1,10 @@
-from server.strategy.base.baseCTA import *
+from server.strategy.base.contractCTA import *
 from server.strategy.base.realTrade import *
 # from server.utils import pdData, log
 # from datetime import datetime
 import time
 
-class test(baseCTA, realTrade):
+class test(contractCTA, realTrade):
     "测试用法"
 
     def info(self):
@@ -38,7 +38,7 @@ class test(baseCTA, realTrade):
         # self.sell('DOGE/USDT')                                            #默认全卖
         # time.sleep(10)
         #合约
-        self.openLong(swapU('DOGE/USDT'), totelPrice = 'bet:5',price = 0.07,lv=2)      #u本位永续,bet:10是总仓位的10%
+        # self.openLong(swapU('DOGE/USDT'), totelPrice = 'bet:5',price = 0.07,lv=2)      #u本位永续,bet:10是总仓位的10%
         # self.openLong(swapU('DOGE/USDT'), totelPrice = 1)
         # time.sleep(20)
         # self.openShort(swapU('DOGE/USDT'), totelPrice = 1,isMarket=True)                #市价买入(立即吃单)
@@ -48,17 +48,9 @@ class test(baseCTA, realTrade):
         # self.closePos(swapU('DOGE/USDT'),dir=kShort)
         # self.closePos(swapU('DOGE/USDT'),dir='open')
         
-        exit()
-
-
-        #未完成 
-        # 记录下单数据
-        # 现货平仓,  ok
-        # u本位平仓, ok
-        # 取消订单,  
-        # 查订单     
-        
-
+        # history = self.historyOrders([swapU('BTC/USDT')])
+        history = self.historyOrders([spot('DOGE/USDT')])
+        logFormat(history)
 
 
     def update_1sLess(self, id, timeKey):

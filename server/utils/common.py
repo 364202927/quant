@@ -243,25 +243,28 @@ def genFileName(path: str, file_split: str, ext: str) -> str:
     name = f"{suffix}.{ext}" if suffix else f"data.{ext}"
     return joinPath(path, name)
 # 文件操作
-def readFile(pathFile):
+def readFile(pathFile,model = 'r'):
     if not os.path.exists(pathFile) or\
           not os.path.isfile(pathFile): #检测文件是否存在
         return None
     fileType, _ = getFileExtension(pathFile)
     def _json():
-        with open(pathFile, 'r', encoding='utf-8') as f:
+        with open(pathFile, model, encoding='utf-8') as f:
             return json.load(f)
+    def _jsonl():
+        with open(pathFile, model, encoding='utf-8') as f:
+            return f
     def _pkl():
         with open(pathFile, 'rb') as f:
             return pickle.load(f)
     def _txt():
-        with open(pathFile, 'r', encoding='utf-8') as f:
+        with open(pathFile, model, encoding='utf-8') as f:
             return f.read()
     def _gz():
         with gzip.open(pathFile, 'rb') as f:
             return pickle.load(f)
     def _h5():
-        with pd.HDFStore(pathFile, 'r') as store:
+        with pd.HDFStore(pathFile, model) as store:
             return {key: store[key] for key in store.keys()}
     def _xlsx():
         return pd.read_excel(pathFile,  engine='openpyxl')
@@ -271,6 +274,7 @@ def readFile(pathFile):
         return pd.read_csv(pathFile)
     return switchFn({
         'json': _json,
+        'jsonl':_jsonl,
         'pkl': _pkl,
         'txt': _txt,
         'gz': _gz,
@@ -279,18 +283,22 @@ def readFile(pathFile):
         'parquet': _parquet,
         'csv': _csv
     }, key=fileType)
-def writeFile(data, pathFile):
+def writeFile(data, pathFile,model = 'w'):
     if data is None or (isinstance(data, (list, dict)) and len(data) == 0):
         return False
     fileType, _ = getFileExtension(pathFile)
     def _json():
-        with open(pathFile, 'w', encoding='utf-8') as f:
+        with open(pathFile, model, encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+    def _jsonl():
+        with open(pathFile, model, encoding='utf-8') as f:
+            for record in data:
+                f.write(json.dumps(record, ensure_ascii=False, default=str) + '\n')
     def _pkl():
         with open(pathFile, 'wb') as f:
             pickle.dump(data, f)
     def _txt():
-        with open(pathFile, 'w', encoding='utf-8') as f:
+        with open(pathFile, model, encoding='utf-8') as f:
             f.write(str(data))
     def _gz():
         with gzip.open(pathFile, 'wb') as f:
@@ -315,6 +323,7 @@ def writeFile(data, pathFile):
         data.to_csv(pathFile, index=False)
     result = switchFn({
         'json': _json,
+        'jsonl':_jsonl,
         'pkl': _pkl,
         'txt': _txt,
         'gz': _gz,
