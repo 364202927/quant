@@ -12,7 +12,7 @@ class taskHandle(metaclass=abc.ABCMeta):
         self.tacticsTime = list(timeKeys) if timeKeys else []
     
     def shardIndicators(self,className:str): #根据类名获取指定指标
-        return self.indicators.get(className)        
+        return self.indicators.get(className) #todo,这个值改成只能读取不能修改
     def getTacticsTime(self):
         return self.tacticsTime
     def className(self):
@@ -44,6 +44,8 @@ class task:
         if not isinstance(self.__handle, taskHandle):
             return False
         self.__handle.init()
+        if not self.get('tacticsTime'):
+            return False
         self.active()
         return True
 

@@ -32,9 +32,7 @@ class launcher:
             module_config = config.get(key, {})
             if module_config.get('enable'):
                 self.__modules.append(cls(self._msgTransform))
-
-        log("Launcher初始化完成", self.__modules)
-
+        log("Launcher初始化完成")
         # 交易所更新
         # if g_config.marketsApi():
         #     g_marketMgr.init()

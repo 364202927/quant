@@ -5,12 +5,32 @@ kMaxSleepTime = 60  # 最大休眠时间60秒
 
 class schedule:
     def __init__(self, timeKey):
+        def _parseTime(s: str):
+            now = datetime.now()
+            if ':' not in s:
+                return now, s
+            data, interval = s.split(":")  
+            beginData = now
+            parts = data.strip().split()
+            if len(parts) == 2:
+                month, day = map(int, parts[0].split('-'))
+                hour = int(parts[1])
+                beginData = datetime(now.year, month, day, hour, 0, 0)
+            elif len(parts) == 1:
+                month = now.month
+                day = now.day
+                hour = int(parts[0])
+                beginData = datetime(now.year, month, day, hour, 0, 0)
+            return beginData, interval
+        #
         self.__pool = []  # 任务ID列表
         self.__timeKey = timeKey
-        self.__interval = timeFrame2Float(timeKey) # 间隔时间
+        # print("~~~schedule init~~~~",timeKey, _parseTime(timeKey))
+        beginData,interval = _parseTime(timeKey) #开始时间,间隔
+        self.__interval = timeFrame2Float(interval) # 间隔时间转换
         # print("~~~~interval~~~~",self.__interval,float(timeKey[:-1]),eTimeTs[timeKey[-1]])
-        self.__nextRun = self._nextTime()
-        # log(f"Schedule初始化:",timeKey,datetime.now().strftime('%m-%d %H:%M:%S'),'  next:',self.__nextRun.strftime('%m-%d %H:%M:%S'))
+        self.__nextRun = self._nextTime(beginData)
+        log(f"Schedule::",timeKey, '  ',datetime.now().strftime('%m-%d %H:%M:%S'),'  next=',self.__nextRun.strftime('%m-%d %H:%M:%S'))
 
     #下次触发时间
     def _nextTime(self,t = datetime.now()):

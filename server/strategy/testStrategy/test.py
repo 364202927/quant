@@ -11,7 +11,7 @@ class test(contractCTA, realTrade):
         return "demo+k线数据,交易所成交"
 
     def init(self):
-        self.regTime('1s', "1m")    #注册时间
+        self.regTime('01:1d', "1m")    #注册时间 1.每天1点 2.每分钟
         self.settingTrade(exName=['binanceMain'], def_lv = 1) #默认下单设置
         # 初始化指标
         self.regIndicators({'candles':'other.kLine',
@@ -49,8 +49,8 @@ class test(contractCTA, realTrade):
         # self.closePos(swapU('DOGE/USDT'),dir='open')
         
         # history = self.historyOrders([swapU('BTC/USDT')])
-        history = self.historyOrders([spot('DOGE/USDT')])
-        logFormat(history)
+        # history = self.historyOrders([spot('DOGE/USDT')])
+        # logFormat(history)
 
 
     def update_1sLess(self, id, timeKey):

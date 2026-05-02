@@ -156,13 +156,13 @@ def aContainB(input, strOrTab):
 # 分支调用,如不存在触发default
 def switch(dice, key):
     if not dice.get(key):
-        if dice['default']: 
+        if dice.get('default'):
             return dice['default']
         return False
     return dice.get(key)
 def switchFn(diceFn, key, **kwargs):
     if not diceFn.get(key):
-        if diceFn['default']:
+        if diceFn.get('default'):
             return diceFn['default'](**kwargs)
         return False
     return diceFn[key](**kwargs)

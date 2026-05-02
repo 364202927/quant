@@ -63,7 +63,7 @@ class realTrade(baseTrade):
         category, _ = slit(symbol, '_')
         exName = ex.get('title')
         dir_str = f'{state}_{posSide}' if posSide else state
-        # 1. 先记录
+        # 1. 创建记录
         uid = self.record(exName=exName, category=category, symbol=symbol,
                           orderId='', lv=lv, dir=dir_str,
                           orderPrice=price or 0)
