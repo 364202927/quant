@@ -7,7 +7,6 @@ from server.utils.logger import err, log
 from server.utils.fileConfig import g_config
 from server.utils.common import switchFn, getFileExtension, readFile, writeFile, utc_now
 
-
 # pd.set_option('display.max_rows', None)  # 最大显示行
 pd.set_option('expand_frame_repr', False)  # 当列太多时不换行
 pd.set_option('display.float_format', '{:.3f}'.format)  # 全局设定3位小数
@@ -29,7 +28,7 @@ class pdData:
         self._head,self._strHead = {},{}
         self.setHead(head)
         if read != '':
-            self.readFile(read)
+            self.readFile(read,True)
             return
         if style != '' and data is not None:
             self.format(data, style=style)
@@ -282,7 +281,7 @@ class pdData:
             yearDirs = yearDirs[:1]
         allData: list[pd.DataFrame] = []
         for year in yearDirs:
-            filePath = os.path.join(path, year, fileName)
+            filePath = os.path.join(path, year, fileName)+'.parquet'
             if os.path.exists(filePath):
                 pf = readFile(filePath)
                 if pf is not None and not pf.empty:
@@ -360,3 +359,9 @@ class pdData:
         result = [(full_idx[g[0]], full_idx[g[-1]] + freq_delta) for g in groups]
         log(f"检测异常数据: {len(result)} 个区间需修复")
         return offsetUtc(result)
+    
+    def getIndicators(self, *args: list['baseIndicators']):
+        indPf = self._pf.copy()
+        for indicator in args:
+            indPf = indicator.calculateTa(indPf)
+        return indPf

@@ -23,6 +23,7 @@ class kLine(baseIndicators):
 
     def calculate(self, *args: baseIndicators) -> pdData:
         pdResults = {}
+        #todo:此处可优化:使用pdata.getIndicators()
         for symbol, pd in self._symbols.items():
             pdResults[symbol] = pd
             for indicator in args:
