@@ -1,4 +1,8 @@
-from strategy.base.baseTrade import *
+from server.strategy.base.baseTrade import *
+from server.utils.science import floatingProfit
+#todo:临时
+kMONEY = 0
+kORDERBOOK = 1
 
 class testTrade(baseTrade):
     "测试交易"
