@@ -1,262 +1,203 @@
-from indicators.baseIndicators import *
-# todo:对应未来的拓展修改
-# 1.开多对应是0.1~1对应是仓位的百分比，减仓为0全平，-0.n仓位，最终仓位1-%n(当前减仓百分比，最终仓位为0全平)
-# 2.开空对应是-0.1~-1其他同上
-# 3.最终数据为{'signal': 'long', 'open':[index1,index2,...],'end':[index1,index2,...] }
-# 4.爆仓的话没算
+from server.indicators.baseIndicators import *
+from server.market.consts import kLong,kShort,kBuy,kSell
+# open_eff,close时添加冲击成本价,模拟资金量大的情况下对市场的影响
 
 # todo:改版添加指标
 # 1.当前的币和收益做一个总收益率
 # 2.月度表现
 # 3.风险等级评分
 # 4.最大回撤，日，周，历史
-Market_Fee = True
 Year = 365  # 每一年有几天开盘，若是股票252天
-
 
 class backTest(baseIndicators):
     "回测数据：性能测试"
-    # amount,ftc,ptc= 0,0,0 #初始资金，固定成本，可变成本
-    exchangeName = ''
     level = 1  # 杠杆
     principal = 0  # 本金
-    # margin = 0             #保证金
-    orderQua = 0  # 订单数量
-    # todo:滚仓或固定金额
+    margin = 0     #保证金
 
     def init(self):
         self.principal = 1000
-        # self.margin = 1000
+        self.margin = self.principal
         self.level = 1
 
     def delimit(self, **kWargs):
         if kWargs.get('principal'):
             self.principal = kWargs['principal']
+            self.margin = self.principal * 0.95  #保证金不等于100%本金
         # if kWargs.get('margin'): self.margin = kWargs['margin']
         if kWargs.get('lv'):
             self.level = kWargs['lv']
 
-    def calculate(self, df, orders):
-        # 1.找出每一笔订单
-        self.orderQua = 0
-        orders = self._filter(orders)
+    def calculateTa(self, kline:pdData, signalPd:pd.DataFrame):pass
+    def calculate(self, kLine: pdData, signal: list):
+        # 1.将信号转换成订单
+        orders = self._transform2data(kLine, signal)
+        logFormat(orders)
         # 2.对每笔订单计算利润
-        originalPrincipal = self.principal
-        print(
-            "本金:",
-            originalPrincipal,
-            ' 杠杆:',
-            self.level,
-            " 策略交易：",
-            self.orderQua)
-        orders_Statistical = self._equityCurve(df, orders)
-        # 3.该策略总收益统计
-        annualized_return, sharpe_ratio, sortino_ratio, calmar_ratio, daily_volatility, annual_volatility, max_drawdown, ddIdx = self._incomeMetrics(
-            df, orders_Statistical, originalPrincipal)
-        # 4.最终收益并打印
-        printdf = orders_Statistical.get()
-        lastOrder = printdf.iloc[-1]
-        # balance = self.margin#self.principal# + lastOrder['profit(u)'] -
-        # lastOrder['transactionFee']
-        winDf = printdf[printdf['profit(u)'] > 0]
-        lostDf = printdf[printdf['profit(u)'] <= 0]
-        print(printdf)
-        print(
-            "胜率: {:.2f}%    剩余资金: {}u   净利润: {}u     总佣金: {:.2f}u".format(
-                len(winDf) / len(printdf),
-                self.principal,
-                self.principal - originalPrincipal,
-                printdf['transactionFee'].sum()))
-        print(
-            "获利次数: {}     平均盈利: {:.2f}u   总盈利: {}u     最大盈利: {}u".format(
-                len(winDf),
-                winDf['profit(u)'].sum() /
-                len(winDf),
-                winDf['profit(u)'].sum(),
-                winDf['profit(u)'].max()))
-        print(
-            "亏损次数: {}     平均亏损: {:.2f}u   总亏损: {}u     最大亏损: {}u".format(
-                len(lostDf),
-                lostDf['profit(u)'].sum() /
-                len(lostDf),
-                lostDf['profit(u)'].sum(),
-                lostDf['profit(u)'].min()))
-        print('~~~~~~收益指标~~~~~~~')
-        print(
-            "年化收益:",
-            annualized_return,
-            '   总收益:{}%'.format(
-                round(
-                    printdf['rate(%)'].sum(),
-                    1)))
-        print(
-            "盈亏比:{:.2f}%".format(
-                (winDf['profit(u)'].sum() +
-                 lostDf['profit(u)'].sum()) /
-                originalPrincipal))
-        print("夏普比率:", sharpe_ratio)
-        print('~~~~~~风险指标~~~~~~~')
-        print("最大回撤:", round(max_drawdown, 2), '    时间是:{} ~ {}'.format(
-            printdf.iloc[ddIdx[0]]['time'], printdf.iloc[ddIdx[1]]['time']))
-        print("卡玛比率:", calmar_ratio)
-        print("索提诺比率:", sortino_ratio)
-        # 年波动率描述 低：回报率为3%，在5%波动率下，回报可能在-2%到8%之间。
-        # 中：回报率为6%，在15%的波动率情况下，最终回报有可能在-9%到21%，高：回报率为8%，在30%波动率下回报可能在-22%到38%之间。
-        print(
-            '日波动率: {:.2f}%    年波动率: {:.2f}%'.format(
-                daily_volatility,
-                annual_volatility))
+        statistical = self._equityCurve(orders)
+        print(statistical.get())
+        # print(self.margin,self.principal)
 
-    # 过滤出每一笔交易
-    def _filter(self, orders):
-        all_trades = []
-        for order in orders:
-            pos = []
-            self.orderQua += 1
-            for i in range(len(order['position'])):
-                indexOrder = order['position'][i]
-                pos.append({indexOrder['idx']: indexOrder["position"]})
-            all_trades.append({'dir': order['dir'], 'ctaOrders': pos})
-        return all_trades
-    # 计算每笔订单的利润
+    def _transform2data(self, kLine: pdData, signal: list) -> list:
+        # def _transform2data(self, kLine: pdData, signalPd: list) -> list:
+        df = kLine.get()
+        rows = []
+        for traj in signal:
+            trades = traj.get("trades", [])
+            if len(trades) < 2:
+                continue
+            enriched = []
+            for t in trades:
+                kr = df.loc[t["pos"]]
+                enriched.append({**t,
+                                "time": kr["candle_begin_time"],
+                                "price": float(kr["close"])})
+            first_time = enriched[0]["time"]
+            for e in enriched:
+                e["duration"] = int((e["time"] - first_time).total_seconds() // 60)
+            # 轨迹方向: "LONG" 或 "SHORT"，第一个动作的 behavior 决定了开仓方向
+            rows.append({"dir": traj["dir"],
+                        "trades": enriched})
+        return rows
 
-    def _equityCurve(self, df, oreders):
-        allStatistical = []
-        for order in oreders:
-            openList, close = [], 0
-            for i in range(len(order['ctaOrders'])):
-                indexOrder = order['ctaOrders'][i]
-                for idx, pos in indexOrder.items():
-                    if (order['dir'] == -1 and pos < 0) or \
-                            (order['dir'] == 1 and pos > 0):  # 开仓
-                        df.loc[idx, order["dir"] ==
-                               1 and "signal_long" or 'signal_short'] = order["dir"]
-                        openList.append({'idx': idx, 'pos': pos})
+    def _equityCurve(self, orders: list) -> pdData:
+        def _fundingRates(open_time, close_time) -> int:
+            """计算持仓期内覆盖的8h结算点次数"""
+            funding_times = pd.date_range(start=open_time.floor('D'), end=close_time.ceil('D'), freq='8h')
+            return int(((funding_times > open_time) & (funding_times <= close_time)).sum())
+
+        def _process_trajectory(trades: list, dir: str, equity: float, utilization: float):
+            """
+            处理一条完整的交易轨迹，返回 (总利润, 总手续费, 收益率%, 已用保证金, 是否爆仓)
+            """
+            # 确定买卖符号和增仓行为
+            if dir == "LONG":
+                add_behavior = "buy"
+                sign = 1
+            elif dir == "SHORT":
+                add_behavior = "sell"   # 空头用 sell 增仓
+                sign = -1
+            else:
+                raise ValueError(f"Unknown dir: {dir}")
+
+            qty = 0.0              # 当前持仓数量
+            avg_cost = 0.0         # 平均持仓成本
+            fee_total = 0.0        # 累计手续费
+            realized_profit = 0.0  # 已实现盈亏
+            max_notional = 0.0     # 期间最大名义价值（用于资金费率估算）
+            used_margin_total = 0.0# 累计占用保证金（只增不减，用于收益率计算）
+
+            for i, t in enumerate(trades):
+                # --- 计算仓位比例：优先使用 position%，否则使用默认 utilization ---
+                if 'position%' in t and pd.notna(t['position%']):
+                    pct = t['position%'] / 100.0
+                else:
+                    pct = utilization   # 默认 0.1
+
+                behavior = t["behavior"]
+                price = t["price"]
+                lv = t["lv"]
+
+                is_increase = (behavior == add_behavior)    # 增仓动作
+                is_last = (i == len(trades) - 1)            # 轨迹最后一个动作（强制平仓）
+
+                # 滑点（每个动作独立生成，开仓/平仓方向对称）
+                slip = random.uniform(0.0001, 0.0005)
+                if is_increase:
+                    eff_price = price * (1 + sign * slip)       # 增仓成交价不利
+                else:
+                    eff_price = price * (1 - sign * slip)       # 减仓成交价不利
+
+                if is_increase:
+                    # --- 增仓（开仓 / 加仓）---
+                    margin_used = equity * pct
+                    d_qty = margin_used * lv / eff_price
+                    if d_qty <= 0:
                         continue
-                    close = {'idx': idx, 'pos': pos}
-                    rtPd = self.orderIncome(order['dir'], df, openList, close)
-                    allStatistical.append(rtPd.get())
-                    df.loc[idx, order["dir"] ==
-                           1 and "signal_long" or 'signal_short'] = 0
-                    # 计算剩余保证金价格
-                    self.principal = self.principal + \
-                        rtPd.get(0)['profit(u)'] - rtPd.get(0)['transactionFee']  # 滚仓计算
-                    if self.principal < 0:  # 实际上，不等于0就会爆仓
-                        print("爆仓了")
-                        return
-        # 返回统计后的pd
-        orders_Statistical = pdData(allStatistical[0].columns.tolist())
-        orders_Statistical.format(allStatistical, 'concat')
-        return orders_Statistical
+                    fee_trade = d_qty * eff_price * 0.0005   # 开仓手续费
+                    fee_total += fee_trade
 
-    # 每一张单子收益计算
-    # todo:roi
-    # todo:每8小时0.01% 8小时 资金费率
-    def orderIncome(self, dir, df, openList, close):
-        slippage = 0.001  # 滑点
+                    # 更新持仓成本
+                    if qty == 0:
+                        avg_cost = eff_price
+                    else:
+                        avg_cost = (qty * avg_cost + d_qty * eff_price) / (qty + d_qty)
+                    qty += d_qty
+                    used_margin_total += margin_used
 
-        def openPrice():
-            # 总成本 = (60000 * 0.1) + (62000 * 0.2) = 6000 + 12400 = 18400
-            # 总数量 = 0.1 + 0.2 = 0.3 BTC
-            # 平均入场价格 = 118000 ÷ 2 = 59000
-            cost, qua = 0, 0
-            if len(openList) < 1:
-                closePos = df.iloc[openList[-1]['idx']]['close']
-                return round(closePos + slippage * closePos, 2)
-            # 计算平均开仓价
-            for open in openList:
-                closePos = df.iloc[open['idx']]['close']
-                price = round(closePos + slippage * closePos, 2)
-                amount = 1000 / price  # todo:每次保证金的数据都不一样所以这个值会有偏差
-                cost += price * amount
-                qua += amount
-            return cost / qua
-        #
-        openPf = df.iloc[openList[-1]['idx']]
-        closePf = df.iloc[close['idx']]
-        # 返回rt(开单时间, 方向, 持续时间, 占几根k线,保证金,倍率, 开仓价,平仓价,数量, 手续费,收益(u),收益率(%))
-        rt_pd = pdData(['time',
-                        'dir',
-                        "duration(min)",
-                        "margin",
-                        "leverage",
-                        "openingPrice",
-                        'closingPrice',
-                        'quantity',
-                        'transactionFee',
-                        'profit(u)',
-                        'rate(%)'])
-        rt_pd.format({'time': [1], 'margin': [1], 'openingPrice': [1], 'closingPrice': [1], 'quantity': [1], 'transactionFee': [0], 'profit(u)': [1], 'rate(%)': [1],
-                      'dir': dir,
-                      'duration(min)': (closePf['candle_begin_time'].timestamp() - openPf['candle_begin_time'].timestamp()) // 60,
-                      # 'section':close['idx'] - openList[-1]['idx'], #合约花了多少根k线
-                      'leverage': self.level})
-        pf = rt_pd.get()
-        pf['time'] = openPf['candle_begin_time']
-        # 开仓价,平仓价,保证金
-        pf['openingPrice'] = openPrice()
-        pf['closingPrice'] = round(
-            closePf['close'] + slippage * closePf['close'], 2)
-        amountUsed = self.principal * abs(openList[-1]['pos'] * 0.01)
-        pf['margin'] = amountUsed * self.level  # todo：滚仓模式
-        pf['quantity'] = pf['margin'] / pf['openingPrice']
-        # 手续费 = 开仓+平仓（市价，限价不一样）       每家交易所的手续费都是不一样的
-        limit = amountUsed * 0.0002
-        market = amountUsed * 0.0005
-        fundingRate = (pf['duration(min)'] / 480).astype(int) * \
-            amountUsed * 0.0001  # 资金费率不是固定的
-        fee = Market_Fee and market or limit
-        pf['transactionFee'] = round(fee * 2 + fundingRate, 6)
-        # 计算收益
-        pf['profit(u)'] = contractProfit(
-            pf['openingPrice'], pf['closingPrice'], pf['quantity'])
-        pf['rate(%)'] = (pf['profit(u)'] / pf['margin'] * 100).round(2)
-        return rt_pd
+                else:
+                    # --- 减仓（含部分减仓、全部平仓）---
+                    close_qty = qty if is_last else qty * pct   # 最后一笔全平，否则按比例减
+                    if close_qty <= 0:
+                        continue
+                    fee_trade = close_qty * eff_price * 0.0005  # 平仓手续费
+                    fee_total += fee_trade
 
-    def _incomeMetrics(self, df, order, principal):
-        def calculate_dd(df):
-            cumulative_max = df["rate(%)"].cummax()
-            df["drawdown"] = cumulative_max - df["rate(%)"]
-            max_drawdown_idx = df["drawdown"].idxmax()
-            if max_drawdown_idx == 0:  # 特殊情况处理：序列开头即为最大回撤
-                return 1, [0, 0]
-            max_rate_idx = df.loc[:max_drawdown_idx, "rate(%)"].idxmax()
-            # 计算最大回撤值
-            max_drawdown = (df.loc[max_rate_idx,
-                                   "rate(%)"] - df.loc[max_drawdown_idx,
-                                                       "rate(%)"]) / (1 + df.loc[max_rate_idx,
-                                                                                 "rate(%)"]) * 100
-            return max_drawdown, [max_rate_idx, max_drawdown_idx]
-        orderDf = order.get()
-        totelDay = (df.iloc[-1]['candle_begin_time'] -
-                    df.iloc[0]['candle_begin_time']).days
-        totleProfit = orderDf['profit(u)'].sum()
-        dailyDf = orderDf['profit(u)'] / orderDf['margin']  # 每日收益
-        # 年化收益 (1 + 总收益率)^(每年有几天交易日 / N) - 1
-        annualized_return = round(
-            ((1 + totleProfit / principal) ** (Year / totelDay) - 1) * 100, 2)
-        # 夏普比率 (平均收益率 - 无风险利率) / 收益率标准差
-        # ::投资回报与多冒风险的比例：>1，代表基金报酬率高过波动风险；<1，代表基金操作风险大过于报酬率
-        sharpe_ratio = round(dailyDf.mean() / dailyDf.std() * np.sqrt(Year), 2)
-        # 索提诺比率 = (投资组合平均收益率 - 无风险利率) / 下行风险 ::与夏普类似
-        downside_std = dailyDf[dailyDf < 0].std()
-        sortino_ratio = round(dailyDf.mean() / downside_std * np.sqrt(Year), 2)
-        # 最大回撤 max(累计收益率 - 历史最高点) / 历史最高点
-        max_drawdown, idx = calculate_dd(orderDf)
-        # 卡玛比率 = 年化收益率 / 最大回撤                 ::理论上讲，卡玛比率值越高越好
-        calmar_ratio = round(annualized_return / max_drawdown, 2)
-        # 波动率
-        daily_volatility = np.std(orderDf['rate(%)'], ddof=1)
-        annual_volatility = daily_volatility * np.sqrt(Year)
-        return annualized_return, sharpe_ratio, sortino_ratio, calmar_ratio, daily_volatility, annual_volatility, max_drawdown, idx
+                    # 计算已实现盈亏
+                    profit = (eff_price - avg_cost) * close_qty * sign
+                    realized_profit += profit
 
-    # 对以上指标进行分析
-    def _analyze(self):
-        # 1.指标分析
-        # 2.风险风险
-        # 3.优化建议
-        print("分析")
+                    qty -= close_qty
+                    if qty <= 1e-8:
+                        qty = 0.0
+                        avg_cost = 0.0
+                    # 注意：保证金未释放，但在收益率计算中使用最初累计的 used_margin_total
 
+                # 更新最大名义价值（用于资金费率估算）
+                current_notional = qty * eff_price
+                if current_notional > max_notional:
+                    max_notional = current_notional
 
-# 风险管控 1:2
-# https://www.youtube.com/watch?v=S6B7ou9i29Q
+            # 若仍有残留仓位（非100%平仓），自动强制平掉
+            if qty > 1e-8:
+                last_price = trades[-1]["price"]
+                slip = random.uniform(0.0001, 0.0005)
+                eff_price = last_price * (1 - sign * slip)
+                fee_trade = qty * eff_price * 0.0005
+                fee_total += fee_trade
+                profit = (eff_price - avg_cost) * qty * sign
+                realized_profit += profit
+                qty = 0.0
+
+            # --- 资金费率（简化估算，仍标记为后续可优化） ---
+            open_time = trades[0]["time"]
+            close_time = trades[-1]["time"]
+            funding_count = _fundingRates(open_time, close_time)
+            fee_funding = funding_count * max_notional * 0.0001      # 0.01% 基础费率
+            fee_total += fee_funding
+
+            fee_total = round(fee_total, 6)
+            profit_usdt = round(realized_profit - fee_total, 4)
+            rate = round(profit_usdt / used_margin_total * 100, 2) if used_margin_total else 0.0
+
+            return profit_usdt, fee_total, rate, used_margin_total, False
+
+        # ----------------- 主循环 -----------------
+        result = pdData(["dir", "openTime", "duration", "openPrice", "closePrice", "lv",
+                        "fee", "profit_Usdt", "rate"])
+        blowup = False
+        for order in orders:
+            first, last = order["trades"][0], order["trades"][-1]
+            meta = {
+                "dir": order["dir"],
+                "openTime": first["time"],
+                "duration": last["duration"],
+                "openPrice": first["price"],
+                "closePrice": last["price"],
+                "lv": first["lv"]
+            }
+
+            if blowup:
+                result.dataConcat({**meta, "fee": 0, "profit_Usdt": 0, "rate": 0})
+                continue
+
+            profit, fee, rate, margin_used, _ = _process_trajectory(order["trades"], order["dir"], self.margin, utilization=0.1)
+
+            self.margin += profit
+            if self.margin < self.principal * 0.1:
+                print("爆仓了")
+                blowup = True
+
+            result.dataConcat({**meta, "fee": fee, "profit_Usdt": profit, "rate": rate})
+
+        return result

@@ -200,7 +200,12 @@ class pdData:
         pf = pd.DataFrame([dic])
         if self._pf is None:
             self._pf = pd.DataFrame(columns=self._head)
-        self._pf = pd.concat([self._pf, pf], ignore_index=True)
+        # self._pf = pd.concat([self._pf, pf], ignore_index=True)
+        # if not pf.empty:
+        #     self._pf = pd.concat([self._pf, pf], ignore_index=True)
+        to_concat = [df for df in [self._pf, pf] if not df.empty and not df.isna().all().all()]
+        if to_concat:
+            self._pf = pd.concat(to_concat, ignore_index=True)
 
     # 左右合并
     def pfMerge(self, dataTab, key="merage"):
@@ -290,7 +295,7 @@ class pdData:
             return False
         self.format(allData, style='concat', utc=utc_now())
         self.setHead(self._pf.columns.tolist())
-        log(f"读取完成: {fileName}, 共 {len(allData)} 个文件, 总数据: {len(self._pf)}")
+        # log(f"读取完成: {fileName}, 共 {len(allData)} 个文件, 总数据: {len(self._pf)}")
         return True
     
     #清洗数据,range_time: [start, end]不为空检测时间范围内的缺失数据,否则检测全量异常数据
@@ -360,7 +365,7 @@ class pdData:
         log(f"检测异常数据: {len(result)} 个区间需修复")
         return offsetUtc(result)
     
-    def getIndicators(self, *args: list['baseIndicators']):
+    def getIndicators(self, *args: list["baseIndicators"]):
         indPf = self._pf.copy()
         for indicator in args:
             indPf = indicator.calculateTa(indPf)

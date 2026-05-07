@@ -32,8 +32,8 @@ def labIsin(df, tabLab):
     return True
 
 # 合约收益
-def contractProfit(openPrice, closePrice, amount):
-    return (float(closePrice) - float(openPrice)) * amount
+def contractProfit(openPrice, closePrice, quantity):
+    return (float(closePrice) - float(openPrice)) * quantity
 
 # 计算浮动盈利
 def floatingProfit(openPrice, closePrice, dir):

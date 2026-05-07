@@ -104,38 +104,39 @@ class baseTrade:
     #下单方向,币种,交易所,下单方式,委托价格,委托数量
     def order(self, state:str, symbol:str, ex:BaseException, lv:int,totelPrice:float, price:float|None, amount:float|None, isMarket:bool, inForce:str, posSide:str|None):
         pass
-
+    
+    #检查对应交易所的持仓
     def checkPos(self, exName: str):
-        """定时轮询交易所持仓，同步更新 _transactionTrail"""
         ex = g_marketMgr.get(exName)
         if not ex:
             return
 
         # 获取交易所全部持仓
-        _, pos_orders = ex.findOrder(symbol='', isPos=True, isOpen=True)
+        _, pos_orders = ex.findOrder(symbol='', isPos=True, isOpen=False)
 
         # 遍历持仓，更新 _transactionTrail
-        for pos in pos_orders:
-            category = pos.get('category', '')
-            symbol = pos.get('symbol', '')
-            posSide = pos.get('positionSide', '')
-            remainQty = float(pos.get('positionAmt', 0))
+        # for pos in pos_orders:
+        #     category = pos.get('category', '')
+        #     symbol = pos.get('symbol', '')
+        #     posSide = pos.get('positionSide', '')
+        #     remainQty = float(pos.get('positionAmt', 0))
 
-            key = f'{category}_{symbol}_{exName}_{posSide}'
+        #     key = f'{category}_{symbol}_{exName}_{posSide}'
 
-            if key not in self._transactionTrail:
-                # key 不存在，创建新条目（交易所有仓位但本地无记录）
-                self._transactionTrail[key] = {
-                    'records': [],
-                    'remainQty': abs(remainQty),
-                    'avgPrice': float(pos.get('entryPrice', 0)),
-                    'totalCost': 0.0,
-                    'lv': int(pos.get('leverage', 1)),
-                    'openTime': str2time('strNow')}
-            else:
-                # 更新现有条目的持仓数量
-                book = self._transactionTrail[key]
-                book['remainQty'] = abs(remainQty)
+        #     if key not in self._transactionTrail:
+        #         # key 不存在，创建新条目（交易所有仓位但本地无记录）
+        #         self._transactionTrail[key] = {
+        #             'records': [],
+        #             'remainQty': abs(remainQty),
+        #             'avgPrice': float(pos.get('entryPrice', 0)),
+        #             'totalCost': 0.0,
+        #             'lv': int(pos.get('leverage', 1)),
+        #             'openTime': str2time('strNow')}
+        #     else:
+        #         # 更新现有条目的持仓数量
+        #         book = self._transactionTrail[key]
+        #         book['remainQty'] = abs(remainQty)
+        return pos_orders
 
     #当前挂单最优价
     def _BBO(self, ex:BaseException, symbol:str, dir:str, order:int):
