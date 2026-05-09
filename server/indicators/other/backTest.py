@@ -15,6 +15,7 @@ class _TrajResult(NamedTuple):
     margin_used: float
     avg_slip_pct: float
     funding_fee: float
+    total_notional: float
 
 class backTest(baseIndicators):
     "回测数据：性能测试"
@@ -86,8 +87,10 @@ class backTest(baseIndicators):
             margin_used: float
             avg_slip_pct: float
             funding_fee: float
+            total_notional: float
         columns = ["dir", "openTime", "duration", "openPrice", "closePrice", "lv",
-                   "fee", "profit_Usdt", "rate", "slip", "margin_after", "funding_fee"]
+                   "fee", "profit_Usdt", "rate", "slip", "margin_after", "funding_fee",
+                   "total_notional"]
         def _funding_count(open_time, close_time) -> int:# 持仓期内覆盖的 8h 结算点次数
             ticks = pd.date_range(start=open_time.floor('D'), end=close_time.ceil('D'),freq=FUNDING_INTERVAL)
             return int(((ticks > open_time) & (ticks <= close_time)).sum())
@@ -95,13 +98,16 @@ class backTest(baseIndicators):
             fee = qty * eff_price * TAKER_FEE_RATE
             profit = (eff_price - avg_cost) * qty * sign
             return fee, profit
-        def _row(meta: dict, *, fee=0.0, profit=0.0, rate=0.0, slip=0.0, funding_fee=0.0) -> dict: #返回值 
-            return {**meta, "fee": fee, "profit_Usdt": profit, "rate": rate, "slip": slip, "margin_after": self.margin, "funding_fee": funding_fee}
+        def _row(meta: dict, *, fee=0.0, profit=0.0, rate=0.0, slip=0.0, funding_fee=0.0,
+                 total_notional=0.0) -> dict: #返回值
+            return {**meta, "fee": fee, "profit_Usdt": profit, "rate": rate, "slip": slip,
+                    "margin_after": self.margin, "funding_fee": funding_fee,
+                    "total_notional": total_notional}
 
         def _process_trajectory(trades: list, dir: str, equity: float) -> trajResult:
             add_behavior, sign = DIR_MAP[dir]
             qty = avg_cost = fee_total = realized_profit = 0.0
-            max_notional = used_margin_total = 0.0
+            max_notional = used_margin_total = total_notional = 0.0
             slip_sum, slip_count = 0.0, 0
             last_idx = len(trades) - 1
 
@@ -137,6 +143,8 @@ class backTest(baseIndicators):
                         qty = avg_cost = 0.0
                     # 注意：保证金未释放，rate 计算基于累计 used_margin_total
 
+                trade_notional = d_qty * eff_price if is_increase else close_qty * eff_price
+                total_notional += trade_notional
                 max_notional = max(max_notional, qty * eff_price)
 
             # 残留仓位强制平仓
@@ -148,6 +156,7 @@ class backTest(baseIndicators):
                 fee, profit = _close(qty, eff_price, avg_cost, sign)
                 fee_total += fee
                 realized_profit += profit
+                total_notional += qty * eff_price
                 qty = 0.0
 
             fee_funding = _funding_count(trades[0]["time"], trades[-1]["time"]) * max_notional * FUNDING_RATE_8H
@@ -155,7 +164,7 @@ class backTest(baseIndicators):
             profit_usdt = round(realized_profit - fee_total, 4)
             rate = round(profit_usdt / used_margin_total * 100, 2) if used_margin_total else 0.0
             avg_slip_pct = (round(slip_sum / slip_count, 6) * 100) if slip_count else 0.0
-            return trajResult(profit_usdt, fee_total, rate, used_margin_total, avg_slip_pct, fee_funding)
+            return trajResult(profit_usdt, fee_total, rate, used_margin_total, avg_slip_pct, fee_funding, total_notional)
         #logic
         rows, blowup = [], False
         for order in orders:
@@ -174,7 +183,12 @@ class backTest(baseIndicators):
                 blowup = True
 
             rows.append(_row(meta, fee=r.fee, profit=r.profit, rate=r.rate,
-                             slip=r.avg_slip_pct, funding_fee=r.funding_fee))
+                             slip=r.avg_slip_pct, funding_fee=r.funding_fee,
+                             total_notional=r.total_notional))
+
+        # 计算平均杠杆
+        lvs = [o["trades"][0]["lv"] for o in orders]
+        self.level = sum(lvs) / len(lvs) if lvs else self.level
 
         # 一次性构造 DataFrame，避免逐行 pd.concat 的 O(N²) 开销
         return pdData(columns, style='xml', data=rows)
@@ -184,11 +198,11 @@ class backTest(baseIndicators):
         n_trades = len(df)
         if n_trades == 0:
             return {
-                "基础数据": {"状态": "无交易记录"},
-                "过拟合过滤": {}, "成本后生存": {}, "收益属性质量": {}, "实盘耐受力": {}
+                "basic": {"status": "no_trades"},
+                "overfit_filter": {}, "post_cost_survival": {}, "return_quality": {}, "live_tolerance": {}
             }
 
-        # ---------- 衍生列 ----------
+        # ---------- derived columns ----------
         if "margin_after" not in df.columns:
             df["margin_after"] = self.principal * 0.95 + df["profit_Usdt"].cumsum()
 
@@ -207,10 +221,7 @@ class backTest(baseIndicators):
         margin_curve = df["margin_after"].values
         periods_per_year = n_trades / (total_days / 365.0) if total_days > 0 else n_trades
 
-        # ---------- 内部函数 ----------
-        def _norm_cdf(x: float) -> float:
-            return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
-
+        # ---------- inner functions ----------
         def _skewness(x: np.ndarray) -> float:
             n = len(x)
             if n < 3:
@@ -273,7 +284,7 @@ class backTest(baseIndicators):
             drawdowns = (equity - running_max) / running_max
             max_dd = float(drawdowns.min())
             trough_idx = int(drawdowns.argmin())
-            peak_vals = np.where(equity[:trough_idx + 1] == running_max[trough_idx])[0]
+            peak_vals = np.where(np.isclose(equity[:trough_idx + 1], running_max[trough_idx]))[0]
             peak_idx = int(peak_vals[-1]) if len(peak_vals) > 0 else trough_idx
             dd_duration = trough_idx - peak_idx
             recovery_days = None
@@ -284,44 +295,45 @@ class backTest(baseIndicators):
                     break
             return max_dd, dd_duration, recovery_days, drawdowns
 
-        def _deflated_sharpe_pval(returns: np.ndarray, ppy: float):
-            sr = _annual_sharpe(returns, ppy)
-            T = len(returns)
-            if T < 3:
-                return 1.0, sr
-            skew = _skewness(returns)
-            kurt = _kurtosis(returns)  # 超额峰度 (excess kurtosis)
-            SR_star = 0.0
-            # PSR 分母: sqrt(1 - γ3·SR + (γ4-1)/4 · SR²)
-            # γ4 = kurt + 3, 故 γ4-1 = kurt + 2
-            inner = 1.0 - skew * sr + (kurt + 2.0) / 4.0 * sr ** 2
-            if inner <= 0:
-                inner = 1.0  # 非正态修正失效时回退到正态假设
-            z_score = (sr - SR_star) * math.sqrt(T - 1) / math.sqrt(inner)
-            p_value = 1.0 - _norm_cdf(z_score)
-            return p_value, sr
+        def _deflated_sharpe_pval(returns: np.ndarray, ppy: float,
+                                   n_simulations: int = 1000,
+                                   block_size: int = None,
+                                   seed: int = 42):
+            """块状 bootstrap 通货紧缩夏普检验。
 
-        def _pbo_sharpe_stability(returns: np.ndarray) -> dict:
+            对零 alpha 序列做块抽样，每次模拟 n_strategies 个随机策略并取最大夏普，
+            构建经验分布后计算观测夏普的右尾 p 值。p 值越小越显著。
+            """
             n = len(returns)
-            mid = n // 2
-            if mid < 2:
-                return {"SR_first_half": None, "SR_second_half": None,
-                        "SR_ratio": None, "PBO_flag": "样本不足"}
-            r1, r2 = returns[:mid], returns[mid:]
-            std1, std2 = np.std(r1, ddof=1), np.std(r2, ddof=1)
-            sr1 = float(np.mean(r1) / std1) if std1 > 0 else 0.0
-            sr2 = float(np.mean(r2) / std2) if std2 > 0 else 0.0
-            sr_ratio = sr2 / sr1 if sr1 != 0 else None
-            if sr_ratio is None:
-                flag = "无法判定"
-            elif sr_ratio < 0:
-                flag = "严重衰减"
-            elif sr_ratio < 0.5:
-                flag = "衰减"
-            else:
-                flag = "稳定"
-            return {"SR_first_half": sr1, "SR_second_half": sr2,
-                    "SR_ratio": sr_ratio, "PBO_flag": flag}
+            sr_obs = _annual_sharpe(returns, ppy)
+            if n < 10 or sr_obs == 0.0:
+                return 1.0, sr_obs
+
+            rng = np.random.default_rng(seed)
+            if block_size is None:
+                block_size = max(2, int(np.sqrt(n)))
+
+            simulated_max_sr = np.zeros(n_simulations)
+            n_strategies = 100  # 数据挖掘广度
+            for i in range(n_simulations):
+                # 块抽样生成零均值序列
+                n_blocks = (n + block_size - 1) // block_size
+                blocks = [returns[rng.integers(0, n - block_size + 1):][:block_size]
+                          for _ in range(n_blocks)]
+                sim_zero = np.concatenate(blocks)[:n]
+                sim_zero = sim_zero - np.mean(sim_zero)
+
+                # 从该零均值序列中随机生成 n_strategies 个策略，取最大夏普
+                sharpes = []
+                for _ in range(n_strategies):
+                    idx = rng.integers(0, n, size=n)
+                    ret_rnd = sim_zero[idx]
+                    std_r = np.std(ret_rnd, ddof=1)
+                    sharpes.append(float(np.mean(ret_rnd) / std_r * np.sqrt(ppy)) if std_r > 0 else 0.0)
+                simulated_max_sr[i] = max(sharpes)
+
+            p_value = float(np.mean(simulated_max_sr >= sr_obs))
+            return p_value, sr_obs
 
         def _consecutive_streaks(returns: np.ndarray):
             max_wins, max_losses = 0, 0
@@ -337,23 +349,23 @@ class backTest(baseIndicators):
                     max_losses = max(max_losses, cur_losses)
             return max_wins, max_losses
 
-        def _rolling_sharpe_std(returns: np.ndarray, window: int = None) -> float:
+        def _rolling_sharpe_metrics(returns: np.ndarray, window: int = None):
             if window is None:
                 window = max(len(returns) // 5, 5)
             if len(returns) < window:
-                return 0.0
+                return 0.0, 0.0
             rolling = []
             for i in range(len(returns) - window + 1):
                 seg = returns[i:i + window]
                 seg_std = np.std(seg, ddof=1)
                 rolling.append(float(np.mean(seg) / seg_std) if seg_std > 0 else 0.0)
-            return float(np.std(rolling, ddof=1))
+            return float(np.std(rolling, ddof=1)), float(min(rolling))
 
         def _cost_stress_test(d: pd.DataFrame, multiplier: float = 2.0) -> float:
             extra_cost = (multiplier - 1.0) * (d["slip"] / 100.0) * d["margin_before"] * d["lv"]
             return float(d["profit_Usdt"].sum() - extra_cost.sum())
 
-        # ---------- 基础数据 ----------
+        # ---------- basic ----------
         final_margin = float(df["margin_after"].iloc[-1])
         net_profit = float(profit_series.sum())
         total_funding = float(df["funding_fee"].sum()) if "funding_fee" in df.columns else 0.0
@@ -361,61 +373,59 @@ class backTest(baseIndicators):
         win_rate = float((profit_series > 0).sum() / n_trades * 100)
 
         basic = {
-            "保证金": round(final_margin, 2),
-            "平均杠杆": self.level,
-            "初始本金": self.principal,
-            "剩余资金": round(self.principal + net_profit, 2),
-            "净利润": round(net_profit, 4),
-            "总手续费": round(total_trade_fee, 4),
-            "总资金费率": round(total_funding, 8),
-            "胜率": round(win_rate, 2),
-            "交易笔数": n_trades,
-            "交易天数": total_days,
+            "margin": round(final_margin, 2),
+            "leverage": self.level,
+            "initial_principal": self.principal,
+            "remaining_capital": round(self.principal + net_profit, 2),
+            "net_profit": round(net_profit, 4),
+            "total_trade_fee": round(total_trade_fee, 4),
+            "total_funding_fee": round(total_funding, 8),
+            "win_rate_pct": round(win_rate, 2),
+            "n_trades": n_trades,
+            "trading_days": total_days,
         }
 
-        # ---------- 过拟合过滤 ----------
+        # ---------- overfit filter ----------
         sr = _annual_sharpe(trade_return, periods_per_year)
         dsr_pval, dsr_val = _deflated_sharpe_pval(trade_return, periods_per_year)
-        pbo = _pbo_sharpe_stability(trade_return)
         cagr_val = _cagr(float(df["margin_before"].iloc[0]), float(df["margin_after"].iloc[-1]), total_days)
         max_dd_val, dd_dur, recovery_days, _ = _max_drawdown(margin_curve)
         calmar = _calmar_ratio(cagr_val, max_dd_val)
         sortino = _sortino_ratio(trade_return, periods_per_year)
 
         overfit = {
-            "夏普比率": round(sr, 4),
-            "Deflated_Sharpe": round(dsr_val, 4),
-            "Deflated_Sharpe_p值": round(dsr_pval, 6),
-            "PBO_前半段夏普": round(pbo["SR_first_half"], 4) if pbo["SR_first_half"] is not None else None,
-            "PBO_后半段夏普": round(pbo["SR_second_half"], 4) if pbo["SR_second_half"] is not None else None,
-            "PBO_衰减比": round(pbo["SR_ratio"], 4) if pbo["SR_ratio"] is not None else None,
-            "PBO_判定": pbo["PBO_flag"],
-            "卡尔玛比率": round(calmar, 4),
-            "索提诺比率": round(sortino, 4),
+            "sharpe_ratio": round(sr, 4),
+            "deflated_sharpe": round(dsr_val, 4),
+            "deflated_sharpe_pvalue": round(dsr_pval, 6),
+            "calmar_ratio": round(calmar, 4),
+            "sortino_ratio": round(sortino, 4),
         }
 
-        # ---------- 成本后生存 ----------
+        # ---------- post-cost survival ----------
         cvar_95 = _cvar(trade_return, 0.05)
         cvar_99 = _cvar(trade_return, 0.01)
 
+        # 完整的每日净值序列（含无交易日填前值），避免低估隔夜波动
         df["close_date"] = df["closeTime"].dt.date
-        daily_pnl = df.groupby("close_date")["profit_Usdt"].sum()
-        daily_margin = df.groupby("close_date")["margin_before"].first()
-        daily_ret = (daily_pnl / daily_margin).dropna()
+        daily_margin_last = df.groupby("close_date")["margin_after"].last()
+        full_dates = pd.date_range(start=daily_margin_last.index.min(),
+                                   end=daily_margin_last.index.max(), freq="D")
+        daily_nav = daily_margin_last.reindex(full_dates.date, method="ffill")
+        daily_ret = daily_nav.pct_change().dropna()
         daily_vol = float(np.std(daily_ret, ddof=1)) if len(daily_ret) > 1 else 0.0
         annual_vol = daily_vol * math.sqrt(365)
         vol_deviation = abs(annual_vol - 0.20) / 0.20 * 100 if annual_vol > 0 else None
 
         survival = {
-            "CVaR_95%": round(cvar_95, 6),
-            "CVaR_99%": round(cvar_99, 6),
-            "日波动率": round(daily_vol, 6),
-            "年化波动率": round(annual_vol, 4),
-            "目标波动率": 0.20,
-            "波动率偏差%": round(vol_deviation, 2) if vol_deviation is not None else "N/A",
+            "cvar_95_pct": round(-cvar_95 * 100, 2),
+            "cvar_99_pct": round(-cvar_99 * 100, 2),
+            "daily_volatility": round(daily_vol, 6),
+            "annual_volatility": round(annual_vol, 4),
+            "target_volatility": 0.20,
+            "volatility_deviation_pct": round(vol_deviation, 2) if vol_deviation is not None else "N/A",
         }
 
-        # ---------- 收益属性质量 ----------
+        # ---------- return quality ----------
         wins = df[df["profit_Usdt"] > 0]
         losses = df[df["profit_Usdt"] < 0]
         total_win = float(wins["profit_Usdt"].sum()) if len(wins) > 0 else 0.0
@@ -435,52 +445,116 @@ class backTest(baseIndicators):
         )
 
         quality = {
-            "盈利笔数": len(wins),
-            "亏损笔数": len(losses),
-            "总盈利金额": round(total_win, 4),
-            "总亏损金额": round(total_loss, 4),
-            "最大单笔盈利": round(float(wins["profit_Usdt"].max()), 4) if len(wins) > 0 else 0.0,
-            "最大单笔亏损": round(float(losses["profit_Usdt"].min()), 4) if len(losses) > 0 else 0.0,
-            "年化收益率_CAGR": round(cagr_val * 100, 2),
-            "总收益率%": round(total_return_pct, 2),
-            "盈亏比": round(abs(total_win / total_loss), 4) if total_loss != 0 else None,
-            "盈利因子": round(abs(total_win / total_loss), 4) if total_loss != 0 else None,
-            "收益分布偏度": round(_skewness(trade_return), 4),
-            "收益分布峰度": round(_kurtosis(trade_return), 4),
-            "月胜率%": round(month_win_rate, 2),
-            "周胜率%": round(week_win_rate, 2),
+            "win_count": len(wins),
+            "loss_count": len(losses),
+            "total_win_amount": round(total_win, 4),
+            "total_loss_amount": round(total_loss, 4),
+            "max_single_win": round(float(wins["profit_Usdt"].max()), 4) if len(wins) > 0 else 0.0,
+            "max_single_loss": round(float(losses["profit_Usdt"].min()), 4) if len(losses) > 0 else 0.0,
+            "cagr_pct": round(cagr_val * 100, 2),
+            "total_return_pct": round(total_return_pct, 2),
+            "win_loss_ratio": round(abs(total_win / total_loss), 4) if total_loss != 0 else None,
+            "profit_factor": round(abs(total_win / total_loss), 4) if total_loss != 0 else None,
+            "return_skewness": round(_skewness(trade_return), 4),
+            "return_kurtosis": round(_kurtosis(trade_return), 4),
+            "monthly_win_rate_pct": round(month_win_rate, 2),
+            "weekly_win_rate_pct": round(week_win_rate, 2),
         }
 
-        # ---------- 实盘耐受力 ----------
+        # ---------- turnover & capacity ----------
+        # 年化换手率 = 双边成交额 / 平均权益 × (365 / 回测天数)
+        total_notional = float(df["total_notional"].sum()) if "total_notional" in df.columns else 0.0
+        avg_margin = float(np.mean(margin_curve)) if len(margin_curve) > 0 else final_margin
+        turnover_rate = (total_notional / avg_margin * (365.0 / total_days)) if avg_margin > 0 else 0.0
+        capacity_estimate = avg_margin / max(turnover_rate, 0.01) if turnover_rate > 0 else None
+
+        # ---------- live tolerance ----------
         max_wins, max_losses = _consecutive_streaks(trade_return)
-        roll_sr_std = _rolling_sharpe_std(trade_return)
+        roll_sr_std, roll_sr_min = _rolling_sharpe_metrics(trade_return)
         stressed_profit = _cost_stress_test(df, 2.0)
 
+        # OOS: 样本内/外夏普衰减率 (IS_Sharpe - OOS_Sharpe) / IS_Sharpe
         mid = n_trades // 2
-        if mid >= 2:
-            first_half_ret = float(df["profit_Usdt"].iloc[:mid].sum() / df["margin_before"].iloc[0])
-            second_half_ret = float(df["profit_Usdt"].iloc[mid:].sum() / df["margin_after"].iloc[mid - 1])
-            oos_decay = second_half_ret / first_half_ret if first_half_ret != 0 else None
+        if mid >= 5:
+            is_ret = trade_return[:mid]
+            oos_ret = trade_return[mid:]
+            is_ppy = mid / max(total_days / 2.0 / 365.0, 0.01)
+            oos_ppy = (n_trades - mid) / max(total_days / 2.0 / 365.0, 0.01)
+            is_sr = _annual_sharpe(is_ret, is_ppy)
+            oos_sr = _annual_sharpe(oos_ret, oos_ppy)
+            oos_decay = (is_sr - oos_sr) / is_sr if is_sr != 0 else None
         else:
             oos_decay = None
 
         stress = {
-            "最大回撤%": round(abs(max_dd_val) * 100, 2),
-            "最大回撤_原始值": round(max_dd_val, 4),
-            "回撤持续笔数": dd_dur,
-            "恢复时间_天": recovery_days,
-            "成本压力_2x滑点后利润": round(stressed_profit, 4),
-            "成本压力_原始利润": round(net_profit, 4),
-            "滚动夏普标准差": round(roll_sr_std, 4),
-            "最长连胜": max_wins,
-            "最长连败": max_losses,
-            "OOS衰减率": round(oos_decay, 4) if oos_decay is not None else None,
+            "max_drawdown_pct": round(abs(max_dd_val) * 100, 2),
+            "max_drawdown": round(max_dd_val, 4),
+            "drawdown_duration_trades": dd_dur,
+            "recovery_days": recovery_days,
+            "turnover_rate_annual": round(turnover_rate, 4),
+            "capacity_estimate": round(capacity_estimate, 2) if capacity_estimate is not None else None,
+            "stress_2x_slip_profit": round(stressed_profit, 4),
+            "stress_original_profit": round(net_profit, 4),
+            "rolling_sharpe_std": round(roll_sr_std, 4),
+            "rolling_sharpe_min": round(roll_sr_min, 4),
+            "max_consecutive_wins": max_wins,
+            "max_consecutive_losses": max_losses,
+            "oos_sharpe_decay": round(oos_decay, 4) if oos_decay is not None else None,
         }
 
         return {
-            "基础数据": basic,
-            "过拟合过滤": overfit,
-            "成本后生存": survival,
-            "收益属性质量": quality,
-            "实盘耐受力": stress,
+            "basic": basic,
+            "overfit_filter": overfit,
+            "post_cost_survival": survival,
+            "return_quality": quality,
+            "live_tolerance": stress,
         }
+    
+    #概率过拟合 (Probability of Backtest Overfitting) 的 CSCV 实现,需要同策略异参数
+    def pbo_cscv(strategies_returns: list, n_blocks: int = 10,seed: int = 42) -> float:
+        if len(strategies_returns) < 2:
+            raise ValueError("PBO 至少需要 2 个策略来比较排名")
+        n_strategies = len(strategies_returns)
+        n = len(strategies_returns[0])
+        if n % n_blocks != 0:
+            # 简单截断到整除长度
+            valid_len = (n // n_blocks) * n_blocks
+            strategies_returns = [sr[:valid_len] for sr in strategies_returns]
+            n = valid_len
+
+        block_len = n // n_blocks
+        # 将每个策略的收益率转换为块和（或块夏普），这里用块内总收益率（或平均收益率）
+        block_returns = np.zeros((n_strategies, n_blocks))
+        for i, sr in enumerate(strategies_returns):
+            for b in range(n_blocks):
+                start = b * block_len
+                end = start + block_len
+                block_returns[i, b] = np.mean(sr[start:end])  # 块内平均收益，也可用夏普
+        
+        # 样本内块数为总块数的一半
+        n_is = n_blocks // 2
+        # 组合对称：枚举所有可能的样本内组合
+        from itertools import combinations
+        all_combos = list(combinations(range(n_blocks), n_is))
+        n_combos = len(all_combos)
+        
+        # 记录每个组合的样本内最优策略在样本外的相对排名
+        oos_ranks = np.zeros(n_combos)
+        
+        for c, is_blocks in enumerate(all_combos):
+            oos_blocks = [b for b in range(n_blocks) if b not in is_blocks]
+            # 样本内、外平均收益（或夏普）矩阵
+            is_avg = np.mean(block_returns[:, is_blocks], axis=1)  # (n_strategies,)
+            oos_avg = np.mean(block_returns[:, oos_blocks], axis=1)
+            
+            # 样本内最佳策略的索引
+            best_is_idx = np.argmax(is_avg)
+            # 该策略在样本外的排名（从大到小，1 为最优）
+            # 归一化排名 w̅ ∈ [0, 1]，0 表示最差，1 表示最优
+            order = np.argsort(oos_avg)   # 升序
+            rank = np.where(order == best_is_idx)[0][0] / (n_strategies - 1) if n_strategies > 1 else 0.5
+            oos_ranks[c] = rank
+        
+        # PBO = 样本内最优落在样本外后 50%（排名 < 0.5）的比例
+        pbo = np.mean(oos_ranks < 0.5)
+        return float(pbo)
