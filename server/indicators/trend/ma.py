@@ -1,4 +1,4 @@
-from indicators.baseIndicators import *
+from server.indicators.baseIndicators import *
 
 
 class ma(baseIndicators):
@@ -8,39 +8,69 @@ class ma(baseIndicators):
         self._pd.setHead(['candle_begin_time'])
 
     def delimit(self, **kWargs):
-        if kWargs.get('sma'):
-            self._sma = kWargs['sma']
-        if kWargs.get('ema'):
-            self._ema = kWargs['ema']
-        if kWargs.get('wma'):
-            self._wma = kWargs['wma']
-        if kWargs.get('tema'):
-            self._tema = kWargs['tema']
+        self._sma = kWargs.get('sma', self._sma)
+        self._ema = kWargs.get('ema', self._ema)
+        self._wma = kWargs.get('wma', self._wma)
+        self._tema = kWargs.get('tema', self._tema)
 
-    def calculate(self, pd, dense='', crossing=''):
-        self._pd.format(pd, style="copy")
+    def calculate(self, pd: pdData, dense='', crossing='') -> pdData:
+        return pdData(data=self._computeMa(pd, dense, crossing), style='copy')
+
+    def calculateTa(self, pd: pdData, dense='', crossing='') -> pdData:
+        return pdData(data=self._computeMaTa(pd, dense, crossing), style='copy')
+
+    def _computeMaTa(self, pd: pdData, dense='', crossing='') -> any:
+        pf = pd.copy()
+        pf_get = pf.get()
+        close = pd['close'].values
+        if self._sma:
+            for j in self._sma:
+                pf_get['sma_' + str(j)] = talib.SMA(close, timeperiod=j).round(2)
+        if self._ema:
+            for j in self._ema:
+                pf_get['ema_' + str(j)] = talib.EMA(close, timeperiod=j).round(2)
+        if self._wma:
+            for j in self._wma:
+                pf_get['wma_' + str(j)] = talib.WMA(close, timeperiod=j).round(2)
+        if self._tema:
+            for j in self._tema:
+                pf_get['tema_' + str(j)] = talib.TEMA(close, timeperiod=j).round(2)
+        if dense != '':
+            if dense == "esma" or dense == "sema":
+                sdf = self.esDense("sma")
+                edf = self.esDense("ema")
+                pf_get['dense'] = round((sdf + edf) * 0.5, 2)
+            else:
+                pf_get['dense'] = self.dense(dense)
+        if crossing != '':
+            self.cross(crossing)
+        return pf
+
+    def _computeMa(self, pd: pdData, dense='', crossing='') -> any:
+        pf = pd.copy()
         unit = [{'name': "sma_", "v": self._sma, "fn": self.sma},
                 {'name': "ema_", "v": self._ema, "fn": self.ema},
                 {'name': "wma_", "v": self._wma, "fn": self.wma},
                 {'name': "tema_", "v": self._tema, "fn": self.tema}]
+        pf_get = pf.get()
         for i in range(len(unit)):
             ind = unit[i]
             if ind['v']:
                 for j in ind['v']:
                     lable = ind['name'] + str(j)
-                    self._pd.get()[lable] = round(ind['fn'](pd['close'], j), 2)
+                    pf_get[lable] = round(ind['fn'](pd['close'], j), 2)
         # 计算密度
         if dense != '':
             if dense == "esma" or dense == "sema":
                 sdf = self.esDense("sma")
                 edf = self.esDense("ema")
-                self._pd.get()['dense'] = round((sdf + edf) * 0.5, 2)
+                pf_get['dense'] = round((sdf + edf) * 0.5, 2)
             else:
-                self._pd.get()['dense'] = self.dense(dense)
+                pf_get['dense'] = self.dense(dense)
         # 检测交叉
-        if crossing == '':
-            return
-        self.cross(crossing)
+        if crossing != '':
+            self.cross(crossing)
+        return pf
 
     # 简单移动平均线 (SMA)
     def sma(self, data, period):

@@ -334,8 +334,26 @@ class orderFlow(baseIndicators):
         print(sw)
         # print(support_resist)
 
-    def calculate(self, pd):
-        pass
+    def calculate(self, pd: pdData) -> pdData:
+        """从逐笔成交数据计算订单流指标
+
+        输入 pd 需包含列: price, qty, side (buy/sell)
+        输出: cvd (累计成交量差), delta (每笔量差), buy_ratio (买方占比)
+        """
+        pf = pd.copy()
+        df = pf.get()
+        if 'side' not in df.columns or 'qty' not in df.columns:
+            return pf
+        df['delta'] = df['qty'].where(df['side'] == 'buy', -df['qty'])
+        pf['cvd'] = df['delta'].cumsum().round(4)
+        buy_vol = df['qty'].where(df['side'] == 'buy', 0).cumsum()
+        sell_vol = df['qty'].where(df['side'] == 'sell', 0).cumsum()
+        total_vol = buy_vol + sell_vol
+        pf['buy_ratio'] = (buy_vol / total_vol.replace(0, np.nan)).round(4)
+        return pf
+
+    def calculateTa(self, pd: pdData) -> pdData:
+        return self.calculate(pd)
 
     # 默认指标
     # _maDay = 30  		#均线：交易时间线，股票是20天，币是30天

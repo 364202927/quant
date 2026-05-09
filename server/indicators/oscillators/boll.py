@@ -1,5 +1,4 @@
 from server.indicators.baseIndicators import *
-import talib
 
 # 使用方法
 # 1.布林带更多是用来预测趋势，不要用来抓反转
@@ -25,8 +24,7 @@ import talib
 
 
 class boll(baseIndicators):
-    """布林线指标 (Bollinger Bands)
-
+    """
     参数:
     - maDay: 均线周期（默认30，股票用20，币用30）
     - stDev: 标准差倍数（默认2，越大开口越阔）
@@ -35,56 +33,46 @@ class boll(baseIndicators):
     def init(self) -> None:
         self._maDay = 30  # 均线：交易时间线，股票是20天，币是30天
         self._stDev = 2   # 标准差：数字越大开口越阔，触发的信号越不频繁
-        self._pd.setHead(['candle_begin_time', "median",
-                         "std", "upper", "lower", 'bbw', '%B'])
 
     def delimit(self, **kwargs) -> None:
         self._maDay = kwargs.get('maDay', self._maDay)
         self._stDev = kwargs.get('stDev', self._stDev)
 
-    def calculate(self, pd: pdData) -> 'pdData':
-        self._pd.format(pd, style="copy")
-        self._bollTrack(pd)
-        return self._pd
+    def calculate(self, pd: pdData) -> pdData:
+        return pdData(data=self._bollTrack(pd), style='copy')
+    def calculateTa(self, pd: pdData) -> pdData:
+        return pdData(data=self._taBoll(pd), style='copy')
 
-    def calculateTa(self, pd: pdData) -> 'pdData':
-        self._pd.format(pd, style="copy")
-        self._taBoll(pd)
-        return self._pd
-
-    def _bollTrack(self, sor_pd: pdData) -> None:
-        pf = self._pd.get()
+    def _bollTrack(self, sor_pd: pdData) -> any:
+        pf = sor_pd.copy()
+        sor_pd = sor_pd.get()
         close = sor_pd['close']
-        # 均线
         pf['median'] = close.rolling(window=self._maDay).mean()
-        # 标准差
         pf['std'] = close.rolling(window=self._maDay).std(ddof=0)
-        # 上下轨
         pf['upper'] = pf['median'] + self._stDev * pf['std']
         pf['lower'] = pf['median'] - self._stDev * pf['std']
-        # boll宽度
+        # boll宽度,%B,布林带趋势
         pf['bbw'] = (pf['upper'] - pf['lower']) / pf['median']
-        # %B
         pf['%B'] = (close - pf['lower']) / (pf['upper'] - pf['lower'])
-        # 布林带趋势
         pf['BBTrend'] = np.where(close > pf['upper'], 2,           # 强烈上升
                                  np.where(close > pf['median'], 1,  # 上升
                                           np.where(close > pf['lower'], -1,  # 下降
                                                    -2)))            # 强烈下降
+        return pf
 
-    def _taBoll(self, sor_pd: pdData) -> None:
-        pf = self._pd.get()
+    def _taBoll(self, sor_pd: pdData) -> any:
+        pf = sor_pd.copy()
+        sor_pd = sor_pd.get()
         close = sor_pd['close'].values
         upper, median, lower = talib.BBANDS(close, timeperiod=self._maDay, nbdevup=self._stDev, nbdevdn=self._stDev, matype=0)
         pf['median'] = median
         pf['std'] = (upper - median) / self._stDev
         pf['upper'] = upper
         pf['lower'] = lower
-        # boll宽度
+        # boll宽度,%B,布林带趋势
         pf['bbw'] = (upper - lower) / median
-        # %B
         pf['%B'] = (sor_pd['close'].values - lower) / (upper - lower)
-        # 布林带趋势
         pf['BBTrend'] = np.where(sor_pd['close'].values > upper, 2,
                                  np.where(sor_pd['close'].values > median, 1,
                                           np.where(sor_pd['close'].values > lower, -1, -2)))
+        return pf

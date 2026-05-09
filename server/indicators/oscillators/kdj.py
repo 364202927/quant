@@ -1,4 +1,4 @@
-from indicators.baseIndicators import *
+from server.indicators.baseIndicators import *
 # K：反映短期市场波动，是最敏感的一条线。 D：反映中期市场波动，较为平滑，是K线的移动平均线。J：反映K线和D线的离差，波动最为剧烈。
 # 超买超卖判断：K值在80以上为超买区，20以下为超卖区。
 # 金叉和死叉：K线向上穿过D线时，形成金叉，通常是买入信号。K线向下穿过D线时，形成死叉，通常是卖出信号。
@@ -21,42 +21,46 @@ class kdj(baseIndicators):
         self._pd.setHead(['candle_begin_time', 'k', 'd', 'j'])
 
     def delimit(self, **kWargs):
-        if kWargs.get('period'):
-            self._period = kWargs['period']
-        if kWargs.get('signal'):
-            self._signal = kWargs['signal']
+        self._period = kWargs.get('period', self._period)
+        self._signal = kWargs.get('signal', self._signal)
 
-    def calculate(self, pd):
-        self._pd.format(pd, style="copy")
-        self._kdjTrack(pd)
-        # self._taKdj(pd)
-        return self._pd
+    def calculate(self, pd: pdData) -> pdData:
+        return pdData(data=self._kdjTrack(pd), style='copy')
 
-    def _kdjTrack(self, sor_pd):
-        pf = self._pd.get()
+    def calculateTa(self, pd: pdData) -> pdData:
+        return pdData(data=self._taKdj(pd), style='copy')
+
+    def _kdjTrack(self, sor_pd: pdData) -> any:
+        pf = sor_pd.copy()
+        sor_pd = sor_pd.get()
         low_min = sor_pd['low'].rolling(
             window=self._period, min_periods=1).min()
         high_max = sor_pd['high'].rolling(
             window=self._period, min_periods=1).max()
         rev = (sor_pd['close'] - low_min) / \
             (high_max - low_min) * 100  # 未成熟随机数
-        pf['k'] = rev.ewm(com=self._signal, adjust=False).mean()
+        alpha = 1.0 / self._signal
+        pf['k'] = rev.ewm(alpha=alpha, adjust=False).mean()
         pf['k'] = pf['k'].round(1)
-        pf['d'] = pf['k'].ewm(com=self._signal, adjust=False).mean()
+        pf['d'] = pf['k'].ewm(alpha=alpha, adjust=False).mean()
         pf['d'] = pf['d'].round(1)
         pf['j'] = 3 * pf['k'] - 2 * pf['d']
         pf['j'] = pf['j'].round(1)
+        return pf
 
-    def _taKdj(self, sor_pd):
-        pf = self._pd.get()
-        rsv = ta.momentum.stoch(
+    def _taKdj(self, sor_pd: pdData) -> any:
+        pf = sor_pd.copy()
+        sor_pd = sor_pd.get()
+        rsv = talib.momentum.stoch(
             sor_pd['high'],
             sor_pd['low'],
             sor_pd['close'],
             window=self._period)
-        pf['k'] = rsv.ewm(com=self._signal, adjust=False).mean()
+        alpha = 1.0 / self._signal
+        pf['k'] = rsv.ewm(alpha=alpha, adjust=False).mean()
         pf['k'] = pf['k'].round(1)
-        pf['d'] = pf['k'].ewm(com=self._signal, adjust=False).mean()
+        pf['d'] = pf['k'].ewm(alpha=alpha, adjust=False).mean()
         pf['d'] = pf['d'].round(1)
         pf['j'] = 3 * pf['k'] - 2 * pf['d']
         pf['j'] = pf['j'].round(1)
+        return pf

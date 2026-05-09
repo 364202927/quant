@@ -32,26 +32,21 @@ class macd(baseIndicators):
         self._fast = 12    # 快速EMA周期
         self._slow = 26    # 慢速EMA周期
         self._signal = 9   # 信号线EMA周期
-        self._pd.setHead(['candle_begin_time', 'dif', 'dea', 'macd'])
 
     def delimit(self, **kwargs) -> None:
         self._fast = kwargs.get('fast', self._fast)
         self._slow = kwargs.get('slow', self._slow)
         self._signal = kwargs.get('signal', self._signal)
 
-    def calculate(self, pd: pdData) -> 'pdData':
-        self._pd.format(pd, style="copy")
-        self._macdTrack(pd)
-        return self._pd
+    def calculate(self, pd: pdData) -> pdData:
+        return pdData(data=self._macdTrack(pd), style='copy')
 
-    def calculateTa(self, pd: pdData) -> 'pdData':
-        self._pd.format(pd, style="copy")
-        self._taMacd(pd)
-        return self._pd
+    def calculateTa(self, pd: pdData) -> pdData:
+        return pdData(data=self._taMacd(pd), style='copy')
 
-    def _macdTrack(self, sor_pd: pdData) -> None:
-        """自写算法计算MACD"""
-        pf = self._pd.get()
+    def _macdTrack(self, sor_pd: pdData) -> any:
+        pf = sor_pd.copy()
+        sor_pd = sor_pd.get()
         close = sor_pd['close']
         # DIF = 快EMA - 慢EMA
         dif = close.ewm(span=self._fast, adjust=False).mean() - close.ewm(span=self._slow, adjust=False).mean()
@@ -59,12 +54,14 @@ class macd(baseIndicators):
         pf['dif'] = dif.round(2)
         pf['dea'] = dea.round(2)
         pf['macd'] = (2 * (dif - dea)).round(2)
+        return pf
 
-    def _taMacd(self, sor_pd: pdData) -> None:
-        """使用talib计算MACD"""
-        pf = self._pd.get()
+    def _taMacd(self, sor_pd: pdData) -> any:
+        pf = sor_pd.copy()
+        sor_pd = sor_pd.get()
         dif, dea, hist = talib.MACD(sor_pd['close'].values, fastperiod=self._fast, slowperiod=self._slow, signalperiod=self._signal)
         pf['dif'] = pd.Series(dif).round(2).values
         pf['dea'] = pd.Series(dea).round(2).values
         # talib返回的histogram是(DIF-DEA)，乘以2得到标准MACD
         pf['macd'] = pd.Series(hist * 2).round(2).values
+        return pf

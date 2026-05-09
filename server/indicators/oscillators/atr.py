@@ -21,24 +21,19 @@ class atr(baseIndicators):
 
     def init(self) -> None:
         self._period = 14
-        self._pd.setHead(['candle_begin_time', 'tr', 'atr'])
 
     def delimit(self, **kwargs) -> None:
         self._period = kwargs.get('period', self._period)
 
-    def calculate(self, pd: pdData) -> 'pdData':
-        self._pd.format(pd, style="copy")
-        self._atrTrack(pd)
-        return self._pd
+    def calculate(self, pd: pdData) -> pdData:
+        return pdData(data=self._atrTrack(pd), style='copy')
 
-    def calculateTa(self, pd: pdData) -> 'pdData':
-        self._pd.format(pd, style="copy")
-        self._taAtr(pd)
-        return self._pd
+    def calculateTa(self, pd: pdData) -> pdData:
+        return pdData(data=self._taAtr(pd), style='copy')
 
-    def _atrTrack(self, sor_pd: pdData) -> None:
-        """自写算法计算ATR"""
-        pf = self._pd.get()
+    def _atrTrack(self, sor_pd: pdData) -> any:
+        pf = sor_pd.copy()
+        sor_pd = sor_pd.get()
         prev_close = sor_pd['close'].shift()
         # 计算真实波幅(TR): max(high-low, |high-prev_close|, |low-prev_close|)
         tr = np.maximum(
@@ -46,11 +41,14 @@ class atr(baseIndicators):
             np.maximum(np.abs(sor_pd['high'] - prev_close), np.abs(sor_pd['low'] - prev_close))
         )
         pf['tr'] = tr
-        pf['atr'] = tr.ewm(span=self._period, adjust=False).mean().round(2)
+        alpha = 1.0 / self._period
+        pf['atr'] = tr.ewm(alpha=alpha, adjust=False).mean().round(2)
+        return pf
 
-    def _taAtr(self, sor_pd: pdData) -> None:
-        """使用talib计算ATR"""
-        pf = self._pd.get()
+    def _taAtr(self, sor_pd: pdData) -> any:
+        pf = sor_pd.copy()
+        sor_pd = sor_pd.get()
         high, low, close = sor_pd['high'].values, sor_pd['low'].values, sor_pd['close'].values
         pf['tr'] = talib.TRANGE(high, low, close)
         pf['atr'] = talib.ATR(high, low, close, timeperiod=self._period)
+        return pf
