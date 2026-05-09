@@ -1,13 +1,10 @@
 from server.indicators.baseIndicators import *
 from server.market.consts import kLong,kShort,kBuy,kSell
 from typing import NamedTuple
-# open_eff,close时添加冲击成本价,模拟资金量大的情况下对市场的影响
+# todo:open_eff,close时添加冲击成本价,模拟资金量大的情况下对市场的影响
+# todo:当前只实现了单条交易估计,多条交易轨迹相交没做
+# todo:后面添加type 对现货,股票,永续合约的回测
 
-# todo:改版添加指标
-# 1.当前的币和收益做一个总收益率
-# 2.月度表现
-# 3.风险等级评分
-# 4.最大回撤，日，周，历史
 Year = 365  # 每一年有几天开盘，若是股票252天
 
 
@@ -94,18 +91,15 @@ class backTest(baseIndicators):
         def _funding_count(open_time, close_time) -> int:# 持仓期内覆盖的 8h 结算点次数
             ticks = pd.date_range(start=open_time.floor('D'), end=close_time.ceil('D'),freq=FUNDING_INTERVAL)
             return int(((ticks > open_time) & (ticks <= close_time)).sum())
-
         def _close(qty: float, eff_price: float, avg_cost: float, sign: int):# 平仓 qty 张：返回 (手续费, 已实现盈亏)
             fee = qty * eff_price * TAKER_FEE_RATE
             profit = (eff_price - avg_cost) * qty * sign
             return fee, profit
+        def _row(meta: dict, *, fee=0.0, profit=0.0, rate=0.0, slip=0.0, funding_fee=0.0) -> dict: #返回值 
+            return {**meta, "fee": fee, "profit_Usdt": profit, "rate": rate, "slip": slip, "margin_after": self.margin, "funding_fee": funding_fee}
 
         def _process_trajectory(trades: list, dir: str, equity: float) -> trajResult:
-            try:
-                add_behavior, sign = DIR_MAP[dir]
-            except KeyError as e:
-                raise ValueError(f"Unknown dir: {dir}") from e
-
+            add_behavior, sign = DIR_MAP[dir]
             qty = avg_cost = fee_total = realized_profit = 0.0
             max_notional = used_margin_total = 0.0
             slip_sum, slip_count = 0.0, 0
@@ -162,11 +156,7 @@ class backTest(baseIndicators):
             rate = round(profit_usdt / used_margin_total * 100, 2) if used_margin_total else 0.0
             avg_slip_pct = (round(slip_sum / slip_count, 6) * 100) if slip_count else 0.0
             return trajResult(profit_usdt, fee_total, rate, used_margin_total, avg_slip_pct, fee_funding)
-
-        def _row(meta: dict, *, fee=0.0, profit=0.0, rate=0.0, slip=0.0, funding_fee=0.0) -> dict:
-            return {**meta, "fee": fee, "profit_Usdt": profit, "rate": rate,
-                    "slip": slip, "margin_after": self.margin, "funding_fee": funding_fee}
-
+        #logic
         rows, blowup = [], False
         for order in orders:
             first, last = order["trades"][0], order["trades"][-1]
@@ -372,7 +362,7 @@ class backTest(baseIndicators):
 
         basic = {
             "保证金": round(final_margin, 2),
-            "杠杆": self.level,
+            "平均杠杆": self.level,
             "初始本金": self.principal,
             "剩余资金": round(self.principal + net_profit, 2),
             "净利润": round(net_profit, 4),
