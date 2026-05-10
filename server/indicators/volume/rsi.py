@@ -31,35 +31,34 @@ class rsi(baseIndicators):
 
     def init(self) -> None:
         self._period = 14
-        self._pd.setHead(['candle_begin_time', 'rsi'])
 
     def delimit(self, **kwargs) -> None:
         self._period = kwargs.get('period', self._period)
 
-    def calculate(self, pd: pdData) -> 'pdData':
-        self._pd.format(pd, style="copy")
-        self._rsiTrack(pd)
-        return self._pd
+    def calculate(self, pd: pdData) -> pdData:
+        return pdData(data=self._rsiTrack(pd), style='copy')
 
-    def calculateTa(self, pd: pdData) -> 'pdData':
-        self._pd.format(pd, style="copy")
-        self._taRsi(pd)
-        return self._pd
+    def calculateTa(self, pd: pdData) -> pdData:
+        return pdData(data=self._taRsi(pd), style='copy')
 
-    def _rsiTrack(self, sor_pd: pdData) -> None:
-        """自写算法计算RSI"""
-        pf = self._pd.get()
+    def _rsiTrack(self, sor_pd: pdData) -> any:
+        pf = sor_pd.copy()
+        sor_pd = sor_pd.get()
         delta = sor_pd['close'].diff()
         # 向量化计算收益和损失
         gain = delta.clip(lower=0)
         loss = (-delta).clip(lower=0)
-        # EMA平滑
-        avg_gain = gain.ewm(span=self._period, adjust=False).mean()
-        avg_loss = loss.ewm(span=self._period, adjust=False).mean()
+        # Wilder's smoothing (alpha = 1/period)
+        alpha = 1.0 / self._period
+        avg_gain = gain.ewm(alpha=alpha, adjust=False).mean()
+        avg_loss = loss.ewm(alpha=alpha, adjust=False).mean()
         # RSI = 100 - 100/(1 + RS), RS = avg_gain/avg_loss
-        pf['rsi'] = (100 - (100 / (1 + avg_gain / avg_loss))).round(2)
+        rs = avg_gain / avg_loss.replace(0, np.nan)
+        pf['rsi'] = (100 - (100 / (1 + rs))).round(2)
+        return pf
 
-    def _taRsi(self, sor_pd: pdData) -> None:
-        """使用talib计算RSI"""
-        pf = self._pd.get()
+    def _taRsi(self, sor_pd: pdData) -> any:
+        pf = sor_pd.copy()
+        sor_pd = sor_pd.get()
         pf['rsi'] = talib.RSI(sor_pd['close'].values, timeperiod=self._period).round(2)
+        return pf
