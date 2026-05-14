@@ -5,7 +5,7 @@ kMaxSleepTime = 60  # 最大休眠时间60秒
 
 class schedule:
     def __init__(self, timeKey):
-        def _parseTime(s: str):
+        def _parseTime(s: str): #日期转换
             now = datetime.now()
             if ':' not in s:
                 return now, s
@@ -30,7 +30,7 @@ class schedule:
         self.__interval = timeFrame2Float(interval) # 间隔时间转换
         # print("~~~~interval~~~~",self.__interval,float(timeKey[:-1]),eTimeTs[timeKey[-1]])
         self.__nextRun = self._nextTime(beginData)
-        log(f"Schedule::",timeKey, '  ',datetime.now().strftime('%m-%d %H:%M:%S'),'  next=',self.__nextRun.strftime('%m-%d %H:%M:%S'))
+        # log(f"Schedule::",timeKey, '  ',datetime.now().strftime('%m-%d %H:%M:%S'),'  next=',self.__nextRun.strftime('%m-%d %H:%M:%S'))
 
     #下次触发时间
     def _nextTime(self,t = datetime.now()):

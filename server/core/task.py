@@ -36,7 +36,8 @@ class task:
                        'id': self.__id,
                        'className': self.__handle.className(),
                        'info': self.info,
-                       'name': self.__doc__},
+                       'name': self.__doc__,
+                       'active':self.isActive},
                       key=key)
 
     def bind(self, className: str):

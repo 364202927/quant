@@ -1,23 +1,26 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent } from 'vue'
-import type { MenuItem } from '../types'
+import { type MenuItem, eMenuId } from '../types'
+import uiLog from './uiLog.vue'
 
 // 页面映射
 const PageMarket = defineAsyncComponent(() => import('./pages/PageMarket.vue'))
 const PageStrategy = defineAsyncComponent(() => import('./pages/PageStrategy.vue'))
 const PageBacktest = defineAsyncComponent(() => import('./pages/PageBacktest.vue'))
 const PageOrders = defineAsyncComponent(() => import('./pages/PageOrders.vue'))
+const PageAssets = defineAsyncComponent(() => import('./pages/PageAssets.vue'))
 const PageSettings = defineAsyncComponent(() => import('./pages/PageSettings.vue'))
-const pageComponents: Record<number, ReturnType<typeof defineAsyncComponent>> = {
-  1: PageMarket,
-  2: PageStrategy,
-  3: PageBacktest,
-  4: PageOrders,
-  5: PageSettings
+const pageComponents: Record<eMenuId, ReturnType<typeof defineAsyncComponent>> = {
+  [eMenuId.eAssets]: PageAssets,
+  [eMenuId.eMarket]: PageMarket,
+  [eMenuId.eStrategy]: PageStrategy,
+  [eMenuId.eBacktest]: PageBacktest,
+  [eMenuId.eOrders]: PageOrders,
+  [eMenuId.eSettings]: PageSettings
 }
 
 // 当前页面组件
-const props = defineProps<{activeItem: MenuItem}>()
+const props = defineProps<{ activeItem: MenuItem }>()
 const currentPage = computed(() => pageComponents[props.activeItem.id])
 
 </script>
@@ -30,19 +33,22 @@ const currentPage = computed(() => pageComponents[props.activeItem.id])
     </header>
 
     <!-- 内容区域 -->
-    <div class="flex-1 overflow-hidden">
-      <Suspense>
-        <template #default>
-          <KeepAlive>
-            <component :is="currentPage" :key="activeItem.id" />
-          </KeepAlive>
-        </template>
-        <template #fallback>
-          <div class="h-full flex items-center justify-center">
-            <div class="text-gray-500">加载中...</div>
-          </div>
-        </template>
-      </Suspense>
+    <div class="flex-1 overflow-hidden flex min-h-0">
+      <div class="flex-1 overflow-hidden">
+        <Suspense>
+          <template #default>
+            <KeepAlive>
+              <component :is="currentPage" :key="activeItem.id" />
+            </KeepAlive>
+          </template>
+          <template #fallback>
+            <div class="h-full flex items-center justify-center">
+              <div class="text-gray-500">加载中...</div>
+            </div>
+          </template>
+        </Suspense>
+      </div>
+      <uiLog />
     </div>
   </main>
 </template>

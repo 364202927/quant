@@ -1,7 +1,7 @@
-import pickle,json,time,os,requests,inspect,asyncio,inspect,gzip,pathlib
+import pickle,json,time,os,requests,inspect,asyncio,inspect,gzip,webbrowser,sys
 from importlib import import_module
 from pydispatch import dispatcher
-from server.utils import eTimeTs
+from server.utils import eTimeTs,kEvt_Web
 from datetime import datetime, timezone
 from pathlib import Path
 import pandas as pd
@@ -345,6 +345,14 @@ def require(modPath):
     except AttributeError:
         print(className, "类创建失败，请检查路径", mod)
     return obj
+
+def openWeb(page = 0):
+        evtFire(kEvt_Web, 10, page)
+        if sys.platform.startswith("darwin"):#macos
+            safari = webbrowser.get('safari')
+            safari.open('http://localhost:5173/')
+            return
+        webbrowser.open('http://localhost:5173/')
 
 # 并行
 # def pool(fnCall, valueList, count = 2):

@@ -30,20 +30,14 @@ class quant:
             print(">>", key, self.__taskMgr[key])
         print('==================')
     
-    async def get_all_tasks_status(self) -> Dict[str, Any]:
-        """线程安全获取所有任务状态"""
-        # async with self.__lock:
-        #     return {
-        #         task_name: {
-        #             'state': task.state(),
-        #             'info': task.get('info'),
-        #             'id': task.get('id'),
-        #             'className': task.get('className')
-        #         }
-        #         for task_name, task in self.__taskMgr.items()
-        #     }
+    def getAllTasks(self):
+        taslList = []
+        for name, task in self.__taskMgr.items():
+            if task.get('active'):
+                taslList.append(name)
+        return taslList
     
-    async def get_task_status(self, task_name: str) -> Optional[Dict[str, Any]]:
+    async def get_task_status(self, task_name: str):
         """获取单个任务状态"""
         # async with self.__lock:
         #     objTask = self.__taskMgr.get(task_name)
@@ -116,7 +110,7 @@ class quant:
             objTask = task()
             if not objTask.bind(strategyName):
                 continue
-            self.__taskMgr[objTask.get("className")] = task
+            self.__taskMgr[objTask.get("className")] = objTask
 
     # 加载strategy文件下全部策略
     def loadTask(self, projectName):

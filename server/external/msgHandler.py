@@ -1,12 +1,28 @@
 from server.core.quant import quant
-from server.utils import eMsgId,switchFn
+from server.utils import switchFn,evtConnect,kEvt_Web
 from server.utils.fileConfig import g_config
+
+eMsgId = {
+    #set数据,内部通知
+    'sPage':10,
+
+    #get数据，获取信息
+    'eWebInit':1000, #web初始化
+    'ePage_k':1001,  #行情page 
+    'ePage_cta':1002, #策略管理page
+    'ePage_test':1003, #回测page
+    'ePage_order':1004, #订单管理
+    #save数据，设置信息
+    'eSaveFile':10000, #保存
+}
 
 class msgHandler:
     "消息事件处理器"
     
     def __init__(self, objQuant:quant):
-        self.__instance = objQuant
+        self.__instance = objQuant   #quant
+        self.__page = 0
+        evtConnect(kEvt_Web, self)
     
     def idTransform(self, id, msg):
         def initWeb():
@@ -18,7 +34,8 @@ class msgHandler:
                 "ccxtRetry": info.get("ccxtRetry", 3),
                 "console_e": bool(external.get("console", {}).get("enable", 0)),
                 "tg_e": bool(external.get("tg", {}).get("enable", 0)),
-                "feishu_e": bool(external.get("feishu", {}).get("enable", 0))
+                "feishu_e": bool(external.get("feishu", {}).get("enable", 0)),
+                'page': self.__page
             }
             apiKey = {
                 "market": g_config.marketsApi(),
@@ -30,11 +47,11 @@ class msgHandler:
             return {"user": user, "apiKey": apiKey}
         def initMarketTrends():
             return
-        def startFile():
+        def initStartFile():
             return
-        def backtesting():
-            return
-        def orders():
+        def initBacktesting():
+            return self.__instance.getAllTasks()
+        def initOrders():
             return
         def saveConfig():#保存设置
             g_config.setConfig(msg[0])
@@ -43,9 +60,9 @@ class msgHandler:
             return
         return switchFn({eMsgId['eWebInit']: initWeb,
                         eMsgId['ePage_k']: initMarketTrends,
-                        eMsgId['ePage_cta']:startFile,
-                        eMsgId['ePage_test']:backtesting,
-                        eMsgId['ePage_order']:orders,
+                        eMsgId['ePage_cta']:initStartFile,
+                        eMsgId['ePage_test']:initBacktesting,
+                        eMsgId['ePage_order']:initOrders,
                         eMsgId['eSaveFile']:saveConfig},
                         key=id)
 
@@ -54,3 +71,11 @@ class msgHandler:
         print(f"~~~~~~~~~~[消息处理]~~~~~~~~ 消息ID: {id}, 参数: {msg}")
         rt = self.idTransform(id,msg)
         return rt
+    
+    #evt消息
+    def evtProcess(self, key, *args):
+        id = args[0]
+        def setPage():
+            self.__page = args[1]
+        return switchFn({eMsgId['sPage']: setPage,
+                         },key=id)

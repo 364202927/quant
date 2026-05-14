@@ -6,10 +6,36 @@ class testCTA(baseCTA):
     
     def __init__(self):
         super().__init__()
-        # self.regTime('0.2s')
+        print("~~~~~~testCTA __init__~~~~~~~~~")
 
+    #增量测试,每次时间刷新触发k线改变
+    def testModel(self,testPd:pdData, startCount=100):
+        self.regTime('0.1s')
+
+    #type(contract/spot/stock)合约/现货/股票
+    def createTransaction(self, type: str = 'contract') -> None:
+        self.trajectories: list[dict] = []
+        self.type = type
+    def addTransaction(self, dir: str, behavior: str, lv: int, idx: int, position: int) -> None:
+        trade = {"behavior": behavior, "pos": idx, "lv": lv, "position%": position}
+        # 找同方向最后一条仅有 1 笔的 trajectory（待平仓）
+        for item in reversed(self.trajectories):
+            if item["dir"] == dir and (len(item["trades"]) > 0 and item["trades"][-1].get('position%')!= 100):
+                item["trades"].append(trade)
+                return
+            
+        # 未找到待平仓 → 新开仓 trajectory
+        self.trajectories.append({ "dir": dir,"type": self.type, "trades": [trade]})
     
-    # # 增量测试:对原始数据进行剪裁,每次update发送测试的数据
+    def getTransaction(self):
+        return self.trajectories
+    def getTradesCount(self):
+        count = 0
+        for tra in self.trajectories:
+            count += len(tra.get('trades'))
+        return count
+
+   # # 增量测试:对原始数据进行剪裁,每次update发送测试的数据
     # def incrementalTesting(self, pdData, startCount=100, closeCount=-1):  
     #     self.__testCount = startCount
     #     self.__testData = pdData
@@ -64,14 +90,7 @@ class testCTA(baseCTA):
     #         return open_dir[0]['idx']
     #     return 0
     
-
-
     # 继承,测试函数
     # def testSignal(self, pf, count): pass  # 信号
     # def testEnd(self, orders): pass  # 测试结束
     # def evtTime(self, timeKey): pass  # 时间事件统一接收
-
-    #增量测试,每次时间刷新触发k线改变
-    def testModel(self,testPd:pdData, startCount=100):
-        self.regTime('0.1s')
-        pass

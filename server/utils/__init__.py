@@ -17,19 +17,10 @@ eSampleTs = {
     "1M": "M",
 }
 
-eMsgId = {
-    #get数据，获取信息
-    'eWebInit':1000, #web初始化
-    'ePage_k':1001,  #行情 
-    'ePage_cta':1002,
-    'ePage_test':1003,
-    'ePage_order':1004,
-    #save数据，设置信息
-    'eSaveFile':10000, #保存
-}
 # 事件
 kEvt_Time = 'evtTime'  # 任务时间设定
 kEvt_GetTime = 'evtGetTime'  # 任务时间触发
+kEvt_Web = 'evtWeb'     #发送和网络通讯相关的参数 
 
 #log
 kLog,kError,kInfo,kWarn = 'log','err','info','warn'
@@ -73,7 +64,8 @@ from server.utils.common import (
     dictFind,
     utc_now,
     tryCatch,
-    str2time
+    str2time,
+    openWeb
 )
 
 __all__ = [
@@ -115,6 +107,7 @@ __all__ = [
     'listFind',
     'dictFind',
     'recordBuffer',
+    'openWeb',
     # fileConfig
     'g_config',
     # pdData
@@ -131,6 +124,7 @@ __all__ = [
     'eTaskState',
     'kEvt_GetTime',
     'kEvt_Time',
+    'kEvt_Web',
     'eSampleTs',
     'eMsgId',
 ]

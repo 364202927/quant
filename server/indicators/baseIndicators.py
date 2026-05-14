@@ -1,4 +1,4 @@
-import abc,talib
+import abc,talib,ta
 import numpy as np
 import pandas as pd
 from server.utils import pdData,logFormat,logJson

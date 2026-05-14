@@ -39,9 +39,9 @@ class boll(baseIndicators):
         self._stDev = kwargs.get('stDev', self._stDev)
 
     def calculate(self, pd: pdData) -> pdData:
-        return pdData(data=self._bollTrack(pd), style='copy')
+        return self._bollTrack(pd)#pdData(data=self._bollTrack(pd), style='copy')
     def calculateTa(self, pd: pdData) -> pdData:
-        return pdData(data=self._taBoll(pd), style='copy')
+        return self._bollTrack(pd)#pdData(data=self._taBoll(pd), style='copy')
 
     def _bollTrack(self, sor_pd: pdData) -> any:
         pf = sor_pd.copy()

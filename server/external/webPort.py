@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-import uvicorn,webbrowser,sys
+import uvicorn
 from server.utils.fileConfig import g_config
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -11,8 +11,6 @@ class msgRequest(BaseModel):
     args: List[Any] = []
 
 class web:
-    """FastAPI服务器框架"""
-    
     def __init__(self, fnHandler):
         # self._quant = quant_instance
         self._msgTransform = fnHandler
@@ -80,9 +78,3 @@ class web:
         # print('~~~~~',web_config.get('host'),web_config.get('port'))
         self._server = uvicorn.Server(config)
         await self._server.serve()
-    def openWeb(self):
-        if sys.platform.startswith("darwin"):#macos
-            safari = webbrowser.get('safari')
-            safari.open('http://localhost:5173/')
-            return
-        webbrowser.open('http://localhost:5173/')

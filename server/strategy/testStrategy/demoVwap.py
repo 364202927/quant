@@ -1,7 +1,8 @@
 from server.strategy.base.testCTA import *
 from server.strategy.base.testTrade import *
 import numpy as np
-import pandas as pd
+# import pandas as pd
+from server.utils.science import trend
 
 #todo调试的结构写在testCTA
 
@@ -15,21 +16,39 @@ class demoVwap(testCTA, testTrade):
     def init(self) -> None:
         self.regTime("1m")
         self.regIndicators({"vwap": "volume.vwap",
+                            # 'ma':'trend.ma',
                             "backTest":"other.backTest"})
         print("init demoVwap")
-        self.strategyTest('2023-1-01 00:00:00', '2024-01-01 00:00:00')
-        exit()
+        # self._kLine = pdData(read = 'binance_spot_BTCUSDT')
+        #股市判断牛熊
+        # self._kLine.resample(timeframe = '1W', seTime = ['2024-01-01 00:00:00', '2025-01-01 00:00:00'])
+        # print(self._kLine.get())
+        # trendList = trend(self._kLine.get())
+        # print('结果',trendList)
+        # for k,v in trendList.items():
+        #     if v != None and len(v) > 0:
+        #         # print(v[0])
+        #         data = v[0]
+        #         print(k,":",self._kLine.get(cols = data[0],key= 'candle_begin_time'),'~',self._kLine.get(cols = data[1],key= 'candle_begin_time'))
+
+                # print(k,":",self._kLine.get(cols = v[0],key= 'candle_begin_time'),'~',self._kLine.get(cols = v[1],key= 'candle_begin_time'))
+        #策略
+        # self.strategyTest('2024-01-01 00:00:00', '2025-01-01 00:00:00')
+        # openWeb(3)
+        # exit()
     #策略检验
     def strategyTest(self,beginTime,endTime,timeframe = '15m'):
         #获取k线,并添加指标
-        self._kLine = pdData(read = 'binance_spot_BTCUSDT')
+        # self._kLine = pdData(read = 'binance_spot_BTCUSDT')
         self._kLine.resample(timeframe = timeframe, seTime = [beginTime, endTime])
         _indPd = self._kLine.getIndicators(self.vwap)
-        signal = self._signal(_indPd) #返回(dir,openIdx,closeIdx)
-        logFormat(signal)
+        self._signal(_indPd)
+        # logFormat(self.getTransaction())
+        print("~~~~~~~~~~~~~~",self.getTradesCount())
+    
         #计算回测
         self.backTest.delimit(principal = 1000, lv = 1)
-        self.backTest.calculate(self._kLine, signal)
+        self.backTest.calculate(self._kLine, self.getTransaction())
 
     def _signal(self, sorPf) -> list:
         pf = sorPf.get()
@@ -67,43 +86,36 @@ class demoVwap(testCTA, testTrade):
 
         position = 0
         entry_price = 0.0
-        trajectories: list[dict] = []
-        current: dict | None = None
         lv = 10
+        self.createTransaction()
 
         for i in range(len(pf)):
             price = float(prices[i])
             time_text = time_arr[i]
             idx = int(indices[i])
-
             if position == 1:
                 if price <= float(vwaps[i]) or price <= entry_price * 0.998 or time_text >= "14:50:00":
                     # LONG 平仓: sell
-                    current["trades"].append({"behavior": kSell, "pos": idx, "lv": lv, "position%": 100})
-                    trajectories.append(current)
-                    current, position = None, 0
+                    self.addTransaction(kLong,kSell,lv,idx,100)
+                    position = 0
                     continue
             elif position == -1:
                 if price >= float(vwaps[i]) or price >= entry_price * 1.002 or time_text >= "14:50:00":
                     # SHORT 平仓: buy
-                    current["trades"].append({"behavior": kBuy, "pos": idx, "lv": lv, "position%": 100})
-                    trajectories.append(current)
-                    current, position = None, 0
+                    self.addTransaction(kShort, kBuy, lv, idx, 100)
+                    position = 0
                     continue
 
             if position == 0:
                 if signals[i] == 1:
                     position = 1
                     entry_price = price
-                    # LONG 开仓: buy, 首 action 仓位 10%
-                    current = {"dir": kLong, "trades": [{"behavior": kBuy, "pos": idx, "lv": lv, "position%": 10}]}
+                    self.addTransaction(kLong, kBuy, lv, idx, 10)
+
                 elif signals[i] == -1:
                     position = -1
                     entry_price = price
-                    # SHORT 开仓: sell, 首 action 仓位 10%
-                    current = {"dir": kShort, "trades": [{"behavior": kSell, "pos": idx, "lv": lv, "position%": 10}]}
-
-        return trajectories
+                    self.addTransaction(kShort, kSell, lv, idx, 10)
         
 
     def update_1m(self, id: str, timeKey: str) -> None:

@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import type { MenuItem } from '../types'
+import { type MenuItem, eMenuId } from '../types'
 
 // 定义菜单数据
 const menuItems: MenuItem[] = [
-  { id: 1, name: '行  情', icon: 'ri-dashboard-line' },
-  { id: 2, name: '策略管理', icon: 'ri-user-settings-line' },
-  { id: 3, name: '回  测', icon: 'ri-file-list-3-line' },
-  { id: 4, name: '订单管理', icon: 'ri-pie-chart-2-line' },
-  { id: 5, name: '设  置', icon: 'ri-settings-3-line' },
+  { id: eMenuId.eSettings, name: '设  置', icon: 'ri-settings-3-line' },
+  { id: eMenuId.eAssets, name: '资  产', icon: 'ri-wallet-3-line' },
+  { id: eMenuId.eMarket, name: '行  情', icon: 'ri-dashboard-line' },
+  { id: eMenuId.eStrategy, name: '策略管理', icon: 'ri-user-settings-line' },
+  { id: eMenuId.eBacktest, name: '回  测', icon: 'ri-file-list-3-line' },
+  { id: eMenuId.eOrders, name: '订单管理', icon: 'ri-pie-chart-2-line' },
 ]
 
 const emit = defineEmits<{
@@ -39,7 +40,7 @@ const onSelect = (item: MenuItem) => {
 
 // 设置按钮点击（不受禁用限制）
 const onSettingsClick = () => {
-  const settingsItem = menuItems.find(i => i.id === 5)!
+  const settingsItem = menuItems.find(i => i.id === eMenuId.eSettings)!
   activeItem.value = settingsItem
   emit('select-item', settingsItem)
 }
@@ -54,7 +55,7 @@ const setLock = (locked: boolean) => {
   isDisabled.value = locked
 }
 
-const setItem = (id: number) => {
+const setItem = (id: eMenuId) => {
   const item = menuItems.find(i => i.id === id)
   if (item) {
     activeItem.value = item
@@ -87,7 +88,7 @@ defineExpose({
     <!-- 菜单列表 -->
     <nav class="flex-1 overflow-y-auto py-4">
       <ul class="space-y-1">
-        <li v-for="(item, index) in menuItems.filter(i => i.id !== 5)" :key="index">
+        <li v-for="(item, index) in menuItems.filter(i => i.id !== eMenuId.eSettings)" :key="index">
           <button @click="onSelect(item)" :disabled="isDisabled"
             class="w-full flex items-center justify-center px-6 py-3 text-lg transition-all duration-200 border-l-4"
             :class="[
@@ -117,7 +118,7 @@ defineExpose({
         <!-- 设置按钮 -->
         <button @click="onSettingsClick"
           class="w-13 h-13 flex items-center justify-center overflow-visible opacity-70 hover:opacity-100 transition-opacity cursor-pointer flex-shrink-0"
-          :class="[activeItem.id === 5 ? 'opacity-100' : '']">
+          :class="[activeItem.id === eMenuId.eSettings ? 'opacity-100' : '']">
           <img src="/setting.png" alt="设置" class="w-10 h-10 object-cover" />
         </button>
       </div>

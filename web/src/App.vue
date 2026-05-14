@@ -5,7 +5,7 @@ import { ref, onMounted, provide } from 'vue'
 import { postMessage } from './utils/common'
 import uiSidebar from './components/uiSidebar.vue'
 import uiMainContent from './components/uiMainContent.vue'
-import { eMsg } from "./types"
+import { eMsg, eMenuId } from "./types"
 
 
 // 当前激活的菜单项（用于内容区显示）
@@ -14,25 +14,31 @@ const activeItem = ref<MenuItem | undefined>(undefined)
 const sidebarRef = ref<InstanceType<typeof uiSidebar> | null>(null)
 // 用户数据
 const user = new userDataStore()
+// 当前页面从服务器获取的数据
+const pageData = ref<any>(null)
 provide('userDataStore', user)
 provide('sidebarRef', sidebarRef)
+provide('pageData', pageData)
 onMounted(async () => {
   const response = await postMessage(eMsg.eWebInit)
   if (response.received?.args) {
     user.initFromServer(response.received.args)
     const resUser = response.received.args.user
-    const page = resUser.userName !== '' ? 1 : 5
+    // console.log("~~~App.vue init~~~", resUser.page)
+    const page = resUser.page//resUser.userName !== '' ? eMenuId.eMarket : eMenuId.eSettings
     sidebarRef.value?.setItem(page)
-    if (page !== 5)
+    if (page !== eMenuId.eSettings)
       sidebarRef.value?.setLock(false)
-    // console.log("~~~App.vue init~~~", page, user)
   }
 })
 
 // 处理菜单选择通知
 const handleSelect = async (item: MenuItem) => {
   activeItem.value = item
-  console.log('切换菜单项', item)
+  if (item.id !== eMenuId.eSettings) {
+    const response = await postMessage(1000 + item.id)
+    pageData.value = response.received?.args ?? null
+  }
 }
 </script>
 

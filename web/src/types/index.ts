@@ -51,9 +51,19 @@ export interface BacktestOrder {
 
 // 菜单项
 export interface MenuItem {
-  id: number
+  id: eMenuId
   name: string
   icon: string
+}
+
+// 菜单 ID
+export enum eMenuId {
+  eAssets = 0,      // 资产
+  eMarket = 1,      // 行情
+  eStrategy = 2,    // 策略管理
+  eBacktest = 3,    // 回测
+  eOrders = 4,      // 订单管理
+  eSettings = 20,   // 设置
 }
 
 export enum eMsg {
