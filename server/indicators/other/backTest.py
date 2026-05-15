@@ -8,14 +8,138 @@ from typing import NamedTuple
 Year = 365  # 每一年有几天开盘，若是股票252天
 
 
-class _TrajResult(NamedTuple):
-    profit: float
-    fee: float
-    rate: float
-    margin_used: float
-    avg_slip_pct: float
-    funding_fee: float
-    total_notional: float
+# ---- score 评分辅助函数（纯函数，避免每次调用重建） ----
+def _skewness(x: np.ndarray) -> float:
+    n = len(x)
+    if n < 3:
+        return 0.0
+    mean_x = np.mean(x)
+    std_x = np.std(x, ddof=1)
+    if std_x == 0:
+        return 0.0
+    m3 = np.sum((x - mean_x) ** 3) / n
+    return (n * n) / ((n - 1) * (n - 2)) * m3 / (std_x ** 3)
+
+def _kurtosis(x: np.ndarray) -> float:
+    n = len(x)
+    if n < 4:
+        return 0.0
+    mean_x = np.mean(x)
+    std_x = np.std(x, ddof=1)
+    if std_x == 0:
+        return 0.0
+    m4 = np.sum((x - mean_x) ** 4) / n
+    k = (n * (n + 1)) / ((n - 1) * (n - 2) * (n - 3)) * m4 / (std_x ** 4)
+    k -= 3.0 * (n - 1) * (n - 1) / ((n - 2) * (n - 3))
+    return k
+
+def _annual_sharpe(returns: np.ndarray, ppy: float) -> float:
+    std_r = np.std(returns, ddof=1)
+    if std_r == 0:
+        return 0.0
+    return np.mean(returns) / std_r * math.sqrt(ppy)
+
+def _sortino_ratio(returns: np.ndarray, ppy: float) -> float:
+    downside = returns[returns < 0]
+    if len(downside) == 0:
+        return 999.0
+    downside_std = np.std(downside, ddof=1)
+    if downside_std == 0:
+        return 0.0
+    return math.sqrt(ppy) * np.mean(returns) / downside_std
+
+def _cagr(start: float, end: float, days: int) -> float:
+    if days <= 0 or start <= 0:
+        return 0.0
+    years = days / 365.0
+    return (end / start) ** (1.0 / years) - 1.0
+
+def _calmar_ratio(cagr_val: float, max_dd: float) -> float:
+    if max_dd == 0:
+        return 0.0
+    return cagr_val / abs(max_dd)
+
+def _cvar(returns: np.ndarray, alpha: float) -> float:
+    cutoff = np.percentile(returns, alpha * 100)
+    tail = returns[returns <= cutoff]
+    if len(tail) == 0:
+        return 0.0
+    return float(tail.mean())
+
+def _max_drawdown(equity: np.ndarray, close_times: np.ndarray):
+    running_max = np.maximum.accumulate(equity)
+    drawdowns = (equity - running_max) / running_max
+    max_dd = float(drawdowns.min())
+    trough_idx = int(drawdowns.argmin())
+    peak_vals = np.where(np.isclose(equity[:trough_idx + 1], running_max[trough_idx]))[0]
+    peak_idx = int(peak_vals[-1]) if len(peak_vals) > 0 else trough_idx
+    dd_duration = trough_idx - peak_idx
+    recovery_days = None
+    peak_value = running_max[trough_idx]
+    remaining = equity[trough_idx + 1:]
+    recovered = np.where(remaining >= peak_value)[0]
+    if len(recovered) > 0:
+        ri = trough_idx + 1 + recovered[0]
+        recovery_days = int((close_times[ri] - close_times[trough_idx]).days)
+    return max_dd, dd_duration, recovery_days, drawdowns
+
+def _deflated_sharpe_pval(returns: np.ndarray, ppy: float,
+                           n_simulations: int = 1000,
+                           block_size: int | None = None,
+                           seed: int = 42):
+    """块状 bootstrap 通货紧缩夏普检验（内层循环已向量化）"""
+    n = len(returns)
+    sr_obs = _annual_sharpe(returns, ppy)
+    if n < 10 or sr_obs == 0.0:
+        return 1.0, sr_obs
+
+    rng = np.random.default_rng(seed)
+    if block_size is None:
+        block_size = max(2, int(np.sqrt(n)))
+
+    simulated_max_sr = np.zeros(n_simulations)
+    n_strategies = 100
+    sqrt_ppy = np.sqrt(ppy)
+    for i in range(n_simulations):
+        n_blocks = (n + block_size - 1) // block_size
+        starts = rng.integers(0, n - block_size + 1, size=n_blocks)
+        blocks = [returns[s:s + block_size] for s in starts]
+        sim_zero = np.concatenate(blocks)[:n]
+        sim_zero = sim_zero - np.mean(sim_zero)
+
+        # 向量化：一次生成所有策略的随机索引矩阵
+        idx_matrix = rng.integers(0, n, size=(n_strategies, n))
+        ret_batch = sim_zero[idx_matrix]
+        means = ret_batch.mean(axis=1)
+        stds = ret_batch.std(axis=1, ddof=1)
+        mask = stds > 0
+        sharpes = np.where(mask, means / stds * sqrt_ppy, 0.0)
+        simulated_max_sr[i] = sharpes.max()
+
+    p_value = float(np.mean(simulated_max_sr >= sr_obs))
+    return p_value, sr_obs
+
+def _consecutive_streaks(returns: np.ndarray):
+    if len(returns) == 0:
+        return 0, 0
+    signs = np.sign(returns)
+    changes = np.where(np.diff(signs) != 0)[0] + 1
+    groups = np.split(signs, changes)
+    max_wins = max((len(g) for g in groups if len(g) > 0 and g[0] > 0), default=0)
+    max_losses = max((len(g) for g in groups if len(g) > 0 and g[0] <= 0), default=0)
+    return max_wins, max_losses
+
+def _rolling_sharpe_metrics(returns: np.ndarray, window: int | None = None):
+    if window is None:
+        window = max(len(returns) // 5, 5)
+    if len(returns) < window:
+        return 0.0, 0.0
+    s = pd.Series(returns)
+    rolling_mean = s.rolling(window).mean()
+    rolling_std = s.rolling(window).std(ddof=1)
+    rolling_sr = (rolling_mean / rolling_std).dropna().replace([np.inf, -np.inf], 0.0).fillna(0.0)
+    return float(rolling_sr.std(ddof=1)), float(rolling_sr.min())
+
 
 class backTest(baseIndicators):
     "回测数据：性能测试"
@@ -194,7 +318,7 @@ class backTest(baseIndicators):
         return pdData(columns, style='xml', data=rows)
     
     def score(self, statistical: pdData) -> dict:
-        df = statistical.get()
+        df = statistical.get().copy()
         n_trades = len(df)
         if n_trades == 0:
             return {
@@ -214,156 +338,13 @@ class backTest(baseIndicators):
             df["profit_Usdt"] / df["margin_before"],
             0.0
         )
-        df["closeTime"] = df["openTime"] + pd.to_timedelta(df["duration"], unit="min")
-        total_days = max((df["closeTime"].max() - df["openTime"].min()).days, 1)
+        close_times = df["openTime"] + pd.to_timedelta(df["duration"], unit="min")
+        df["closeTime"] = close_times
+        total_days = max((close_times.max() - df["openTime"].min()).days, 1)
         trade_return = df["trade_return"].values
         profit_series = df["profit_Usdt"].values
         margin_curve = df["margin_after"].values
         periods_per_year = n_trades / (total_days / 365.0) if total_days > 0 else n_trades
-
-        # ---------- inner functions ----------
-        def _skewness(x: np.ndarray) -> float:
-            n = len(x)
-            if n < 3:
-                return 0.0
-            mean_x = np.mean(x)
-            std_x = np.std(x, ddof=1)
-            if std_x == 0:
-                return 0.0
-            m3 = np.sum((x - mean_x) ** 3) / n
-            return (n * n) / ((n - 1) * (n - 2)) * m3 / (std_x ** 3)
-
-        def _kurtosis(x: np.ndarray) -> float:
-            n = len(x)
-            if n < 4:
-                return 0.0
-            mean_x = np.mean(x)
-            std_x = np.std(x, ddof=1)
-            if std_x == 0:
-                return 0.0
-            m4 = np.sum((x - mean_x) ** 4) / n
-            k = (n * (n + 1)) / ((n - 1) * (n - 2) * (n - 3)) * m4 / (std_x ** 4)
-            k -= 3.0 * (n - 1) * (n - 1) / ((n - 2) * (n - 3))
-            return k
-
-        def _annual_sharpe(returns: np.ndarray, ppy: float) -> float:
-            std_r = np.std(returns, ddof=1)
-            if std_r == 0:
-                return 0.0
-            return np.mean(returns) / std_r * math.sqrt(ppy)
-
-        def _sortino_ratio(returns: np.ndarray, ppy: float) -> float:
-            downside = returns[returns < 0]
-            if len(downside) == 0:
-                return 999.0
-            downside_std = np.std(downside, ddof=1)
-            if downside_std == 0:
-                return 0.0
-            return math.sqrt(ppy) * np.mean(returns) / downside_std
-
-        def _cagr(start: float, end: float, days: int) -> float:
-            if days <= 0 or start <= 0:
-                return 0.0
-            years = days / 365.0
-            return (end / start) ** (1.0 / years) - 1.0
-
-        def _calmar_ratio(cagr_val: float, max_dd: float) -> float:
-            if max_dd == 0:
-                return 0.0
-            return cagr_val / abs(max_dd)
-
-        def _cvar(returns: np.ndarray, alpha: float) -> float:
-            cutoff = np.percentile(returns, alpha * 100)
-            tail = returns[returns <= cutoff]
-            if len(tail) == 0:
-                return 0.0
-            return float(tail.mean())
-
-        def _max_drawdown(equity: np.ndarray):
-            running_max = np.maximum.accumulate(equity)
-            drawdowns = (equity - running_max) / running_max
-            max_dd = float(drawdowns.min())
-            trough_idx = int(drawdowns.argmin())
-            peak_vals = np.where(np.isclose(equity[:trough_idx + 1], running_max[trough_idx]))[0]
-            peak_idx = int(peak_vals[-1]) if len(peak_vals) > 0 else trough_idx
-            dd_duration = trough_idx - peak_idx
-            recovery_days = None
-            peak_value = running_max[trough_idx]
-            for i in range(trough_idx + 1, len(equity)):
-                if equity[i] >= peak_value:
-                    recovery_days = int((df["closeTime"].iloc[i] - df["closeTime"].iloc[trough_idx]).days)
-                    break
-            return max_dd, dd_duration, recovery_days, drawdowns
-
-        def _deflated_sharpe_pval(returns: np.ndarray, ppy: float,
-                                   n_simulations: int = 1000,
-                                   block_size: int = None,
-                                   seed: int = 42):
-            """块状 bootstrap 通货紧缩夏普检验。
-
-            对零 alpha 序列做块抽样，每次模拟 n_strategies 个随机策略并取最大夏普，
-            构建经验分布后计算观测夏普的右尾 p 值。p 值越小越显著。
-            """
-            n = len(returns)
-            sr_obs = _annual_sharpe(returns, ppy)
-            if n < 10 or sr_obs == 0.0:
-                return 1.0, sr_obs
-
-            rng = np.random.default_rng(seed)
-            if block_size is None:
-                block_size = max(2, int(np.sqrt(n)))
-
-            simulated_max_sr = np.zeros(n_simulations)
-            n_strategies = 100  # 数据挖掘广度
-            for i in range(n_simulations):
-                # 块抽样生成零均值序列
-                n_blocks = (n + block_size - 1) // block_size
-                blocks = [returns[rng.integers(0, n - block_size + 1):][:block_size]
-                          for _ in range(n_blocks)]
-                sim_zero = np.concatenate(blocks)[:n]
-                sim_zero = sim_zero - np.mean(sim_zero)
-
-                # 从该零均值序列中随机生成 n_strategies 个策略，取最大夏普
-                sharpes = []
-                for _ in range(n_strategies):
-                    idx = rng.integers(0, n, size=n)
-                    ret_rnd = sim_zero[idx]
-                    std_r = np.std(ret_rnd, ddof=1)
-                    sharpes.append(float(np.mean(ret_rnd) / std_r * np.sqrt(ppy)) if std_r > 0 else 0.0)
-                simulated_max_sr[i] = max(sharpes)
-
-            p_value = float(np.mean(simulated_max_sr >= sr_obs))
-            return p_value, sr_obs
-
-        def _consecutive_streaks(returns: np.ndarray):
-            max_wins, max_losses = 0, 0
-            cur_wins, cur_losses = 0, 0
-            for r in returns:
-                if r > 0:
-                    cur_wins += 1
-                    cur_losses = 0
-                    max_wins = max(max_wins, cur_wins)
-                else:
-                    cur_losses += 1
-                    cur_wins = 0
-                    max_losses = max(max_losses, cur_losses)
-            return max_wins, max_losses
-
-        def _rolling_sharpe_metrics(returns: np.ndarray, window: int = None):
-            if window is None:
-                window = max(len(returns) // 5, 5)
-            if len(returns) < window:
-                return 0.0, 0.0
-            rolling = []
-            for i in range(len(returns) - window + 1):
-                seg = returns[i:i + window]
-                seg_std = np.std(seg, ddof=1)
-                rolling.append(float(np.mean(seg) / seg_std) if seg_std > 0 else 0.0)
-            return float(np.std(rolling, ddof=1)), float(min(rolling))
-
-        def _cost_stress_test(d: pd.DataFrame, multiplier: float = 2.0) -> float:
-            extra_cost = (multiplier - 1.0) * (d["slip"] / 100.0) * d["margin_before"] * d["lv"]
-            return float(d["profit_Usdt"].sum() - extra_cost.sum())
 
         # ---------- basic ----------
         final_margin = float(df["margin_after"].iloc[-1])
@@ -389,7 +370,7 @@ class backTest(baseIndicators):
         sr = _annual_sharpe(trade_return, periods_per_year)
         dsr_pval, dsr_val = _deflated_sharpe_pval(trade_return, periods_per_year)
         cagr_val = _cagr(float(df["margin_before"].iloc[0]), float(df["margin_after"].iloc[-1]), total_days)
-        max_dd_val, dd_dur, recovery_days, _ = _max_drawdown(margin_curve)
+        max_dd_val, dd_dur, recovery_days, _ = _max_drawdown(margin_curve, close_times.values)
         calmar = _calmar_ratio(cagr_val, max_dd_val)
         sortino = _sortino_ratio(trade_return, periods_per_year)
 
@@ -406,8 +387,8 @@ class backTest(baseIndicators):
         cvar_99 = _cvar(trade_return, 0.01)
 
         # 完整的每日净值序列（含无交易日填前值），避免低估隔夜波动
-        df["close_date"] = df["closeTime"].dt.date
-        daily_margin_last = df.groupby("close_date")["margin_after"].last()
+        close_date = close_times.dt.date
+        daily_margin_last = df.groupby(close_date)["margin_after"].last()
         full_dates = pd.date_range(start=daily_margin_last.index.min(),
                                    end=daily_margin_last.index.max(), freq="D")
         daily_nav = daily_margin_last.reindex(full_dates.date, method="ffill")
@@ -428,15 +409,14 @@ class backTest(baseIndicators):
         # ---------- return quality ----------
         wins = df[df["profit_Usdt"] > 0]
         losses = df[df["profit_Usdt"] < 0]
-        total_win = float(wins["profit_Usdt"].sum()) if len(wins) > 0 else 0.0
-        total_loss = float(losses["profit_Usdt"].sum()) if len(losses) > 0 else 0.0
+        n_wins, n_losses = len(wins), len(losses)
+        total_win = float(wins["profit_Usdt"].sum()) if n_wins > 0 else 0.0
+        total_loss = float(losses["profit_Usdt"].sum()) if n_losses > 0 else 0.0
 
-        df["month"] = df["closeTime"].dt.to_period("M")
-        monthly = df.groupby("month")["profit_Usdt"].sum()
+        monthly = df.groupby(close_times.dt.to_period("M"))["profit_Usdt"].sum()
         month_win_rate = float((monthly > 0).sum() / len(monthly) * 100) if len(monthly) > 0 else 0.0
 
-        df["week"] = df["closeTime"].dt.to_period("W")
-        weekly = df.groupby("week")["profit_Usdt"].sum()
+        weekly = df.groupby(close_times.dt.to_period("W"))["profit_Usdt"].sum()
         week_win_rate = float((weekly > 0).sum() / len(weekly) * 100) if len(weekly) > 0 else 0.0
 
         total_return_pct = float(
@@ -444,16 +424,21 @@ class backTest(baseIndicators):
             / df["margin_before"].iloc[0] * 100
         )
 
+        # win_loss_ratio = 平均单笔盈利 / |平均单笔亏损|（盈亏比）
+        # profit_factor = 总盈利 / |总亏损|（盈利因子）
+        avg_win = total_win / n_wins if n_wins > 0 else 0.0
+        avg_loss = total_loss / n_losses if n_losses > 0 else 0.0
+
         quality = {
-            "win_count": len(wins),
-            "loss_count": len(losses),
+            "win_count": n_wins,
+            "loss_count": n_losses,
             "total_win_amount": round(total_win, 4),
             "total_loss_amount": round(total_loss, 4),
-            "max_single_win": round(float(wins["profit_Usdt"].max()), 4) if len(wins) > 0 else 0.0,
-            "max_single_loss": round(float(losses["profit_Usdt"].min()), 4) if len(losses) > 0 else 0.0,
+            "max_single_win": round(float(wins["profit_Usdt"].max()), 4) if n_wins > 0 else 0.0,
+            "max_single_loss": round(float(losses["profit_Usdt"].min()), 4) if n_losses > 0 else 0.0,
             "cagr_pct": round(cagr_val * 100, 2),
             "total_return_pct": round(total_return_pct, 2),
-            "win_loss_ratio": round(abs(total_win / total_loss), 4) if total_loss != 0 else None,
+            "win_loss_ratio": round(abs(avg_win / avg_loss), 4) if avg_loss != 0 else None,
             "profit_factor": round(abs(total_win / total_loss), 4) if total_loss != 0 else None,
             "return_skewness": round(_skewness(trade_return), 4),
             "return_kurtosis": round(_kurtosis(trade_return), 4),
@@ -462,7 +447,6 @@ class backTest(baseIndicators):
         }
 
         # ---------- turnover & capacity ----------
-        # 年化换手率 = 双边成交额 / 平均权益 × (365 / 回测天数)
         total_notional = float(df["total_notional"].sum()) if "total_notional" in df.columns else 0.0
         avg_margin = float(np.mean(margin_curve)) if len(margin_curve) > 0 else final_margin
         turnover_rate = (total_notional / avg_margin * (365.0 / total_days)) if avg_margin > 0 else 0.0
@@ -471,9 +455,10 @@ class backTest(baseIndicators):
         # ---------- live tolerance ----------
         max_wins, max_losses = _consecutive_streaks(trade_return)
         roll_sr_std, roll_sr_min = _rolling_sharpe_metrics(trade_return)
-        stressed_profit = _cost_stress_test(df, 2.0)
+        extra_cost = (df["slip"].values / 100.0) * df["margin_before"].values * df["lv"].values
+        stressed_profit = float(profit_series.sum() - extra_cost.sum())
 
-        # OOS: 样本内/外夏普衰减率 (IS_Sharpe - OOS_Sharpe) / IS_Sharpe
+        # OOS: 样本内/外夏普衰减率
         mid = n_trades // 2
         if mid >= 5:
             is_ret = trade_return[:mid]
