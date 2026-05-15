@@ -63,132 +63,86 @@ def division(a:float, b:float, step = 0, precision:str = '0.001'):
 
 def trend(pf, mode='all'):
     df = pf.copy()
-    
-    # ---------- 1. 严格顶底分型（4根K线确认，高低点同时满足）----------
-    top = (
-        (df['high'] > df['high'].shift(1)) & (df['high'] > df['high'].shift(-1)) &
-        (df['high'] > df['high'].shift(2)) & (df['high'] > df['high'].shift(-2)) &
-        (df['low'] > df['low'].shift(1)) & (df['low'] > df['low'].shift(-1)) &
-        (df['low'] > df['low'].shift(2)) & (df['low'] > df['low'].shift(-2))
-    )
-    bottom = (
-        (df['low'] < df['low'].shift(1)) & (df['low'] < df['low'].shift(-1)) &
-        (df['low'] < df['low'].shift(2)) & (df['low'] < df['low'].shift(-2)) &
-        (df['high'] < df['high'].shift(1)) & (df['high'] < df['high'].shift(-1)) &
-        (df['high'] < df['high'].shift(2)) & (df['high'] < df['high'].shift(-2))
-    )
-    
-    # 收集分型（索引，类型，极值价格）
+    _empty = lambda: {'bull': None, 'bear': None, 'range': (int(df.index[0]), int(df.index[-1]))} if mode == 'last' \
+        else {'bull': [], 'bear': [], 'range': [(int(df.index[0]), int(df.index[-1]))]}
+
+    if len(df) < 5:
+        return _empty()
+
+    # ---------- 1. Swing High/Low 检测（顶只看high，底只看low）----------
+    N = 2
+    h, l = df['high'], df['low']
+    swing_high = pd.Series(True, index=df.index)
+    swing_low = pd.Series(True, index=df.index)
+    for j in range(1, N + 1):
+        swing_high &= (h > h.shift(j)) & (h > h.shift(-j))
+        swing_low  &= (l < l.shift(j)) & (l < l.shift(-j))
+
+    # ---------- 2. 收集分型点并排序 ----------
     fx = []
     for idx in df.index:
-        if top.loc[idx]:
-            fx.append((idx, 'top', df['high'].loc[idx]))
-        elif bottom.loc[idx]:
-            fx.append((idx, 'bottom', df['low'].loc[idx]))
-    
+        if swing_high.iloc[idx]:
+            fx.append((idx, 'top', h.iloc[idx]))
+        if swing_low.iloc[idx]:
+            fx.append((idx, 'bottom', l.iloc[idx]))
+    fx.sort(key=lambda x: x[0])
+
     if len(fx) < 2:
-        seg = (df.index[0], df.index[-1])
-        if mode == 'last':
-            return {'bull': None, 'bear': None, 'range': seg}
-        return {'bull': [], 'bear': [], 'range': [seg]}
-    
-    # ---------- 2. 生成严格交替的转折点序列 ----------
-    # 去除连续同类型分型，只保留交替序列中更极端的那个
+        return _empty()
+
+    # ---------- 3. 强制交替序列（连续同类型保留更极端的）----------
     pivots = [fx[0]]
     for i in range(1, len(fx)):
-        last = pivots[-1]
-        curr = fx[i]
-        if curr[1] == last[1]:  # 同类型
-            # 保留更极端的：顶取更高，底取更低
-            if curr[1] == 'top' and curr[2] > last[2]:
-                pivots[-1] = curr
-            elif curr[1] == 'bottom' and curr[2] < last[2]:
+        last, curr = pivots[-1], fx[i]
+        if curr[1] == last[1]:
+            if (curr[1] == 'top' and curr[2] > last[2]) or \
+               (curr[1] == 'bottom' and curr[2] < last[2]):
                 pivots[-1] = curr
         else:
             pivots.append(curr)
-    
-    if len(pivots) < 2:
-        seg = (df.index[0], df.index[-1])
-        if mode == 'last':
-            return {'bull': None, 'bear': None, 'range': seg}
-        return {'bull': [], 'bear': [], 'range': [seg]}
-    
-    # ---------- 3. 根据转折点序列划分趋势状态 ----------
-    # 状态判定规则：
-    # - 牛市：最近两个底抬升，且最近两个顶也抬升（需至少2底2顶）
-    # - 熊市：最近两个底降低，且最近两个顶也降低
-    # - 否则为震荡
-    # 我们逐个转折点推进，维护最近的两个顶和两个底，动态判断。
-    
-    tops = []     # 记录顶点的 (索引, 价格)
-    bottoms = []  # 记录底点的 (索引, 价格)
-    # 每个转折点都会产生一个新的区间状态，我们累积同状态区间
-    segments = []  # (state, start_idx, end_idx)
-    current_state = None
-    state_start = pivots[0][0]
-    
-    for i, p in enumerate(pivots):
-        idx, ptype, price = p
-        if ptype == 'top':
-            tops.append((idx, price))
-            # 保持只保留最近两个顶（但为了判断我们其实只需要最近两个，可以裁剪）
-            if len(tops) > 2:
-                tops.pop(0)
+
+    if len(pivots) < 4:
+        return _empty()
+
+    # ---------- 4. 趋势判断：pivots[i] vs pivots[i-2] 同类型比较 ----------
+    # 交替序列中 pivots[i] 和 pivots[i-2] 一定同类型，恰好隔一个波段
+    segments = []
+    state_start = df.index[0]
+    current_state = 'range'
+
+    for i in range(3, len(pivots)):
+        p_cur = pivots[i]
+        p_prev_same = pivots[i - 2]    # 同类型
+        p_other_cur = pivots[i - 1]    # 异类型
+        p_other_prev = pivots[i - 3]   # 与 i-1 同类型
+
+        if p_cur[1] == 'top':
+            h_cur, h_prev = p_cur[2], p_prev_same[2]
+            l_cur, l_prev = p_other_cur[2], p_other_prev[2]
         else:
-            bottoms.append((idx, price))
-            if len(bottoms) > 2:
-                bottoms.pop(0)
-        
-        # 当拥有至少两个顶和两个底时，可以判定趋势
-        if len(tops) >= 2 and len(bottoms) >= 2:
-            # 最近两个顶：tops[-2], tops[-1]；最近两个底同理
-            high_prev, high_cur = tops[-2][1], tops[-1][1]
-            low_prev, low_cur = bottoms[-2][1], bottoms[-1][1]
-            
-            if high_cur > high_prev and low_cur > low_prev:
-                new_state = 'bull'
-            elif high_cur < high_prev and low_cur < low_prev:
-                new_state = 'bear'
-            else:
-                new_state = 'range'
+            l_cur, l_prev = p_cur[2], p_prev_same[2]
+            h_cur, h_prev = p_other_cur[2], p_other_prev[2]
+
+        if h_cur > h_prev and l_cur > l_prev:
+            new_state = 'bull'
+        elif h_cur < h_prev and l_cur < l_prev:
+            new_state = 'bear'
         else:
-            # 信息不足，暂时归为震荡（等待更多转折点）
             new_state = 'range'
-        
-        # 管理区间合并
-        if current_state is None:
+
+        if new_state != current_state:
+            boundary = pivots[i - 1][0]
+            segments.append((current_state, state_start, boundary))
+            state_start = boundary
             current_state = new_state
-            state_start = idx
-        elif new_state != current_state:
-            # 状态切换，前一个状态结束于上一个转折点
-            # 但这里我们应以“上一个转折点”作为结束，而不是当前转折点
-            prev_idx = pivots[i-1][0]
-            segments.append((current_state, state_start, prev_idx))
-            current_state = new_state
-            state_start = prev_idx  # 新区间从上一个转折点开始
-        # 如果状态相同，则继续延伸，不操作
-    
-    # 最后一段
-    if current_state is not None:
-        segments.append((current_state, state_start, pivots[-1][0]))
-    
-    # ---------- 4. 映射到原始K线范围 ----------
+
+    segments.append((current_state, state_start, df.index[-1]))
+
+    # ---------- 5. 格式化输出 ----------
     result = {'bull': [], 'bear': [], 'range': []}
-    for state, s_idx, e_idx in segments:
-        mask = (df.index >= s_idx) & (df.index <= e_idx)
-        sub = df.loc[mask]
-        if len(sub) == 0:
-            continue
-        real_start = sub.index[0]
-        real_end = sub.index[-1]
-        result[state].append((int(real_start), int(real_end)))
-    
+    for state, s, e in segments:
+        result[state].append((int(s), int(e)))
+
     if mode == 'last':
-        res = {}
-        for k in ['bull', 'bear', 'range']:
-            if result[k]:
-                res[k] = result[k][-1]
-            else:
-                res[k] = None
-        return res
+        return {k: (result[k][-1] if result[k] else None) for k in ['bull', 'bear', 'range']}
     return result
