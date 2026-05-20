@@ -164,13 +164,14 @@ class backTest(baseIndicators):
     def calculate(self, kLine: pdData, signal: list):
         # 1.将信号转换成订单
         orders = self._transform2data(kLine, signal)
-        logFormat(orders)
+        # logFormat(orders)
         # 2.对每笔订单计算利润
         statistical = self._equityCurve(orders)
-        print(statistical.get())
-        # 3.评分
+        # print(statistical.get())
+        # 3.计算策划关键的回测值
         result = self.score(statistical)
-        logJson(result)
+        # logJson(result)
+        return result
 
     def _transform2data(self, kLine: pdData, signal: list) -> list:
         # def _transform2data(self, kLine: pdData, signalPd: list) -> list:
