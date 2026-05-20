@@ -4,11 +4,69 @@ from typing import NamedTuple
 # todo:open_eff,close时添加冲击成本价,模拟资金量大的情况下对市场的影响
 # todo:当前只实现了单条交易估计,多条交易轨迹相交没做
 # todo:后面添加type 对现货,股票,永续合约的回测
+# todo:添加指标:参数平原+bpo,多倍压力(滑点+手续费)
+
+k_MSG = {
+    # 盈利能力
+    "profit_pos": "总收益为正 → +{score}",
+    "profit_neg": "总收益为负 → +0 (策略未产生正回报)",
+    "sharpe_high": "夏普比率 > 1 → +{score} (风险调整后收益优秀)",
+    "sharpe_mid": "夏普比率 0~1 → +{score} (勉强为正，但不够突出)",
+    "sharpe_low": "夏普比率 ≤ 0 → +0 (风险调整后无超额收益)",
+    "sortino_high": "索提诺比率 > 1 → +{score} (下行风险控制好)",
+    "sortino_mid": "索提诺比率 0~1 → +{score}",
+    "sortino_low": "索提诺比率 ≤ 0 → +0 (下行波动未带来正回报)",
+    "calmar_high": "卡玛比率 > 1 → +{score} (相对于最大回撤的收益好)",
+    "calmar_mid": "卡玛比率 0~1 → +{score}",
+    "calmar_low": "卡玛比率 ≤ 0 → +0 (收益/回撤无吸引力)",
+
+    # 风险控制
+    "dd_low": "最大回撤 < 10% → +{score} (资金回撤小)",
+    "dd_mid": "最大回撤 10%~20% → +{score} (回撤适中)",
+    "dd_high": "最大回撤 ≥ 20% → +0 (回撤过大，实盘压力大)",
+    "vol_low": "日波动率 < 0.01 → +{score} (净值波动极低)",
+    "vol_mid": "日波动率 0.01~0.03 → +{score} (波动适中)",
+    "vol_high": "日波动率 ≥ 0.03 → +0 (净值起伏过大)",
+    "cvar_low": "CVaR 95% ≤ 2% → +{score} (尾部风险极小)",
+    "cvar_mid": "CVaR 95% 2%~5% → +{score} (极端损失可控)",
+    "cvar_high": "CVaR 95% > 5% → +0 (黑天鹅事件可能重创策略)",
+
+    # 过拟合检测
+    "dsig_pvalue_good": "Deflated Sharpe p-value ≤ 0.05 → +{score} (good,非数据窥探)",
+    "dsig_pvalue_bad": "Deflated Sharpe p-value > 0.05 → +0 (严重过拟合嫌疑，高夏普可能是噪声)",
+    "oos_decay_good": "样本外夏普衰减 > -0.3 → +{score} (good,参数稳定性好)",
+    "oos_decay_mid": "样本外夏普衰减 -0.3~-0.5 → +{score} (有一定衰减)",
+    "oos_decay_bad": "样本外夏普衰减 < -0.5 → +0 (样本内过优化，实盘易失效)",
+
+    # 稳健性 / 一致性
+    "roll_std_low": "滚动夏普标准差 < 0.3 → +{score} (good,时间维度上表现一致)",
+    "roll_std_mid": "滚动夏普标准差 0.3~0.6 → +{score} (稳定性一般)",
+    "roll_std_high": "滚动夏普标准差 ≥ 0.6 → +0 (不同时段差异大，不可靠)",
+    "win_rate_ok": "胜率 ≥ 40% → +{score}",
+    "win_rate_low": "胜率 < 40% → +0 (胜率偏低，需依赖高盈亏比)",
+    "max_cons_loss_ok": "最大连续亏损 ≤ 5 → +{score} (good,心理承受压力小)",
+    "max_cons_loss_warn": "最大连续亏损 > 5 → +0 (容易出现连续回撤期)",
+    "skew_ok": "收益偏度 > 0 → +{score} (good,极端风险低,亏小赚大)",
+    "skew_warn": "收益偏度 ≤ 0 → +0 (负偏，可能有跳空亏损风险)",
+
+    # 实盘摩擦 / 容量
+    "stress_slip_good": "2x滑点后利润衰减 < 50% → +{score} (good,不怕成本恶化,实盘存活率高。)",
+    "stress_slip_mid": "2x滑点后利润衰减 50%~80% → +{score} (对成本较敏感)",
+    "stress_slip_bad": "2x滑点后利润衰减 ≥ 80% → +0 (稍微增加滑点就大幅恶化，实盘危险)",
+    "turnover_ok": "年化换手率 < 200 → +{score} (good,换手率健康)",
+    "turnover_high": "年化换手率 ≥ 200 → +0 (换手率过高，市场冲击成本大)",
+    "capacity_ok": "预估容量 ≥ 100 → +{score} (good,资金容量尚可)",
+    "capacity_low": "预估容量 < 100 → +0 (容量过小，实盘资金受限)",
+
+    # 综合判定
+    "verdict_live": "✅ 可实盘 (总分 ≥ 70)",
+    "verdict_improve": "🔧 继续改善 (总分 40~69)",
+    "verdict_discard": "❌ 尽早放弃 (总分 < 40)"
+}
 
 Year = 365  # 每一年有几天开盘，若是股票252天
 
-
-# ---- score 评分辅助函数（纯函数，避免每次调用重建） ----
+# ----test 辅助函数 ----
 def _skewness(x: np.ndarray) -> float:
     n = len(x)
     if n < 3:
@@ -140,7 +198,7 @@ def _rolling_sharpe_metrics(returns: np.ndarray, window: int | None = None):
     rolling_sr = (rolling_mean / rolling_std).dropna().replace([np.inf, -np.inf], 0.0).fillna(0.0)
     return float(rolling_sr.std(ddof=1)), float(rolling_sr.min())
 
-
+##class
 class backTest(baseIndicators):
     "回测数据：性能测试"
     level = 1  # 杠杆
@@ -157,24 +215,24 @@ class backTest(baseIndicators):
             self.principal = kWargs['principal']
             self.margin = self.principal * 0.95  #保证金不等于100%本金
         # if kWargs.get('margin'): self.margin = kWargs['margin']
-        if kWargs.get('lv'):
-            self.level = kWargs['lv']
+        if kWargs.get('lv'): self.level = kWargs['lv']
 
     def calculateTa(self, kline:pdData, signalPd:pd.DataFrame):pass
     def calculate(self, kLine: pdData, signal: list):
         # 1.将信号转换成订单
         orders = self._transform2data(kLine, signal)
-        # logFormat(orders)
         # 2.对每笔订单计算利润
         statistical = self._equityCurve(orders)
-        # print(statistical.get())
         # 3.计算策划关键的回测值
-        result = self.score(statistical)
-        # logJson(result)
+        result = self._testing(statistical)
+        # 4.计算分数
+        resScore = self._score(result)
+        result['score'] = resScore
+        logJson(result)
         return result
 
+    # signal转换成下单信息
     def _transform2data(self, kLine: pdData, signal: list) -> list:
-        # def _transform2data(self, kLine: pdData, signalPd: list) -> list:
         df = kLine.get()
         rows = []
         for traj in signal:
@@ -195,8 +253,8 @@ class backTest(baseIndicators):
                         "trades": enriched})
         return rows
 
+    # 计算每一单的基础数据
     def _equityCurve(self, orders: list) -> pdData:
-        # ---- 回测费率与阈值（局部常量，便于敏感性分析） ----
         TAKER_FEE_RATE = 0.0005          # 单边吃单手续费率
         FUNDING_RATE_8H = 0.0001         # 单次 8h 资金费率
         FUNDING_INTERVAL = '8h'
@@ -318,7 +376,8 @@ class backTest(baseIndicators):
         # 一次性构造 DataFrame，避免逐行 pd.concat 的 O(N²) 开销
         return pdData(columns, style='xml', data=rows)
     
-    def score(self, statistical: pdData) -> dict:
+    # 回测计算
+    def _testing(self, statistical: pdData) -> dict:
         df = statistical.get().copy()
         n_trades = len(df)
         if n_trades == 0:
@@ -334,11 +393,9 @@ class backTest(baseIndicators):
         df["margin_before"] = df["margin_after"].shift(1)
         df.loc[df.index[0], "margin_before"] = df["margin_after"].iloc[0] - df["profit_Usdt"].iloc[0]
 
-        df["trade_return"] = np.where(
-            df["margin_before"] > 0,
-            df["profit_Usdt"] / df["margin_before"],
-            0.0
-        )
+        df["trade_return"] = np.where(df["margin_before"] > 0,
+                                      df["profit_Usdt"] / df["margin_before"],
+                                    0.0)
         close_times = df["openTime"] + pd.to_timedelta(df["duration"], unit="min")
         df["closeTime"] = close_times
         total_days = max((close_times.max() - df["openTime"].min()).days, 1)
@@ -353,7 +410,6 @@ class backTest(baseIndicators):
         total_funding = float(df["funding_fee"].sum()) if "funding_fee" in df.columns else 0.0
         total_trade_fee = float(df["fee"].sum()) - total_funding
         win_rate = float((profit_series > 0).sum() / n_trades * 100)
-
         basic = {
             "margin": round(final_margin, 2),
             "leverage": self.level,
@@ -422,8 +478,7 @@ class backTest(baseIndicators):
 
         total_return_pct = float(
             (df["margin_after"].iloc[-1] - df["margin_before"].iloc[0])
-            / df["margin_before"].iloc[0] * 100
-        )
+            / df["margin_before"].iloc[0] * 100)
 
         # win_loss_ratio = 平均单笔盈利 / |平均单笔亏损|（盈亏比）
         # profit_factor = 总盈利 / |总亏损|（盈利因子）
@@ -544,3 +599,155 @@ class backTest(baseIndicators):
         # PBO = 样本内最优落在样本外后 50%（排名 < 0.5）的比例
         pbo = np.mean(oos_ranks < 0.5)
         return float(pbo)
+    
+    # 返回测试成绩
+    def _score(self,metrics:dict)->dict:
+        score = 0
+        details = []
+
+        def add(pts, msg_key):
+            nonlocal score
+            score += pts
+            msg = k_MSG[msg_key].format(score=pts)   # 统一格式化，即使模板无占位符也不影响
+            details.append(msg)
+
+        # ---------- 盈利能力 (满分25) ----------
+        # 总收益 (5分)
+        total_ret = metrics["return_quality"]["total_return_pct"]
+        if total_ret > 0:
+            add(5, "profit_pos")
+        else:
+            add(0, "profit_neg")
+        # 夏普 (10分)
+        sharpe = metrics["overfit_filter"]["sharpe_ratio"]
+        if sharpe > 1:
+            add(10, "sharpe_high")
+        elif sharpe > 0:
+            add(5, "sharpe_mid")
+        else:
+            add(0, "sharpe_low")
+        # 索提诺 (5分)
+        sortino = metrics["overfit_filter"]["sortino_ratio"]
+        if sortino > 1:
+            add(5, "sortino_high")
+        elif sortino > 0:
+            add(3, "sortino_mid")
+        else:
+            add(0, "sortino_low")
+        # 卡玛 (5分)
+        calmar = metrics["overfit_filter"]["calmar_ratio"]
+        if calmar > 1:
+            add(5, "calmar_high")
+        elif calmar > 0:
+            add(3, "calmar_mid")
+        else:
+            add(0, "calmar_low")
+
+        # ---------- 风险控制 (满分20) ----------
+        # 最大回撤 (6分)
+        max_dd = metrics["live_tolerance"]["max_drawdown_pct"]
+        if max_dd < 0.1:
+            add(6, "dd_low")
+        elif max_dd < 0.2:
+            add(3, "dd_mid")
+        else:
+            add(0, "dd_high")
+        # 日波动率 (6分)
+        daily_vol = metrics["post_cost_survival"]["daily_volatility"]
+        if daily_vol < 0.01:
+            add(6, "vol_low")
+        elif daily_vol < 0.03:
+            add(3, "vol_mid")
+        else:
+            add(0, "vol_high")
+        # CVaR 95% (8分)
+        cvar = metrics["post_cost_survival"]["cvar_95_pct"]
+        if cvar <= 0.02:
+            add(8, "cvar_low")
+        elif cvar <= 0.05:
+            add(4, "cvar_mid")
+        else:
+            add(0, "cvar_high")
+
+        # ---------- 过拟合检测 (满分20) ----------
+        # Deflated Sharpe p-value (12分)
+        ds_p = metrics["overfit_filter"]["deflated_sharpe_pvalue"]
+        if ds_p <= 0.05:
+            add(12, "dsig_pvalue_good")
+        else:
+            add(0, "dsig_pvalue_bad")
+        # OOS夏普衰减 (8分)
+        oos = metrics["live_tolerance"]["oos_sharpe_decay"]
+        if oos > -0.3:
+            add(8, "oos_decay_good")
+        elif oos > -0.5:
+            add(4, "oos_decay_mid")
+        else:
+            add(0, "oos_decay_bad")
+
+        # ---------- 稳健性/一致性 (满分20) ----------
+        # 滚动夏普标准差 (6分)
+        roll_std = metrics["live_tolerance"]["rolling_sharpe_std"]
+        if roll_std < 0.3:
+            add(6, "roll_std_low")
+        elif roll_std < 0.6:
+            add(3, "roll_std_mid")
+        else:
+            add(0, "roll_std_high")
+        # 胜率 (4分)
+        win_rate = metrics["basic"]["win_rate_pct"] / 100.0
+        if win_rate >= 0.4:
+            add(4, "win_rate_ok")
+        else:
+            add(0, "win_rate_low")
+        # 最大连续亏损次数 (4分)
+        max_cons_loss = metrics["live_tolerance"]["max_consecutive_losses"]
+        if max_cons_loss <= 5:
+            add(4, "max_cons_loss_ok")
+        else:
+            add(0, "max_cons_loss_warn")
+        # 收益偏度 (6分)
+        skew = metrics["return_quality"]["return_skewness"]
+        if skew > 0:
+            add(6, "skew_ok")
+        else:
+            add(0, "skew_warn")
+
+        # ---------- 实盘摩擦/容量 (满分15) ----------
+        # 滑点冲击 (6分)
+        base = metrics["live_tolerance"]["stress_original_profit"]
+        stressed = metrics["live_tolerance"]["stress_2x_slip_profit"]
+        if base != 0:
+            decay = abs((stressed - base) / abs(base))
+        else:
+            decay = 1.0
+        if decay < 0.5:
+            add(6, "stress_slip_good")
+        elif decay < 0.8:
+            add(3, "stress_slip_mid")
+        else:
+            add(0, "stress_slip_bad")
+        # 换手率 (5分)
+        turnover = metrics["live_tolerance"]["turnover_rate_annual"]
+        if turnover < 200:
+            add(5, "turnover_ok")
+        else:
+            add(0, "turnover_high")
+        # 容量估算 (4分)
+        capacity = metrics["live_tolerance"]["capacity_estimate"]
+        if capacity >= 100:
+            add(4, "capacity_ok")
+        else:
+            add(0, "capacity_low")
+
+        # 最终判定
+        if score >= 70:
+            verdict = k_MSG["verdict_live"]
+        elif score >= 40:
+            verdict = k_MSG["verdict_improve"]
+        else:
+            verdict = k_MSG["verdict_discard"]
+
+        return {"total_score": score,
+                "verdict": verdict,
+                "details": details}

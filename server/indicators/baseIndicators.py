@@ -1,7 +1,7 @@
 import abc,talib,ta
 import numpy as np
 import pandas as pd
-from server.utils import pdData,logFormat,logJson
+from server.utils import pdData,logFormat,logJson,err
 from server.utils.science import *
 
 class baseIndicators(metaclass=abc.ABCMeta):

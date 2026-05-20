@@ -3,8 +3,9 @@ import pandas as pd
 from decimal import Decimal, ROUND_UP
 # from server.utils.common import switchFn
 # from server.market.consts import kLong,kShort,kBuy,kSell
+# from hmmlearn import hmm
 
-import numpy as np
+# import numpy as np
 
 # 是否落在范围
 def inRange(range, num):
@@ -61,87 +62,109 @@ def division(a:float, b:float, step = 0, precision:str = '0.001'):
     # 浮动亏损百分比 = (浮动亏损 / 初始保证金) * 100
     # pass
 
+
+# todo暂时测试过周线有效
+# 最简单的对策：优化方向
+# 如果你想用更粗的指标来管理这个牛市，不用缠论那么精细。
+# 用周线收盘价，配合周线MA20和趋势线。只要周线收盘价没有有效跌破MA20，或者没有跌破前一个波段的最低点（比如4.9万），你就可以坚定认为牛市还在继续。
 def trend(pf, mode='all'):
+    """
+    基于长期均线斜率的牛/熊二元趋势识别。
+    无震荡输出，自动适配日/周/月周期。
+    """
     df = pf.copy()
-    _empty = lambda: {'bull': None, 'bear': None, 'range': (int(df.index[0]), int(df.index[-1]))} if mode == 'last' \
-        else {'bull': [], 'bear': [], 'range': [(int(df.index[0]), int(df.index[-1]))]}
 
-    if len(df) < 5:
-        return _empty()
-
-    # ---------- 1. Swing High/Low 检测（顶只看high，底只看low）----------
-    N = 2
-    h, l = df['high'], df['low']
-    swing_high = pd.Series(True, index=df.index)
-    swing_low = pd.Series(True, index=df.index)
-    for j in range(1, N + 1):
-        swing_high &= (h > h.shift(j)) & (h > h.shift(-j))
-        swing_low  &= (l < l.shift(j)) & (l < l.shift(-j))
-
-    # ---------- 2. 收集分型点并排序 ----------
-    fx = []
-    for idx in df.index:
-        if swing_high.iloc[idx]:
-            fx.append((idx, 'top', h.iloc[idx]))
-        if swing_low.iloc[idx]:
-            fx.append((idx, 'bottom', l.iloc[idx]))
-    fx.sort(key=lambda x: x[0])
-
-    if len(fx) < 2:
-        return _empty()
-
-    # ---------- 3. 强制交替序列（连续同类型保留更极端的）----------
-    pivots = [fx[0]]
-    for i in range(1, len(fx)):
-        last, curr = pivots[-1], fx[i]
-        if curr[1] == last[1]:
-            if (curr[1] == 'top' and curr[2] > last[2]) or \
-               (curr[1] == 'bottom' and curr[2] < last[2]):
-                pivots[-1] = curr
+    # ============ 0. 周期检测与参数设定 ============
+    def detect_period(idx):
+        if not isinstance(idx, pd.DatetimeIndex):
+            return 'd'
+        diffs = idx.to_series().diff().dropna()
+        if len(diffs) == 0:
+            return 'd'
+        median_diff = diffs.median()
+        days = median_diff / pd.Timedelta(days=1)
+        if days <= 3:
+            return 'd'
+        elif days <= 10:
+            return 'w'
         else:
-            pivots.append(curr)
+            return 'm'
 
-    if len(pivots) < 4:
-        return _empty()
+    period = detect_period(df.index)
 
-    # ---------- 4. 趋势判断：pivots[i] vs pivots[i-2] 同类型比较 ----------
-    # 交替序列中 pivots[i] 和 pivots[i-2] 一定同类型，恰好隔一个波段
-    segments = []
-    state_start = df.index[0]
-    current_state = 'range'
+    if period == 'd':
+        ma_len = 60          # 长期均线周期
+        slope_lookback = 10  # 斜率回溯期（用于判断方向）
+        min_seg_len = 5      # 最小段合并长度
+    elif period == 'w':
+        ma_len = 26
+        slope_lookback = 4
+        min_seg_len = 2
+    else:  # 月线
+        ma_len = 12
+        slope_lookback = 2
+        min_seg_len = 1
 
-    for i in range(3, len(pivots)):
-        p_cur = pivots[i]
-        p_prev_same = pivots[i - 2]    # 同类型
-        p_other_cur = pivots[i - 1]    # 异类型
-        p_other_prev = pivots[i - 3]   # 与 i-1 同类型
+    # ============ 1. 计算长期均线及其斜率 ============
+    df['ma_long'] = df['close'].ewm(span=ma_len, adjust=False).mean()
+    # 斜率简化：均线当前值 vs slope_lookback 前的值
+    df['slope'] = df['ma_long'] - df['ma_long'].shift(slope_lookback)
 
-        if p_cur[1] == 'top':
-            h_cur, h_prev = p_cur[2], p_prev_same[2]
-            l_cur, l_prev = p_other_cur[2], p_other_prev[2]
+    # ============ 2. 每日状态判定（忽略震荡，强制二元） ============
+    def assign_state(row):
+        if pd.isna(row['slope']):
+            return None
+        return 'bull' if row['slope'] > 0 else 'bear'
+
+    df['state'] = df.apply(assign_state, axis=1)
+    valid_df = df.dropna(subset=['state']).copy()
+
+    if valid_df.empty:
+        seg = (int(df.index[0]), int(df.index[-1]))
+        if mode == 'last':
+            return {'bull': None, 'bear': None, 'range': None}
+        return {'bull': [], 'bear': [], 'range': []}
+
+    # ============ 3. 原始分段 ============
+    raw_segments = []
+    start_idx = valid_df.index[0]
+    current_state = valid_df['state'].iloc[0]
+    for i in range(1, len(valid_df)):
+        if valid_df['state'].iloc[i] != current_state:
+            end_idx = valid_df.index[i-1]
+            raw_segments.append((current_state, int(start_idx), int(end_idx)))
+            start_idx = valid_df.index[i]
+            current_state = valid_df['state'].iloc[i]
+    raw_segments.append((current_state, int(start_idx), int(valid_df.index[-1])))
+
+    # ============ 4. 合并短片段 + 震荡吞没 ============
+    merged = []
+    for state, s, e in raw_segments:
+        length = e - s + 1
+        if length <= min_seg_len and merged:
+            # 短片段并入前一段，状态随前一段
+            prev_state, prev_s, prev_e = merged[-1]
+            merged[-1] = (prev_state, prev_s, e)
         else:
-            l_cur, l_prev = p_cur[2], p_prev_same[2]
-            h_cur, h_prev = p_other_cur[2], p_other_prev[2]
+            merged.append((state, s, e))
 
-        if h_cur > h_prev and l_cur > l_prev:
-            new_state = 'bull'
-        elif h_cur < h_prev and l_cur < l_prev:
-            new_state = 'bear'
+    # 二次合并相邻同状态
+    final = []
+    for seg in merged:
+        if not final:
+            final.append(seg)
+            continue
+        last_state, last_s, last_e = final[-1]
+        state, s, e = seg
+        if state == last_state:
+            final[-1] = (state, last_s, e)
         else:
-            new_state = 'range'
+            final.append(seg)
 
-        if new_state != current_state:
-            boundary = pivots[i - 1][0]
-            segments.append((current_state, state_start, boundary))
-            state_start = boundary
-            current_state = new_state
-
-    segments.append((current_state, state_start, df.index[-1]))
-
-    # ---------- 5. 格式化输出 ----------
+    # ============ 5. 输出 ============
     result = {'bull': [], 'bear': [], 'range': []}
-    for state, s, e in segments:
-        result[state].append((int(s), int(e)))
+    for state, s, e in final:
+        result[state].append((s, e))
 
     if mode == 'last':
         return {k: (result[k][-1] if result[k] else None) for k in ['bull', 'bear', 'range']}
