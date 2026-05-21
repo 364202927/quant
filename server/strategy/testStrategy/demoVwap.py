@@ -19,39 +19,25 @@ class demoVwap(testCTA, testTrade):
                             # 'ma':'trend.ma',
                             "backTest":"other.backTest"})
         print("init demoVwap")
-        # self._kLine = pdData(read = 'binance_spot_BTCUSDT')
-        #股市判断牛熊
-        # self._kLine.resample(timeframe = '1W', seTime = ['2024-01-01 00:00:00', '2025-01-01 00:00:00'])
-        # print(self._kLine.get())
-        # trendList = trend(self._kLine.get())
-        # print('结果',trendList)
-        # for k,v in trendList.items():
-        #     if v != None and len(v) > 0:
-        #         # print(v[0])
-        #         data = v[0]
-        #         print(k,":",self._kLine.get(cols = data[0],key= 'candle_begin_time'),'~',self._kLine.get(cols = data[1],key= 'candle_begin_time'))
-
-                # print(k,":",self._kLine.get(cols = v[0],key= 'candle_begin_time'),'~',self._kLine.get(cols = v[1],key= 'candle_begin_time'))
-        #策略
-        # self.strategyTest('2024-01-01 00:00:00', '2025-01-01 00:00:00')
-        # openWeb(3)
+        # self.startStrategy()
         # exit()
+
     #策略检验
-    def strategyTest(self,beginTime,endTime,timeframe = '15m'):
-        #获取k线,并添加指标
-        # self._kLine = pdData(read = 'binance_spot_BTCUSDT')
-        self._kLine.resample(timeframe = timeframe, seTime = [beginTime, endTime])
-        _indPd = self._kLine.getIndicators(self.vwap)
-        self._signal(_indPd)
-        # logFormat(self.getTransaction())
-        print("~~~~~~~~~~~~~~",self.getTradesCount())
+    # def strategyTest(self,beginTime,endTime,timeframe = '15m'):
+    #     #获取k线,并添加指标
+    #     # self._kLine = pdData(read = 'binance_spot_BTCUSDT')
+    #     self._kLine.resample(timeframe = timeframe, seTime = [beginTime, endTime])
+    #     _indPd = self._kLine.getIndicators(self.vwap)
+    #     self._signal(_indPd)
+    #     # logFormat(self.getTransaction())
+    #     print("~~~~~~~~~~~~~~",self.getTradesCount())
     
-        #计算回测
-        self.backTest.delimit(principal = 1000, lv = 1)
-        self.backTest.calculate(self._kLine, self.getTransaction())
+    #     #计算回测
+    #     self.backTest.delimit(principal = 1000, lv = 1)
+    #     self.backTest.calculate(self._kLine, self.getTransaction())
 
     def _signal(self, sorPf) -> list:
-        pf = sorPf.get()
+        pf = sorPf.get().copy()
         pf["typical_price"] = (pf["high"] + pf["low"] + pf["close"]) / 3
 
         trade_day = pf["candle_begin_time"].dt.date
@@ -116,7 +102,20 @@ class demoVwap(testCTA, testTrade):
                     position = -1
                     entry_price = price
                     self.addTransaction(kShort, kSell, lv, idx, 10)
-        
+
+    # web测试    
+    def startStrategy(self):
+        self._kLine = pdData(read = 'binance_spot_BTCUSDT')
+        self._kLine.resample(timeframe = '1h', seTime = ['2024-01-01 00:00:00', '2025-01-01 00:00:00'])
+        _indPd = self._kLine.getIndicators(self.vwap)
+        self._signal(_indPd)
+        self.backTest.delimit(principal = 1000, lv = 1)
+        summarize = self.backTest.calculate(self._kLine, self.getTransaction())
+        # print(_indPd.get())
+        # print(self.getTransaction())
+        # logFormat(summarize)
+        return {'kLine': _indPd.get(), 'tradeRecords': self.getTransaction(), 'summarize': summarize}
+
 
     def update_1m(self, id: str, timeKey: str) -> None:
         return None

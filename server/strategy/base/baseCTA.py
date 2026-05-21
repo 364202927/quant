@@ -4,6 +4,7 @@ from server.market.consts import kLong, kShort, kSwap, kFuture, kDelivery, kSpot
 from server.core.task import taskHandle
 from server.utils.fileConfig import g_config, kLogBufType, kOrderBufType, recordBuffer
 kIndicatorsFile = 'server.indicators.'
+# todo:定时器暂时没测试
 
 class baseCTA(taskHandle):
     "交易基类"

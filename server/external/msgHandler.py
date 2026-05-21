@@ -1,5 +1,5 @@
 from server.core.quant import quant
-from server.utils import switchFn,evtConnect,kEvt_Web
+from server.utils import switchFn,evtConnect,kEvt_Web, rtWeb
 from server.utils.fileConfig import g_config
 
 eMsgId = {
@@ -14,6 +14,7 @@ eMsgId = {
     'ePage_order':1004, #订单管理
     #save数据，设置信息
     'eSaveFile':10000, #保存
+    'eStartBackTest':11000,#开启回测
 }
 
 class msgHandler:
@@ -43,7 +44,6 @@ class msgHandler:
                 "ai": g_config.aiApi()
             }
             #todo:还有start文件
-
             return {"user": user, "apiKey": apiKey}
         def initMarketTrends():
             return
@@ -58,20 +58,32 @@ class msgHandler:
             g_config.saveFile()
             #todo:是否重启服务器
             return
+        def startBackTest():#开启回测
+            checkId = msg[0].get('id')
+            taskName = msg[0].get('selectedTask')
+            if checkId == 1:
+                return self.callTask(taskName,'startStrategy')
+            return {}
         return switchFn({eMsgId['eWebInit']: initWeb,
                         eMsgId['ePage_k']: initMarketTrends,
                         eMsgId['ePage_cta']:initStartFile,
                         eMsgId['ePage_test']:initBacktesting,
                         eMsgId['ePage_order']:initOrders,
-                        eMsgId['eSaveFile']:saveConfig},
+                        eMsgId['eSaveFile']:saveConfig,
+                        eMsgId['eStartBackTest']:startBackTest},
                         key=id)
+    
+    # 调用task
+    def callTask(self, taskName, fnName):
+        rt = self.__instance.callFn(taskName,'startStrategy')
+        return rtWeb(rt)
 
-    # 处理接口
+    # 处理web id
     def process(self, id, msg):
         print(f"~~~~~~~~~~[消息处理]~~~~~~~~ 消息ID: {id}, 参数: {msg}")
         rt = self.idTransform(id,msg)
         return rt
-    
+
     #evt消息
     def evtProcess(self, key, *args):
         id = args[0]

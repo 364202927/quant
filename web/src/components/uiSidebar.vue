@@ -1,3 +1,11 @@
+<script lang="ts">
+import { defineComponent } from 'vue'
+
+export default defineComponent({
+  name: 'UiSidebar'
+})
+</script>
+
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { type MenuItem, eMenuId } from '../types'
@@ -23,7 +31,7 @@ const userName = ref<string>('')
 const isDisabled = ref<boolean>(false)
 
 // 当前激活项
-const activeItem = ref<MenuItem>(menuItems[4])
+const activeItem = ref<MenuItem>(menuItems[4]!)
 
 // 初始化函数
 const init = (strName: string) => {
@@ -33,7 +41,7 @@ const init = (strName: string) => {
 
 // 选择菜单项
 const onSelect = (item: MenuItem) => {
-  if (isDisabled.value) return
+  if (isDisabled.value || activeItem.value.id === item.id) return
   activeItem.value = item
   emit('select-item', item)
 }
@@ -79,7 +87,7 @@ defineExpose({
 </script>
 
 <template>
-  <aside class="w-64 bg-gray-900 text-white flex flex-col shadow-2xl z-10 shrink-0">
+  <aside class="w-52 bg-gray-900 text-white flex flex-col shadow-2xl z-10 shrink-0">
     <!-- Logo 区域 -->
     <div class="h-16 flex items-center px-6 border-b border-gray-800 justify-center">
       <span class="text-lg font-bold tracking-wide ">Dashboard</span>
@@ -88,14 +96,14 @@ defineExpose({
     <!-- 菜单列表 -->
     <nav class="flex-1 overflow-y-auto py-4">
       <ul class="space-y-1">
-        <li v-for="(item, index) in menuItems.filter(i => i.id !== eMenuId.eSettings)" :key="index">
-          <button @click="onSelect(item)" :disabled="isDisabled"
-            class="w-full flex items-center justify-center px-6 py-3 text-lg transition-all duration-200 border-l-4"
+        <li v-for="item in menuItems.filter(i => i.id !== eMenuId.eSettings)" :key="item.id">
+          <button @click="onSelect(item)" :disabled="isDisabled || activeItem.id === item.id"
+            class="w-full box-border flex items-center justify-center px-6 py-3 text-lg transition-all duration-200 border-l-4"
             :class="[
               activeItem.id === item.id
                 ? 'bg-transparent border-indigo-500 text-blue-400 hover:text-blue-500 font-medium'
                 : 'bg-transparent text-white hover:text-white',
-              isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+              (isDisabled || activeItem.id === item.id) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
             ]">
             <i :class="[item.icon, 'mr-3 text-2xl']"></i>
             <span>{{ item.name }}</span>
@@ -112,7 +120,7 @@ defineExpose({
             {{ getUserInitial() }}
           </div>
           <div class="flex-1 min-w-0">
-            <p class="text-sm font-medium truncate">{{ userName }}</p>
+            <p class="text-sm font-small truncate">{{ userName }}</p>
           </div>
         </div>
         <!-- 设置按钮 -->

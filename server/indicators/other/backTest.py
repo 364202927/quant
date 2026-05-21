@@ -228,7 +228,7 @@ class backTest(baseIndicators):
         # 4.计算分数
         resScore = self._score(result)
         result['score'] = resScore
-        logJson(result)
+        # logJson(result)
         return result
 
     # signal转换成下单信息

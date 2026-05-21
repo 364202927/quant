@@ -5,7 +5,7 @@ from server.strategy.base.realTrade import *
 import time
 
 class test(contractCTA, realTrade):
-    "测试用法"
+    "交易所api测试调用"
 
     def info(self):
         return "demo+k线数据,交易所成交"
@@ -18,6 +18,7 @@ class test(contractCTA, realTrade):
                             'vwap':'volume.vwap',
                             'boll':'oscillators.boll'})
         print("~~~~init test~~~~")
+        self.pause()
         # 指标合并计算
         # self.candles.delimit(exName = 'binanceMain',symbols = ['spot_BTCUSDT','swap_BTCUSDT'])
         # candles = self.candles.calculate(self.vwap, self.boll)

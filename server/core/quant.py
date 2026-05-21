@@ -31,11 +31,17 @@ class quant:
         print('==================')
     
     def getAllTasks(self):
-        taslList = []
+        taskList = []
         for name, task in self.__taskMgr.items():
             if task.get('active'):
-                taslList.append(name)
-        return taslList
+                taskList.append(name)
+        return taskList
+    
+    def callFn(self, taskName, fnName):
+        task = self.__taskMgr.get(taskName)
+        if not task :
+            return {}
+        return task.method(fnName)
     
     async def get_task_status(self, task_name: str):
         """获取单个任务状态"""

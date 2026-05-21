@@ -65,7 +65,8 @@ from server.utils.common import (
     utc_now,
     tryCatch,
     str2time,
-    openWeb
+    openWeb,
+    rtWeb,
 )
 
 __all__ = [
@@ -108,6 +109,7 @@ __all__ = [
     'dictFind',
     'recordBuffer',
     'openWeb',
+    'rtWeb',
     # fileConfig
     'g_config',
     # pdData

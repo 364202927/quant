@@ -1,12 +1,14 @@
 from server.strategy.base.baseCTA import *
 # from server.utils import log
+# from datetime import date, datetime
+
 
 class testCTA(baseCTA):
     "测试模式"
     
     def __init__(self):
         super().__init__()
-        print("~~~~~~testCTA __init__~~~~~~~~~")
+        # print("~~~~~~testCTA __init__~~~~~~~~~")
 
     #增量测试,每次时间刷新触发k线改变
     def testModel(self,testPd:pdData, startCount=100):
@@ -34,6 +36,10 @@ class testCTA(baseCTA):
         for tra in self.trajectories:
             count += len(tra.get('trades'))
         return count
+    
+    #web测试开启接口
+    @abc.abstractmethod
+    def startStrategy(self):pass
 
    # # 增量测试:对原始数据进行剪裁,每次update发送测试的数据
     # def incrementalTesting(self, pdData, startCount=100, closeCount=-1):  

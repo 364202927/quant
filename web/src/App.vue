@@ -24,6 +24,7 @@ onMounted(async () => {
   if (response.received?.args) {
     user.initFromServer(response.received.args)
     const resUser = response.received.args.user
+    sidebarRef.value?.init(resUser.userName || 'admin')
     // console.log("~~~App.vue init~~~", resUser.page)
     const page = resUser.page//resUser.userName !== '' ? eMenuId.eMarket : eMenuId.eSettings
     sidebarRef.value?.setItem(page)

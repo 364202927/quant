@@ -1,6 +1,6 @@
 from server.strategy.base.testCTA import *
 from datetime import datetime
-# import numpy as np
+import numpy as np
 
 class test2(testCTA):
     """测试用法 - 验证所有指标的自写算法和talib实现"""
@@ -12,6 +12,7 @@ class test2(testCTA):
 
     def init(self) -> None:
         self.regTime('2s', "10s")
+        self.pause()
         # self._kLinePd = pdData()
         # self._kLinePd.readFile('binance_BTCUSDT.pkl')
 
@@ -93,3 +94,5 @@ class test2(testCTA):
     def update_10s(self, id: str, timeKey: str) -> None:
         pass
 
+    def startStrategy(self):
+        pass

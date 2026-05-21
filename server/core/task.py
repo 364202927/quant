@@ -4,6 +4,7 @@ kStrategyFile = 'server.strategy.'
 
 class taskHandle(metaclass=abc.ABCMeta):
     indicators = {}#共享指标
+    pause,resume = None,None
 
     def __init__(self):
         self.tacticsTime = []# 触发时间
@@ -44,19 +45,25 @@ class task:
         self.__handle = require(kStrategyFile + className)()
         if not isinstance(self.__handle, taskHandle):
             return False
+        self.__handle.pause,self.__handle.resume = self.pause, self.resume
         self.__handle.init()
         if not self.get('tacticsTime'):
             return False
-        self.active()
-        return True
-
-    # 激活任务
-    def active(self):
-        self.isActive = True
-        if not self.isFirst:# 第一次激活向定时器注册任务
+        # 第一次激活向定时器注册任务
+        if not self.isFirst:
             self._register()
-    def stop(self):
+        return True
+    # 是否激活任务
+    def pause(self):
         self.isActive = False
+    def resume(self):
+        self.isActive = True
+
+    # taskHandle fn触发
+    def method(self, fnName):
+        fn = getattr(self.__handle, fnName, None)
+        if callable(fn):
+            return fn()
 
     # 只有第一次激活时注册时间事件
     def _register(self):
@@ -72,7 +79,7 @@ class task:
         if timeKey not in filter:
             return True
         if not self.isActive:
-            if self.__handle.stopProcess:
+            if hasattr(self.__handle, "stopProcess"):
                 self.__handle.stopProcess()
             return True
         #全时间回调接收，如返回ture不在触发其余时间绑定

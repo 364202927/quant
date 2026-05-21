@@ -1,11 +1,12 @@
-import pickle,json,time,os,requests,inspect,asyncio,inspect,gzip,webbrowser,sys
+import pickle,json,time,os,requests,inspect,asyncio,inspect,gzip,webbrowser,sys,math
 from importlib import import_module
 from pydispatch import dispatcher
 from server.utils import eTimeTs,kEvt_Web
-from datetime import datetime, timezone
+from datetime import datetime, timezone,date
 from pathlib import Path
 import pandas as pd
-
+from typing import Any
+import numpy as np
 
 def publicIp():
     response = requests.get('https://api.ipify.org?format=json')
@@ -353,7 +354,50 @@ def openWeb(page = 0):
             safari.open('http://localhost:5173/')
             return
         webbrowser.open('http://localhost:5173/')
+#转换成web支持的格式
+def rtWeb(data: dict) -> dict[str, Any]:
+    def _convertValue(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {k: _convertValue(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [_convertValue(item) for item in value]
+        if value is pd.NA or value is pd.NaT:
+            return None
+        if isinstance(value, pd.Timestamp):
+            return value.strftime("%Y-%m-%d %H:%M:%S")
+        if isinstance(value, np.datetime64):
+            return pd.Timestamp(value).strftime("%Y-%m-%d %H:%M:%S")
+        if isinstance(value, (datetime, date)):
+            return value.strftime("%Y-%m-%d %H:%M:%S") if isinstance(value, datetime) else value.isoformat()
+        if isinstance(value, np.bool_):
+            return bool(value)
+        if isinstance(value, np.integer):
+            return int(value)
+        if isinstance(value, np.floating):
+            value = float(value)
+        if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+            return None
+        return value
 
+    def _convertKline(pf: pd.DataFrame) -> list[dict[str, Any]]:
+        if pf is None or pf.empty:
+            return []
+        web_pf = pf.copy()
+        if "candle_begin_time" in web_pf.columns:
+            time_col = pd.to_datetime(web_pf["candle_begin_time"], errors="coerce")
+            web_pf["time"] = [int(t.timestamp()) if pd.notna(t) else None for t in time_col]
+            web_pf.drop(columns=["candle_begin_time"], inplace=True)
+        if "vol" in web_pf.columns and "volume" not in web_pf.columns:
+            web_pf.rename(columns={"vol": "volume"}, inplace=True)
+        return _convertValue(web_pf.to_dict(orient="records"))
+    #return
+    result = {}
+    for key, val in data.items():
+        if isinstance(val, pd.DataFrame):
+            result[key] = _convertKline(val)
+        else:
+            result[key] = _convertValue(val)
+    return result
 # 并行
 # def pool(fnCall, valueList, count = 2):
 #     with Pool(processes=count) as pool:

@@ -12,6 +12,7 @@ export interface CandlestickData {
   low: number
   close: number
   volume?: number
+  vwap?: number | null
 }
 
 // 策略
@@ -49,6 +50,26 @@ export interface BacktestOrder {
   profit: number
 }
 
+export interface BacktestTrade {
+  behavior: TradeSide
+  lv: number
+  pos: number
+  'position%': number
+}
+
+export interface BacktestTradeRecord {
+  type: 'contract' | 'spot' | 'stock' | string
+  dir: 'SHORT' | 'LONG' | string
+  trades: BacktestTrade[]
+}
+
+export interface BacktestTradeRow extends BacktestTrade {
+  id: string
+  type: string
+  dir: string
+  label: string
+}
+
 // 菜单项
 export interface MenuItem {
   id: eMenuId
@@ -57,23 +78,26 @@ export interface MenuItem {
 }
 
 // 菜单 ID
-export enum eMenuId {
-  eAssets = 0,      // 资产
-  eMarket = 1,      // 行情
-  eStrategy = 2,    // 策略管理
-  eBacktest = 3,    // 回测
-  eOrders = 4,      // 订单管理
-  eSettings = 20,   // 设置
-}
+export const eMenuId = {
+  eAssets: 0,      // 资产
+  eMarket: 1,      // 行情
+  eStrategy: 2,    // 策略管理
+  eBacktest: 3,    // 回测
+  eOrders: 4,      // 订单管理
+  eSettings: 20,   // 设置
+} as const
+export type eMenuId = typeof eMenuId[keyof typeof eMenuId]
 
-export enum eMsg {
+export const eMsg = {
   // get 数据
-  eWebInit = 1000,     // web 初始化
-  ePage_k = 1001,      // 行情
-  ePage_cta = 1002,
-  ePage_test = 1003,
-  ePage_order = 1004,
+  eWebInit: 1000,     // web 初始化
+  ePage_k: 1001,      // 行情
+  ePage_cta: 1002,
+  ePage_test: 1003,
+  ePage_order: 1004,
 
   // save 数据
-  eSaveFile = 10000,   // 同步后台
-}
+  eSaveFile: 10000,   // 同步后台
+  eBacktest: 11000,   // 发送回测数据
+} as const
+export type eMsg = typeof eMsg[keyof typeof eMsg]
