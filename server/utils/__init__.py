@@ -10,7 +10,7 @@ eTimeTs = {
 eSampleTs = {
     "15m": "15min",
     "30m": "30min",
-    "1h": "H",
+    "1h": "h",
     "4h": "4H",
     "1D": "D",
     "1W": "W",
@@ -21,6 +21,7 @@ eSampleTs = {
 kEvt_Time = 'evtTime'  # 任务时间设定
 kEvt_GetTime = 'evtGetTime'  # 任务时间触发
 kEvt_Web = 'evtWeb'     #发送和网络通讯相关的参数 
+kEvt_Market = 'evtMarket' #交易所相关
 
 #log
 kLog,kError,kInfo,kWarn = 'log','err','info','warn'
@@ -127,6 +128,7 @@ __all__ = [
     'kEvt_GetTime',
     'kEvt_Time',
     'kEvt_Web',
+    'kEvt_Market',
     'eSampleTs',
     'eMsgId',
 ]

@@ -1,4 +1,4 @@
-from server.core.quant import quant
+from server.core.engine import engine
 from server.utils import switchFn,evtConnect,kEvt_Web, rtWeb
 from server.utils.fileConfig import g_config
 
@@ -20,8 +20,8 @@ eMsgId = {
 class msgHandler:
     "消息事件处理器"
     
-    def __init__(self, objQuant:quant):
-        self.__instance = objQuant   #quant
+    def __init__(self, objEngine: engine):
+        self.__instance = objEngine   
         self.__page = 0
         evtConnect(kEvt_Web, self)
     
@@ -50,7 +50,7 @@ class msgHandler:
         def initStartFile():
             return
         def initBacktesting():
-            return self.__instance.getAllTasks()
+            return self.__instance.getActiveTasks()
         def initOrders():
             return
         def saveConfig():#保存设置

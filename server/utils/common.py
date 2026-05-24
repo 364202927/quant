@@ -24,7 +24,7 @@ def futureU(symbol: str, timeIndex = 0):#交割合约,币种结算时间排序,0
 def futureC(symbol: str,  timeIndex = 0):#币本位交割合约
     return swapC(symbol) + f'-{timeIndex}'
 
-# 绑定消息
+# 绑定消息,类需实现def evtProcess(self, key, *args):
 def evtConnect(strEvt, obj):
     def rtMsg(sender, value, value1, value2, value3):
         obj.evtProcess(sender, value, value1, value2, value3)

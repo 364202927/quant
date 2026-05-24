@@ -1,6 +1,7 @@
 import asyncio, re, ast, sys, threading
 from server.utils.fileConfig import g_config,kLogBufType
 from server.utils import kLog,kInfo,kError,kWarn,warn,log
+from server.external.interface import ExternalInterface
 
 _IS_WIN = sys.platform == 'win32'
 if _IS_WIN:
@@ -19,11 +20,11 @@ kReset = '\033[0m'
 kTagColor = {kError: kColor['red'], kWarn: kColor['yellow'],kInfo: kColor['cyan'], kLog: kColor['white']}
 kLogFilter = [kLog, kInfo, kError, kWarn] #可显示的打印
 
-class cli:
+class cli(ExternalInterface):
     "Console监控器"
-    
+
     def __init__(self, fnHandler):
-        self._msgTransform = fnHandler
+        super().__init__(fnHandler)
     
     def _str2Id(self, src: str) -> dict | None:
         src = src.replace(",", ",").strip()

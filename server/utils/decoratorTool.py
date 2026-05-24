@@ -1,5 +1,6 @@
 import time
-
+from abc import ABC, abstractmethod
+from typing import Callable
 # 单例
 def singleton(cls):
     instances = {}
@@ -18,3 +19,12 @@ def fun_calc(func):
         print("函数总计时间：", exec_time)
         return f
     return wrapper
+
+#外部文件基类
+class extInterface:
+    def __init__(self, fnHandler: Callable | None = None):
+        self._msgTransform = fnHandler
+
+    @abstractmethod
+    async def run(self) -> None: ...
+

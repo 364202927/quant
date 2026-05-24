@@ -1,7 +1,11 @@
+import asyncio
 import ccxt
 import pandas as pd
 from server.market.consts import kSpot, kSwap, kFuture, kDelivery, kBuy, kSell, kShort,kLong,kMarket, kLimit
-from server.utils import switch, switchFn, tryCatch, aContainB, slit, str2ms, pdData, err, log, inRange, utc_now, reviseTime, timeFrame2Float, diff_Pdtime, logFormat,trySwitchFn
+from server.utils import switch, switchFn, tryCatch, aContainB, slit, str2ms, pdData, err, log, inRange, utc_now, reviseTime, timeFrame2Float, diff_Pdtime, logFormat, trySwitchFn, evtFireAsync, kEvt_Market
+
+# ccxt.pro 交易所名映射（okex 在 ccxt.pro 中改名为 okx）
+_CCXTPRO_NAMES = {'okex': 'okx'}
 
 class baseExchange:
 
@@ -12,6 +16,7 @@ class baseExchange:
         self._title = ''
         self._id = ''
         self._info = {'acc': {}, 'coin': {}, 'api': {}}
+        self._watches: list[tuple] = []  # [(symbol, timeframe), ...]
 
     def get(self, key: str):
         return switch({
@@ -195,6 +200,71 @@ class baseExchange:
             err("batchOrders: 订单数量需在1-5之间")
             return []
         return self._batchOrders(category, orders)
+
+    # WebSocket 订阅注册
+    def addWatch(self, symbol: str, timeframe: str) -> None:
+        if (symbol, timeframe) not in self._watches:
+            self._watches.append((symbol, timeframe))
+
+    # WebSocket 入口 - 父类统一实现，binance/bybit/okex 无需覆盖
+    async def run(self) -> None:
+        api = self._info.get('api', {})
+        if not api.get('apiKey'):
+            return
+        try:
+            import ccxt.pro as ccxtpro
+        except ImportError:
+            log(f"[ws] ccxt.pro 未安装，跳过 {self.__class__.__name__}")
+            return
+        name = _CCXTPRO_NAMES.get(self.__class__.__name__, self.__class__.__name__)
+        if not hasattr(ccxtpro, name):
+            log(f"[ws] ccxt.pro 不支持交易所: {name}")
+            return
+        while True:
+            ws = getattr(ccxtpro, name)(api)
+            try:
+                await self._wsLoop(ws)
+            except Exception as e:
+                log(f"[ws] {self.__class__.__name__} 断线重连: {e}")
+            finally:
+                await ws.close()
+            await asyncio.sleep(5)
+
+    async def _wsLoop(self, ws) -> None:
+        if not self._watches:
+            while True:
+                await asyncio.sleep(3600)
+        else:
+            await asyncio.gather(*[self._watchKline(ws, sym, tf) for sym, tf in self._watches])
+
+    #ws k线
+    async def _watchKline(self, ws, symbol: str, timeframe: str) -> None:
+        while True:
+            try:
+                ohlcv = await ws.watch_ohlcv(symbol, timeframe)
+                await evtFireAsync(kEvt_Market, 'kline', symbol, timeframe, ohlcv) #发送协议
+            except Exception as e:
+                log(f"[ws] {symbol} {timeframe}: {e}")
+                await asyncio.sleep(1)
+    #ws 深度（Order Book）
+    async def _watchDepth(self, ws, symbol: str) -> None:
+        while True:
+            try:
+                ob = await ws.watch_order_book(symbol)
+                await evtFireAsync(kEvt_Market, 'depth', symbol, ob)
+            except Exception as e:
+                await asyncio.sleep(1)
+
+    #ws 成交历史（Trades）
+    async def _watchTrades(self, ws, symbol: str) -> None:
+        while True:
+            try:
+                trades = await ws.watch_trades(symbol)
+                await evtFireAsync(kEvt_Market, 'trades', symbol, trades)
+            except Exception as e:
+                await asyncio.sleep(1)
+
+    
 
     # 子类可继承接口
     def _create(self, config: dict):

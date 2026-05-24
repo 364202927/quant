@@ -4,16 +4,16 @@ from server.utils.fileConfig import g_config
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Any, List
+from server.external.interface import ExternalInterface
 
 # 约定消息格式
 class msgRequest(BaseModel):
     id: int
     args: List[Any] = []
 
-class web:
+class web(ExternalInterface):
     def __init__(self, fnHandler):
-        # self._quant = quant_instance
-        self._msgTransform = fnHandler
+        super().__init__(fnHandler)
         self._app = self._create_app()
         self._server = None
     
