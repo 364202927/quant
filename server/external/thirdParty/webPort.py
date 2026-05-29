@@ -1,19 +1,20 @@
 from fastapi import FastAPI
 import uvicorn
 from server.utils.fileConfig import g_config
+from server.utils import evtFire, kEvt_Web
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Any, List
-from server.external.interface import ExternalInterface
+from server.utils.decoratorTool import extInterface
 
 # 约定消息格式
 class msgRequest(BaseModel):
     id: int
     args: List[Any] = []
 
-class web(ExternalInterface):
-    def __init__(self, fnHandler):
-        super().__init__(fnHandler)
+class web(extInterface):
+    def __init__(self):
+        super().__init__()
         self._app = self._create_app()
         self._server = None
     
@@ -27,8 +28,7 @@ class web(ExternalInterface):
         #消息接收
         @app.post("/api/postMessage")
         async def post_message(msg: msgRequest):
-            # rt = self._msgTransform.process(msg.id, msg.args)
-            rt = self._msgTransform(msg.id, msg.args)
+            rt = evtFire(kEvt_Web, msg.id, msg.args)
             print("~~~~~~back msg~~~~~~~",rt)
             return {
                 "status": 'success',
@@ -52,8 +52,6 @@ class web(ExternalInterface):
             if arg1 is not None:
                 args.append(arg1)
             
-            if self._message_handler:
-                self._message_handler.handleMessage(id, args)
             return {
                 "status": 'success',
                 "message": 'get_Message 接收成功',

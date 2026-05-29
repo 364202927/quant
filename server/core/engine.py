@@ -1,8 +1,7 @@
 import asyncio
 from server.core.task import task
-from typing import Dict, Any, Optional
 from server.core.timerMsg import timerMgr
-from server.utils import require, path2File, readFile, log
+from server.utils import require, path2File, readFile, log, evtConnect,switchFn, kEvt_Engine
 
 
 # kStrategyFile = 'server.strategy.'
@@ -10,16 +9,13 @@ kStrategyFile2 = 'server/strategy/'
 kStartFile = 'assets.config.start.json'  #todo:这里修改
 
 
-class quant:
-    "量化框架"
+class engine:
+    "量化引擎"
 
     def __init__(self):
         self.__taskMgr = {}
         self.__timeMgr = timerMgr()
-
-        self.__lock = asyncio.Lock()
-        # self.__is_running = False
-        # self.__stop_event = asyncio.Event()
+        evtConnect(kEvt_Engine, self)
 
     def task(self, strategyName):
         return self.__taskMgr.get(strategyName)
@@ -29,20 +25,29 @@ class quant:
         for key in self.__taskMgr:
             print(">>", key, self.__taskMgr[key])
         print('==================')
-    
-    def getAllTasks(self):
+
+    def getActiveTasks(self):
         taskList = []
         for name, task in self.__taskMgr.items():
             if task.get('active'):
                 taskList.append(name)
         return taskList
-    
-    def callFn(self, taskName, fnName):
-        task = self.__taskMgr.get(taskName)
-        if not task :
-            return {}
-        return task.method(fnName)
-    
+
+    def evtProcess(self, key, *args):
+        def _callFn(taskName, fnName):
+            if taskName == 'main':
+                fn = getattr(self, fnName)
+                if fn:
+                    return fn()
+            object = self.__taskMgr.get(taskName)
+            if not object:
+                return {}
+            return object.method(fnName)
+        print('~~~~engine:call~~',args)
+        if not args:
+            return None
+        return _callFn(args[0],args[1])
+
     async def get_task_status(self, task_name: str):
         """获取单个任务状态"""
         # async with self.__lock:
@@ -55,7 +60,7 @@ class quant:
         #         'indicators': objTask.get('indicators'),
         #         'id': objTask.get('id')
         #     }
-    
+
     # def is_running(self) -> bool:
     #     """检查运行状态"""
     #     return self.__is_running
@@ -71,7 +76,7 @@ class quant:
     #         raise
         # finally:
         #     self.__is_running = False
-    
+
     # async def stop(self):
     #     """停止运行"""
     #     self.__stop_event.set()
@@ -97,11 +102,11 @@ class quant:
         #     raise
         while True:
             await self.__timeMgr.run()
-    
+
     # def run(self, count=True):
     #     """兼容旧版本的同步运行接口"""
     #     async def async_loop():
-    #         await self.__timeMgr.run()        
+    #         await self.__timeMgr.run()
     #     if not count:
     #         asyncio.run(async_loop())
     #         exit()

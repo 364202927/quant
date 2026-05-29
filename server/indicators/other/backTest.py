@@ -1,5 +1,5 @@
 from server.indicators.baseIndicators import *
-from server.market.consts import kLong,kShort,kBuy,kSell
+from server.market import kLong, kShort, kBuy, kSell
 from typing import NamedTuple
 # todo:open_eff,close时添加冲击成本价,模拟资金量大的情况下对市场的影响
 # todo:当前只实现了单条交易估计,多条交易轨迹相交没做

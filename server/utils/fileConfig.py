@@ -2,6 +2,7 @@ from server.utils.decoratorTool import singleton
 from server.utils.recordBuffer import recordBuffer
 from server.utils.common import readFile, writeFile, switch, dictFind
 
+
 kMarketPath = "assets/markets/"
 kDataPath = 'assets/config/'
 kLogPath = "assets/log/"
@@ -60,7 +61,7 @@ class fileConfig:
         self.__apiConfig = readFile(kApikeyPath) or apiTemp.copy()
         self.__startConfig = readFile(kStartFile) or {}
         self.__logBuf = recordBuffer(kLogPath,max_size=kBufferSize)
-        self.__orderBuf = recordBuffer(kOrderPath,max_size=kBufferSize)
+        # self.__orderBuf = recordBuffer(kOrderPath,max_size=kBufferSize)
         # print("~~~~~~user.json~~~~~~~", self.__userConfig)
         # print("~~~~~~api.json~~~~~~~", self.__apiConfig)
         # print("~~~~~~start.json~~~~~~~", self.__startConfig)
@@ -116,7 +117,8 @@ class fileConfig:
                         kApiType:self.__apiConfig,
                         kStartType:self.__startConfig,
                         kLogBufType:self.__logBuf,
-                        kOrderBufType:self.__orderBuf},
+                        # kOrderBufType:self.__orderBuf
+                        },
                         key=configType)
         if not config:
             return
@@ -166,12 +168,12 @@ class fileConfig:
         if writeFile(self.__startConfig, kStartFile):
             print('start.json保存成功')
     
-    def saveBuffer(self, bufType=None):
-        if bufType:
-            buf = switch({kLogBufType: self.__logBuf, kOrderBufType: self.__orderBuf}, key=bufType)
-            if buf: buf.save2File()
-        else:
-            self.__logBuf.save2File()
-            self.__orderBuf.save2File()
+    # def saveBuffer(self, bufType=None):
+    #     if bufType:
+    #         buf = switch({kLogBufType: self.__logBuf, kOrderBufType: self.__orderBuf}, key=bufType)
+    #         if buf: buf.save2File()
+    #     else:
+    #         self.__logBuf.save2File()
+    #         self.__orderBuf.save2File()
 
 g_config = fileConfig()

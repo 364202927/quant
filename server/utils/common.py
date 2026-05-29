@@ -27,8 +27,20 @@ def futureC(symbol: str,  timeIndex = 0):#币本位交割合约
 # 绑定消息,类需实现def evtProcess(self, key, *args):
 def evtConnect(strEvt, obj):
     def rtMsg(sender, value, value1, value2, value3):
-        obj.evtProcess(sender, value, value1, value2, value3)
+        return obj.evtProcess(sender, value, value1, value2, value3)
     dispatcher.connect(rtMsg, signal=strEvt, weak=False)
+
+# 同步查询消息，收集第一个非 None 返回值
+# def evtQuery(strEvt, *args):
+#     def getValue(index):
+#         return args[index] if index < len(args) else ''
+#     responses = dispatcher.send(signal=strEvt, sender=strEvt,
+#                                 value=getValue(0), value1=getValue(1),
+#                                 value2=getValue(2), value3=getValue(3))
+#     for _, result in responses:
+#         if result is not None:
+#             return result
+#     return None
 
 # 发送消息(最多3参数) - 同步版本
 def evtFire(strEvt, *args):
@@ -36,9 +48,11 @@ def evtFire(strEvt, *args):
         if index < len(args):
             return args[index]
         return ''
-    dispatcher.send(signal=strEvt, sender=strEvt, 
-                    value=getValue(0), value1=getValue(1),
-                    value2=getValue(2), value3=getValue(3))
+    rt = dispatcher.send(signal=strEvt, sender=strEvt, 
+                            value=getValue(0), value1=getValue(1),
+                            value2=getValue(2), value3=getValue(3))
+    if rt[0][1]: #前有参数则返回
+        return rt[0][1]
 
 # 发送消息(最多3参数) - 异步版本
 async def evtFireAsync(strEvt, *args):

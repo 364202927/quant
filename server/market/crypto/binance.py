@@ -1,5 +1,5 @@
 from server.market.baseExchange import *
-from server.market.consts import kPm
+from server.market import kPm
 from server.utils.science import binanceTimestamp
 from server.utils import timeFrame2Float, sec2min, logFormat
 import json

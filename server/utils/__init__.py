@@ -20,18 +20,27 @@ eSampleTs = {
 # 事件
 kEvt_Time = 'evtTime'  # 任务时间设定
 kEvt_GetTime = 'evtGetTime'  # 任务时间触发
-kEvt_Web = 'evtWeb'     #发送和网络通讯相关的参数 
+kEvt_Web = 'evtWeb'     #发送和网络通讯相关的参数
 kEvt_Market = 'evtMarket' #交易所相关
+kEvt_Engine = 'evtEngine' #调用task的方法
+
+# eEngineId = {
+#     'getRiskConfig': 1,  # args: taskName → returns riskConfig dict
+#     'callTask':      2,  # 调用task的方法
+# }
 
 #log
 kLog,kError,kInfo,kWarn = 'log','err','info','warn'
+
+# 交易所功能是否开启
+kOpenMarket = False
 
 # 导出常用工具函数和类
 from server.utils.recordBuffer import recordBuffer
 from server.utils.fileConfig import g_config
 from server.utils.pdData import pdData
 from server.utils.science import inRange, binanceTimestamp, time2ID,division
-from server.utils.decoratorTool import singleton
+from server.utils.decoratorTool import singleton, extInterface
 from server.utils.logger import log,info,warn,err,logJson,logFormat
 from server.utils.common import (
     spot,
@@ -49,6 +58,7 @@ from server.utils.common import (
     evtConnect,
     evtFire,
     evtFireAsync,
+    # evtQuery,
     split_by,
     slit,
     str2ms,
@@ -93,6 +103,7 @@ __all__ = [
     'evtConnect',
     'evtFire',
     'evtFireAsync',
+    # 'evtQuery',
     'slit',
     'str2ms',
     'reviseTime',
@@ -122,6 +133,7 @@ __all__ = [
     'division',
     # decoratorTool
     'singleton',
+    'extInterface',
     # enumeration
     'eTimeTs',
     'eTaskState',
@@ -129,6 +141,8 @@ __all__ = [
     'kEvt_Time',
     'kEvt_Web',
     'kEvt_Market',
+    'kEvt_Engine',
+    'eEngineId',
     'eSampleTs',
     'eMsgId',
 ]

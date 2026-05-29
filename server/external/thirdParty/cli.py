@@ -1,7 +1,7 @@
 import asyncio, re, ast, sys, threading
 from server.utils.fileConfig import g_config,kLogBufType
-from server.utils import kLog,kInfo,kError,kWarn,warn,log
-from server.external.interface import ExternalInterface
+from server.utils import kLog,kInfo,kError,kWarn,warn,log,evtFire,kEvt_Web
+from server.utils.decoratorTool import extInterface
 
 _IS_WIN = sys.platform == 'win32'
 if _IS_WIN:
@@ -20,11 +20,11 @@ kReset = '\033[0m'
 kTagColor = {kError: kColor['red'], kWarn: kColor['yellow'],kInfo: kColor['cyan'], kLog: kColor['white']}
 kLogFilter = [kLog, kInfo, kError, kWarn] #可显示的打印
 
-class cli(ExternalInterface):
+class cli(extInterface):
     "Console监控器"
 
-    def __init__(self, fnHandler):
-        super().__init__(fnHandler)
+    def __init__(self):
+        super().__init__()
     
     def _str2Id(self, src: str) -> dict | None:
         src = src.replace(",", ",").strip()
@@ -139,4 +139,4 @@ class cli(ExternalInterface):
             return
         values = self._str2Id(cmd)
         if values:
-            self._msgTransform(values['id'], values.get('args'))
+            evtFire(kEvt_Web, values['id'], values.get('args'))

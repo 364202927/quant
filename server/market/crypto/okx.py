@@ -4,8 +4,8 @@ kMaxLimit = 100  # 最大k线数据
 # todo:批次下单没做
 
 
-class okex(baseExchange):
-    _name = "okex"
+class okx(baseExchange):
+    _name = "okx"
 
     def __init__(self, description):
         super().__init__(description, kMaxLimit)

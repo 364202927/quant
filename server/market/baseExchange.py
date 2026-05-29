@@ -1,11 +1,8 @@
 import asyncio
 import ccxt
 import pandas as pd
-from server.market.consts import kSpot, kSwap, kFuture, kDelivery, kBuy, kSell, kShort,kLong,kMarket, kLimit
+from server.market import kSpot, kSwap, kFuture, kDelivery, kBuy, kSell, kShort, kLong, kMarket, kLimit, eMarketId
 from server.utils import switch, switchFn, tryCatch, aContainB, slit, str2ms, pdData, err, log, inRange, utc_now, reviseTime, timeFrame2Float, diff_Pdtime, logFormat, trySwitchFn, evtFireAsync, kEvt_Market
-
-# ccxt.pro 交易所名映射（okex 在 ccxt.pro 中改名为 okx）
-_CCXTPRO_NAMES = {'okex': 'okx'}
 
 class baseExchange:
 
@@ -206,7 +203,7 @@ class baseExchange:
         if (symbol, timeframe) not in self._watches:
             self._watches.append((symbol, timeframe))
 
-    # WebSocket 入口 - 父类统一实现，binance/bybit/okex 无需覆盖
+    # WebSocket 入口 - 父类统一实现，binance/bybit/okx 无需覆盖
     async def run(self) -> None:
         api = self._info.get('api', {})
         if not api.get('apiKey'):
@@ -216,7 +213,7 @@ class baseExchange:
         except ImportError:
             log(f"[ws] ccxt.pro 未安装，跳过 {self.__class__.__name__}")
             return
-        name = _CCXTPRO_NAMES.get(self.__class__.__name__, self.__class__.__name__)
+        name = self.__class__.__name__
         if not hasattr(ccxtpro, name):
             log(f"[ws] ccxt.pro 不支持交易所: {name}")
             return
@@ -231,37 +228,69 @@ class baseExchange:
             await asyncio.sleep(5)
 
     async def _wsLoop(self, ws) -> None:
-        if not self._watches:
+        coros = []
+        for sym, tf in self._watches:
+            coros += [self._watchKline(ws, sym, tf), self._watchDepth(ws, sym), self._watchTrades(ws, sym)]
+        if self._info.get('api', {}).get('apiKey'):
+            coros += [self._watchBalance(ws), self._watchOrders(ws), self._watchPositions(ws)]
+        if not coros:
             while True:
                 await asyncio.sleep(3600)
         else:
-            await asyncio.gather(*[self._watchKline(ws, sym, tf) for sym, tf in self._watches])
+            await asyncio.gather(*coros, return_exceptions=True)
 
-    #ws k线
     async def _watchKline(self, ws, symbol: str, timeframe: str) -> None:
         while True:
             try:
                 ohlcv = await ws.watch_ohlcv(symbol, timeframe)
-                await evtFireAsync(kEvt_Market, 'kline', symbol, timeframe, ohlcv) #发送协议
+                await evtFireAsync(kEvt_Market, eMarketId['mKline'], self.get('id'), symbol, timeframe, ohlcv)
             except Exception as e:
                 log(f"[ws] {symbol} {timeframe}: {e}")
                 await asyncio.sleep(1)
-    #ws 深度（Order Book）
+
     async def _watchDepth(self, ws, symbol: str) -> None:
         while True:
             try:
                 ob = await ws.watch_order_book(symbol)
-                await evtFireAsync(kEvt_Market, 'depth', symbol, ob)
+                await evtFireAsync(kEvt_Market, eMarketId['mDepth'], self.get('id'), symbol, ob)
             except Exception as e:
+                log(f"[ws depth] {self.get('id')} {symbol}: {e}")
                 await asyncio.sleep(1)
 
-    #ws 成交历史（Trades）
     async def _watchTrades(self, ws, symbol: str) -> None:
         while True:
             try:
                 trades = await ws.watch_trades(symbol)
-                await evtFireAsync(kEvt_Market, 'trades', symbol, trades)
+                await evtFireAsync(kEvt_Market, eMarketId['mTrades'], self.get('id'), symbol, trades)
             except Exception as e:
+                log(f"[ws trades] {self.get('id')} {symbol}: {e}")
+                await asyncio.sleep(1)
+
+    async def _watchBalance(self, ws) -> None:
+        while True:
+            try:
+                bal = await ws.watch_balance()
+                await evtFireAsync(kEvt_Market, eMarketId['mBalance'], self.get('id'), bal)
+            except Exception as e:
+                log(f"[ws balance] {self.get('id')}: {e}")
+                await asyncio.sleep(1)
+
+    async def _watchOrders(self, ws) -> None:
+        while True:
+            try:
+                orders = await ws.watch_orders()
+                await evtFireAsync(kEvt_Market, eMarketId['mOrder'], self.get('id'), orders)
+            except Exception as e:
+                log(f"[ws orders] {self.get('id')}: {e}")
+                await asyncio.sleep(1)
+
+    async def _watchPositions(self, ws) -> None:
+        while True:
+            try:
+                positions = await ws.watch_positions()
+                await evtFireAsync(kEvt_Market, eMarketId['mPosition'], self.get('id'), positions)
+            except Exception as e:
+                log(f"[ws positions] {self.get('id')}: {e}")
                 await asyncio.sleep(1)
 
     

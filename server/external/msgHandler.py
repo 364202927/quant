@@ -1,5 +1,5 @@
 from server.core.engine import engine
-from server.utils import switchFn,evtConnect,kEvt_Web, rtWeb
+from server.utils import switchFn,evtConnect, rtWeb,evtFire,kEvt_Web,kEvt_Engine
 from server.utils.fileConfig import g_config
 
 eMsgId = {
@@ -20,16 +20,14 @@ eMsgId = {
 class msgHandler:
     "消息事件处理器"
     
-    def __init__(self, objEngine: engine):
-        self.__instance = objEngine   
+    def __init__(self):
         self.__page = 0
         evtConnect(kEvt_Web, self)
     
     def idTransform(self, id, msg):
         def initWeb():
-            # 返回数据: user配置 + apiKey配置+start文件
             info = g_config.info()
-            external = g_config.external()
+            external = g_config.external() 
             user = {
                 "userName": info.get("userName", ""),
                 "ccxtRetry": info.get("ccxtRetry", 3),
@@ -43,14 +41,15 @@ class msgHandler:
                 "newsletter": g_config.newsletterApi(),
                 "ai": g_config.aiApi()
             }
-            #todo:还有start文件
-            return {"user": user, "apiKey": apiKey}
+            # print("~~~~~~~initWeb~~~~~~~~",user,apiKey)
+            # 返回数据: user配置 + apiKey配置+start文件
+            return {"user": user, "apiKey": apiKey} #todo:还有start文件
         def initMarketTrends():
             return
         def initStartFile():
             return
         def initBacktesting():
-            return self.__instance.getActiveTasks()
+            return self.callTask('main','getActiveTasks')
         def initOrders():
             return
         def saveConfig():#保存设置
@@ -59,8 +58,8 @@ class msgHandler:
             #todo:是否重启服务器
             return
         def startBackTest():#开启回测
-            checkId = msg[0].get('id')
-            taskName = msg[0].get('selectedTask')
+            checkId = msg[0][0].get('id')
+            taskName = msg[0][0].get('selectedTask')
             if checkId == 1:
                 return self.callTask(taskName,'startStrategy')
             return {}
@@ -73,9 +72,11 @@ class msgHandler:
                         eMsgId['eStartBackTest']:startBackTest},
                         key=id)
     
-    # 调用task
+    # 调用engine功能
     def callTask(self, taskName, fnName):
-        rt = self.__instance.callFn(taskName,'startStrategy')
+        rt = evtFire(kEvt_Engine, taskName, fnName)
+        if taskName =='main':
+            return rt
         return rtWeb(rt)
 
     # 处理web id
@@ -87,7 +88,10 @@ class msgHandler:
     #evt消息
     def evtProcess(self, key, *args):
         id = args[0]
+        msg = list(args[1:]) if len(args) > 1 else []
         def setPage():
-            self.__page = args[1]
-        return switchFn({eMsgId['sPage']: setPage,
-                         },key=id)
+            self.__page = msg[0] if msg else 0
+        if id == eMsgId['sPage']:
+            setPage()
+            return None
+        return self.idTransform(id, msg)

@@ -88,6 +88,7 @@ class timerMgr:
 
     async def run(self):
         if not self.__heap:
+            await asyncio.sleep(1)
             return
         # 取出栈顶的进行休眠
         sch = self.__heap[0]
@@ -95,6 +96,8 @@ class timerMgr:
         if restTime > 0:
             sleep_time = min(restTime, kMaxSleepTime)
             await asyncio.sleep(sleep_time)
+        # 重新取堆顶（sleep 期间可能有更早的任务插入）
+        sch = self.__heap[0]
         now = datetime.now()
         if sch.next() > now:
             return
