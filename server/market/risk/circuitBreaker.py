@@ -7,26 +7,27 @@ _VOLATILE_INTERVAL = 1.0  # 行情波动大时 1s
 _LOSS_LIMIT = 5            # 连续亏损笔数阈值
 
 
-class circuitBreaker(extInterface):
+class circuitBreaker:
     """断路器：监听余额骤降和策略连续亏损，触发撤单+平仓+暂停"""
 
     def __init__(self):
-        super().__init__()
+        # super().__init__()
         self._lossCount: dict[str, int] = {}   # {taskName: count}
         self._tripped: set[str] = set()        # 已触发断路的策略
         self._interval = _NORMAL_INTERVAL
         evtConnect(kEvt_Market, self)
 
     def evtProcess(self, key, *args):
-        if len(args) < 2:
-            return
-        id_ = args[0]
-        if id_ == eMarketId['iHolding'] and len(args) >= 5:
-            self._onHolding(args[1], args[2], args[3], args[4])
-        elif id_ == eMarketId['mOrder'] and len(args) >= 3:
-            orders = args[2] if isinstance(args[2], list) else [args[2]]
-            for order in orders:
-                self._onOrder(order)
+        # if len(args) < 2:
+        #     return
+        # id_ = args[0]
+        # if id_ == eMarketId['iHolding'] and len(args) >= 5:
+        #     self._onHolding(args[1], args[2], args[3], args[4])
+        # elif id_ == eMarketId['mOrder'] and len(args) >= 3:
+        #     orders = args[2] if isinstance(args[2], list) else [args[2]]
+        #     for order in orders:
+        #         self._onOrder(order)
+        pass
 
     def _onHolding(self, exName: str, kind: str, current: dict, prev: dict):
         if kind != 'balance':
@@ -66,8 +67,8 @@ class circuitBreaker(extInterface):
         # return evtQuery(kEvt_Engine, eEngineId['getRiskConfig'], name) or {}
         pass
 
-    async def run(self) -> None:
-        while True:
-            await asyncio.sleep(self._interval)
-            if self._interval == _VOLATILE_INTERVAL:
-                self._interval = _NORMAL_INTERVAL
+    # async def run(self) -> None:
+    #     while True:
+    #         await asyncio.sleep(self._interval)
+    #         if self._interval == _VOLATILE_INTERVAL:
+    #             self._interval = _NORMAL_INTERVAL

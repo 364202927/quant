@@ -51,8 +51,11 @@ def evtFire(strEvt, *args):
     rt = dispatcher.send(signal=strEvt, sender=strEvt, 
                             value=getValue(0), value1=getValue(1),
                             value2=getValue(2), value3=getValue(3))
-    if rt[0][1]: #前有参数则返回
-        return rt[0][1]
+    if rt:
+        for receiver, response in rt:
+            if response:
+                return response
+    return None
 
 # 发送消息(最多3参数) - 异步版本
 async def evtFireAsync(strEvt, *args):

@@ -28,7 +28,7 @@ class pdData:
         self._head,self._strHead = {},{}
         self.setHead(head)
         if read != '':
-            self.readFile(read,True)
+            self.readFile(read)
             return
         if style != '' and data is not None:
             self.format(data, style=style)
@@ -270,6 +270,7 @@ class pdData:
                 totalSaved += len(yearData)
                 # log(f"保存到文件: {fullPath}, 数据: {len(yearData)}")
         # log(f"保存完成, 总数据: {totalSaved}")
+    #fileName不需要加.parquet后续
     def readFile(self, fileName: str, isFull: bool = False) -> bool:
         path: str = g_config.fils('marketsPath')
         if not os.path.exists(path):
@@ -286,7 +287,7 @@ class pdData:
             yearDirs = yearDirs[:1]
         allData: list[pd.DataFrame] = []
         for year in yearDirs:
-            filePath = os.path.join(path, year, fileName)+'.parquet'
+            filePath = os.path.join(path, year, fileName)+'.parquet' 
             if os.path.exists(filePath):
                 pf = readFile(filePath)
                 if pf is not None and not pf.empty:

@@ -19,10 +19,12 @@ class test(contractCTA, realTrade):
                             'boll':'oscillators.boll'})
         print("~~~~init test~~~~")
         self.pause()
-        # 指标合并计算
-        # self.candles.delimit(exName = 'binanceMain',symbols = ['spot_BTCUSDT','swap_BTCUSDT'])
-        # candles = self.candles.calculate(self.vwap, self.boll)
-        # print("~~~spot_BTCUSDT~~~~~\n",candles['spot_BTCUSDT'].get())
+        # 指标获取and合并
+        self.candles.delimit(exName = 'binance', symbols = ['spot_BTCUSDT','swap_BTCUSDT'])
+        candles = self.candles.getCandles('spot_BTCUSDT',[])
+        candles = self.candles.calculate(self.vwap, self.boll)
+        print("~~~spot_BTCUSDT~~~~~\n",candles)
+
         # print("~~~swap_BTCUSDT~~~~~\n",candles['swap_BTCUSDT'].get())
         # 获取历史数据
         # kLine = self.candles.historyCandles(symbol = 'spot_BTCUSDT', seTime = ['2020-1-01 00:00:00','2020-05-01 00:00:00'], timeFrame = '15m')

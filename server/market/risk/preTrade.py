@@ -3,21 +3,22 @@ from server.utils import evtConnect, evtFireAsync, kEvt_Market, kEvt_Engine, ext
 from server.market import eMarketId
 
 
-class preTrade(extInterface):
+class preTrade:
     """事前风控：限额/价格偏离/黑名单，通过则转发 omsOrder"""
 
     def __init__(self):
-        super().__init__()
+        # super().__init__()
         evtConnect(kEvt_Market, self)
 
     def evtProcess(self, key, *args):
-        if len(args) < 4 or args[0] != eMarketId['sOrder']:
-            return
-        _, taskName, exName, params = args[0], args[1], args[2], args[3]
-        if self._check(taskName, params):
-            asyncio.ensure_future(
-                evtFireAsync(kEvt_Market, eMarketId['omsOrder'], taskName, exName, params)
-            )
+        # if len(args) < 4 or args[0] != eMarketId['sOrder']:
+        #     return
+        # _, taskName, exName, params = args[0], args[1], args[2], args[3]
+        # if self._check(taskName, params):
+        #     asyncio.ensure_future(
+        #         evtFireAsync(kEvt_Market, eMarketId['omsOrder'], taskName, exName, params)
+        #     )
+        pass
 
     def _check(self, taskName: str, params: dict) -> bool:
         config = self._riskConfig(taskName)
@@ -43,6 +44,6 @@ class preTrade(extInterface):
         # return evtQuery(kEvt_Engine, eEngineId['getRiskConfig'], taskName) or {}
         pass
 
-    async def run(self) -> None:
-        while True:
-            await asyncio.sleep(3600)
+    # async def run(self) -> None:
+    #     while True:
+    #         await asyncio.sleep(3600)

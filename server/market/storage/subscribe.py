@@ -1,49 +1,79 @@
 import asyncio
-from server.utils import evtConnect, kEvt_Market, extInterface, pdData, recordBuffer
+from server.utils import evtConnect, kEvt_Market,kEvt_GetTime, pdData,switchFn,diff_Pdtime,timeFrame2Float
 from server.market import eMarketId
-
-_FLUSH_INTERVAL = 1.0  # 1秒聚合一次
 
 
 class storageSubscribe:
-    """聚合市场事件：K线→pdData，深度/成交→1s缓冲，订单→recordBuffer"""
+    "k线/成交历史/深度数据,监听更新"
 
     def __init__(self):
-        super().__init__()
-        self._klineBuffer: dict[tuple, list] = {}   # (exName,symbol,tf) -> [ohlcv,...]
-        self._depthLatest: dict[tuple, dict] = {}   # (exName,symbol) -> latest ob
-        self._tradesBuffer: dict[tuple, list] = {}  # (exName,symbol) -> [trade,...]
-        self.orders = recordBuffer()
+        self._buffer = {}   # 币安/ok/... = {btc:{kLine:a, depth:b, trades:c}}
+        # self._depthLatest: dict[tuple, dict] = {}   # (exName,symbol) -> latest ob
+        # self._tradesBuffer: dict[tuple, list] = {}  # (exName,symbol) -> [trade,...]
+
+        self._exMarkets = []    #全交易所
+        self._exchanges = {}    #对应交易所,用于获取数据()
         evtConnect(kEvt_Market, self)
+        evtConnect(kEvt_GetTime, self)
+
+    #全交易所初始化
+    def setMarket(self,markets):
+        self._exMarkets = markets
+        self._exchanges = {}
+        for ex in self._exMarkets.items():
+            exName = ex[1].get('id')
+            self._exchanges[exName] = ex[1]
 
     def evtProcess(self, key, *args):
-        if len(args) < 2:
-            return
-        id_, exName = args[0], args[1]
-        if id_ == eMarketId['mKline'] and len(args) >= 5:
-            k = (exName, args[2], args[3])
-            self._klineBuffer.setdefault(k, []).append(args[4])
-        elif id_ == eMarketId['mDepth'] and len(args) >= 4:
-            self._depthLatest[(exName, args[2])] = args[3]
-        elif id_ == eMarketId['mTrades'] and len(args) >= 4:
-            buf = self._tradesBuffer.setdefault((exName, args[2]), [])
-            buf.extend(args[3] if isinstance(args[3], list) else [args[3]])
-        elif id_ == eMarketId['mOrder'] and len(args) >= 3:
-            orders = args[2] if isinstance(args[2], list) else [args[2]]
-            for order in orders:
-                self.orders.push(exName=exName, **order)
+        if key == 'evtGetTime' and args[1][0] == 'subscribe':
+            print("~~~~storageSubscribe 每5m自动更新数据~~~~~", self._markets)
+        #
+        if key != kEvt_Market: return
+        id = args[0]
+        def _addscKlne(): #更新订阅数据
+            subscribeData = args[1]
+            for data in subscribeData.items():
+                exKey = data[0]
+                if not self._buffer.get(exKey):self._buffer[exKey] = {}
+                for symbol in data[1]:
+                    if not self._buffer[exKey].get(symbol):
+                        self._buffer[exKey][symbol] = {'kLine':None,'depth':None,'trades':None}
 
-    # async def run(self) -> None:
-    #     while True:
-    #         await asyncio.sleep(_FLUSH_INTERVAL)
-    #         self._flush()
+        def _getCandles():
+            exName = args[1]
+            symbol = args[2]
+            if not self._exchanges.get(exName):return
+            pd = self._newestCandles(self._exchanges.get(exName),symbol)
+            self._buffer[exName][symbol]['kLine'] = pd
+            # print("~~~~save_buffer~~~~~~",self._buffer)
+            #todo:一并获取交易量/资金费率/深度
+            return pd
 
-    def _flush(self):
-        for key, candles in list(self._klineBuffer.items()):
-            if not candles:
-                continue
-            pd_obj = pdData()
-            pd_obj.format(candles, style='ohlcv')
-            self._klineBuffer[key] = []
-        self._depthLatest.clear()
-        self._tradesBuffer.clear()
+        return switchFn({eMarketId['scKline']: _addscKlne,
+                        eMarketId['gcKline']: _getCandles,}, 
+                        key=id)
+
+    def _updateBuffer(self):
+        pass
+    
+    #返回最新的k线,自动更新到最新
+    def _newestCandles(self, ex, symbol: str, timeFrame: str = '5m'):
+        pd = self._buffer.get(ex.get('id')).get(symbol).get('kLine') #直接取出保存的数据
+        if not pd: #初始化
+            fileName = ex.get('id')+'_'+ symbol
+            pd = pdData(read = fileName)
+            if pd.empty(): #若没有保存的数据,则直接获取最新
+                pd.pfConcat(ex.getKline(symbol, [], timeFrame),False)
+                return pd
+        # 判断数据是否最新
+        lastTime = pd.get(-1, 'candle_begin_time')
+        if diff_Pdtime(lastTime) < timeFrame2Float(timeFrame):
+            return pd
+        #合拼最新数据
+        fillPd = ex.getKline(symbol, [lastTime,'now'], timeFrame)
+        pd.pfConcat(fillPd)
+        return pd
+    
+
+    def save2File(self):
+        pass

@@ -18,11 +18,11 @@ eSampleTs = {
 }
 
 # 事件
-kEvt_Time = 'evtTime'  # 任务时间设定
-kEvt_GetTime = 'evtGetTime'  # 任务时间触发
-kEvt_Web = 'evtWeb'     #发送和网络通讯相关的参数
-kEvt_Market = 'evtMarket' #交易所相关
-kEvt_Engine = 'evtEngine' #调用task的方法
+kEvt_Time = 'evtTime'           # 任务时间设定
+kEvt_GetTime = 'evtGetTime'     # 任务时间触发
+kEvt_Web = 'evtWeb'             #发送和网络通讯相关的参数
+kEvt_Market = 'evtMarket'       #交易所相关
+kEvt_Engine = 'evtEngine'       #调用task的方法
 
 # eEngineId = {
 #     'getRiskConfig': 1,  # args: taskName → returns riskConfig dict
@@ -33,7 +33,7 @@ kEvt_Engine = 'evtEngine' #调用task的方法
 kLog,kError,kInfo,kWarn = 'log','err','info','warn'
 
 # 交易所功能是否开启
-kOpenMarket = False
+kOpenMarket = True
 
 # 导出常用工具函数和类
 from server.utils.recordBuffer import recordBuffer

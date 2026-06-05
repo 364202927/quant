@@ -1,6 +1,10 @@
-import asyncio
-import ccxt
+import asyncio,aiohttp,ccxt
+# import 
+# import json
+# import ccxt
 import pandas as pd
+import ccxt.pro as ccxtpro
+from aiohttp_socks import ProxyConnector
 from server.market import kSpot, kSwap, kFuture, kDelivery, kBuy, kSell, kShort, kLong, kMarket, kLimit, eMarketId
 from server.utils import switch, switchFn, tryCatch, aContainB, slit, str2ms, pdData, err, log, inRange, utc_now, reviseTime, timeFrame2Float, diff_Pdtime, logFormat, trySwitchFn, evtFireAsync, kEvt_Market
 
@@ -10,10 +14,9 @@ class baseExchange:
         self.__description = description
         self._maxLimit = maxLimit
         self._ccxt = None
-        self._title = ''
-        self._id = ''
-        self._info = {'acc': {}, 'coin': {}, 'api': {}}
-        self._watches: list[tuple] = []  # [(symbol, timeframe), ...]
+        self._title = ''        #绑定的交易所名字
+        self._info = { 'coin': {}, 'api': {}} #coin币种信息,api交易所api信息
+        # self._watches: list[tuple] = []  # [(symbol, timeframe), ...]
 
     def get(self, key: str):
         return switch({
@@ -21,7 +24,6 @@ class baseExchange:
             'des': self.__description,
             'title':self._title,
             'ccxt': self._ccxt,
-            'acc': self._info['acc'],
             'coinInfo': self._info['coin']}, key=key)
 
     def enroll(self, config: dict,title:str):
@@ -35,35 +37,39 @@ class baseExchange:
         print('\n~~~~支持信息~~~~~~\n', self._ccxt.has)
 
     #账户信息
-    def account(self) -> dict:
-        info = self._ccxt.fetch_balance()
-        self._info['acc'] = {
-            'total': {coin: amount for coin, amount in info['total'].items() if amount > 0},
-            'used': {coin: amount for coin, amount in info['used'].items() if amount > 0},
-            'free': {coin: amount for coin, amount in info['free'].items() if amount > 0}}
-        return self._info['acc']
+    def balance(self):
+        return self._ccxt.fetch_balance()
+
+    # def account(self) -> dict:
+    #     info = self._ccxt.fetch_balance()
+    #     self._info['acc'] = {
+    #         'total': {coin: amount for coin, amount in info['total'].items() if amount > 0},
+    #         'used': {coin: amount for coin, amount in info['used'].items() if amount > 0},
+    #         'free': {coin: amount for coin, amount in info['free'].items() if amount > 0}}
+    #     return self._info['acc']
 
     #余额查询
-    def accFree(self, isSpot: bool = False, coin: str = ''):
-        account = self.get("acc")
-        # print("~~~~~accFree~~~~~~",account)
-        if isSpot:
-            amt = float(account['free'].get('USDT', 0))
-            if coin == 'all':return account['free']
-            if coin != '':
-                amt = account['free'].get(coin) or 0
-            return amt
-        return self._accPm(account, coin)
+    def accFree(self, coin: str = 'USDT'):
+        # account = self.get("acc")
+        # # print("~~~~~accFree~~~~~~",account)
+        # if isSpot:
+        #     amt = float(account['free'].get('USDT', 0))
+        #     if coin == 'all':return account['free']
+        #     if coin != '':
+        #         amt = account['free'].get(coin) or 0
+        #     return amt
+        # return self._accPm(account, coin)
+        pass
 
     #当前交易所的所有币种
-    def markets(self, reset: bool = False) -> dict:
+    def initMarkets(self, reset: bool = False) -> dict:
         kSymbol = 'coin'
         if not reset and self._info.get(kSymbol):
             return self._info[kSymbol]
         self._info[kSymbol] = {kSpot: {}, kSwap: {}, kFuture: {}, kDelivery: {}}
         markets = self._ccxt.loadMarkets()
         for symbol, market in markets.items():
-            if market['active']:
+            if market['active']:#tpye: spot/swap/future
                 self._info[kSymbol][market['type']][symbol] = {
                     'id': market['id'],
                     'symbol':symbol,
@@ -197,108 +203,63 @@ class baseExchange:
             err("batchOrders: 订单数量需在1-5之间")
             return []
         return self._batchOrders(category, orders)
-
-    # WebSocket 订阅注册
-    def addWatch(self, symbol: str, timeframe: str) -> None:
-        if (symbol, timeframe) not in self._watches:
-            self._watches.append((symbol, timeframe))
-
-    # WebSocket 入口 - 父类统一实现，binance/bybit/okx 无需覆盖
+    
+    # WebSocket 入口 - session + 重连循环
     async def run(self) -> None:
         api = self._info.get('api', {})
         if not api.get('apiKey'):
             return
-        try:
-            import ccxt.pro as ccxtpro
-        except ImportError:
-            log(f"[ws] ccxt.pro 未安装，跳过 {self.__class__.__name__}")
-            return
+        title = self.get('title')
+        print("~~~Connector~~~~~~",api.get('proxy'))
+        connector = ProxyConnector.from_url(api.get('proxy'))
+        async with aiohttp.ClientSession(connector=connector) as session:
+            while True:
+                try:
+                    tasks = [
+                        asyncio.create_task(self._watchBalance(session, title, api)),
+                        asyncio.create_task(self._keepAlive(session)),
+                    ]
+                    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                    for task in pending:
+                        task.cancel()
+                    for task in done:
+                        if not task.cancelled() and task.exception():
+                            raise task.exception()
+                except Exception as e:
+                    log(f"[ws] {self.__class__.__name__} {title} 断线重连: {e}")
+                await asyncio.sleep(5)
+                
+    #ws 账号信息推送
+    async def _watchBalance(self, session, title, api) -> None:
+        # try:
+        #     import ccxt.pro as ccxtpro
+        # except ImportError:
+        #     log(f"[ws] ccxt.pro 未安装，跳过 {self.__class__.__name__}")
+        #     return
         name = self.__class__.__name__
         if not hasattr(ccxtpro, name):
             log(f"[ws] ccxt.pro 不支持交易所: {name}")
             return
-        while True:
-            ws = getattr(ccxtpro, name)(api)
-            try:
-                await self._wsLoop(ws)
-            except Exception as e:
-                log(f"[ws] {self.__class__.__name__} 断线重连: {e}")
-            finally:
-                await ws.close()
-            await asyncio.sleep(5)
-
-    async def _wsLoop(self, ws) -> None:
-        coros = []
-        for sym, tf in self._watches:
-            coros += [self._watchKline(ws, sym, tf), self._watchDepth(ws, sym), self._watchTrades(ws, sym)]
-        if self._info.get('api', {}).get('apiKey'):
-            coros += [self._watchBalance(ws), self._watchOrders(ws), self._watchPositions(ws)]
-        if not coros:
+        ws = getattr(ccxtpro, name)(api)
+        try:
             while True:
-                await asyncio.sleep(3600)
-        else:
-            await asyncio.gather(*coros, return_exceptions=True)
-
-    async def _watchKline(self, ws, symbol: str, timeframe: str) -> None:
-        while True:
-            try:
-                ohlcv = await ws.watch_ohlcv(symbol, timeframe)
-                await evtFireAsync(kEvt_Market, eMarketId['mKline'], self.get('id'), symbol, timeframe, ohlcv)
-            except Exception as e:
-                log(f"[ws] {symbol} {timeframe}: {e}")
-                await asyncio.sleep(1)
-
-    async def _watchDepth(self, ws, symbol: str) -> None:
-        while True:
-            try:
-                ob = await ws.watch_order_book(symbol)
-                await evtFireAsync(kEvt_Market, eMarketId['mDepth'], self.get('id'), symbol, ob)
-            except Exception as e:
-                log(f"[ws depth] {self.get('id')} {symbol}: {e}")
-                await asyncio.sleep(1)
-
-    async def _watchTrades(self, ws, symbol: str) -> None:
-        while True:
-            try:
-                trades = await ws.watch_trades(symbol)
-                await evtFireAsync(kEvt_Market, eMarketId['mTrades'], self.get('id'), symbol, trades)
-            except Exception as e:
-                log(f"[ws trades] {self.get('id')} {symbol}: {e}")
-                await asyncio.sleep(1)
-
-    async def _watchBalance(self, ws) -> None:
-        while True:
-            try:
                 bal = await ws.watch_balance()
-                await evtFireAsync(kEvt_Market, eMarketId['mBalance'], self.get('id'), bal)
-            except Exception as e:
-                log(f"[ws balance] {self.get('id')}: {e}")
-                await asyncio.sleep(1)
-
-    async def _watchOrders(self, ws) -> None:
+                # await evtFireAsync(kEvt_Market, eMarketId['wsBalance'], title, 'main', bal)
+                print("~~~~~baseEx~~~_watchBalance~~",bal)
+        finally:
+            await ws.close()
+    # 心跳包
+    async def _keepAlive(self, session) -> None:
         while True:
-            try:
-                orders = await ws.watch_orders()
-                await evtFireAsync(kEvt_Market, eMarketId['mOrder'], self.get('id'), orders)
-            except Exception as e:
-                log(f"[ws orders] {self.get('id')}: {e}")
-                await asyncio.sleep(1)
-
-    async def _watchPositions(self, ws) -> None:
-        while True:
-            try:
-                positions = await ws.watch_positions()
-                await evtFireAsync(kEvt_Market, eMarketId['mPosition'], self.get('id'), positions)
-            except Exception as e:
-                log(f"[ws positions] {self.get('id')}: {e}")
-                await asyncio.sleep(1)
-
-    
+            await asyncio.sleep(3600)
 
     # 子类可继承接口
     def _create(self, config: dict):
         self._info['api'] = {'apiKey': config['apiKey'], 'secret': config['secret']}
-    # def checkPosition(self, symbol, position): pass
+    def checkPosition(self): 
+        # print(self._ccxt.fetch_open_orders())
+        # print(self._ccxt.fetch_positions())
+        return self._ccxt.fetch_positions()
     def orderBook(self, symbol: str, limit: int = 5): pass
     def depth(self, symbol, limit): pass
     def tickers(self, symbol): pass
