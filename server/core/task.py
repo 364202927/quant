@@ -16,7 +16,7 @@ class taskHandle(metaclass=abc.ABCMeta):
         return self.indicators.get(className) #todo,这个值改成只能读取不能修改
     def getTacticsTime(self):
         return self.tacticsTime
-    def className(self):
+    def name(self):
         return self.__class__.__name__
 
 #
@@ -35,7 +35,7 @@ class task:
     def get(self, key=''):
         return switch({'tacticsTime': self.__handle.getTacticsTime(),
                        'id': self.__id,
-                       'className': self.__handle.className(),
+                       'className': self.__handle.name(),
                        'info': self.info,
                        'name': self.__doc__,
                        'active':self.isActive},

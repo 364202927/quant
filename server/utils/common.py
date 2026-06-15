@@ -2,7 +2,7 @@ import pickle,json,time,os,requests,inspect,asyncio,inspect,gzip,webbrowser,sys,
 from importlib import import_module
 from pydispatch import dispatcher
 from server.utils import eTimeTs,kEvt_Web
-from datetime import datetime, timezone,date
+from datetime import datetime, timezone, date, timedelta
 from pathlib import Path
 import pandas as pd
 from typing import Any
@@ -26,72 +26,47 @@ def futureC(symbol: str,  timeIndex = 0):#币本位交割合约
 
 # 绑定消息,类需实现def evtProcess(self, key, *args):
 def evtConnect(strEvt, obj):
-    def rtMsg(sender, value, value1, value2, value3):
-        return obj.evtProcess(sender, value, value1, value2, value3)
+    def rtMsg(sender, **kwargs):
+        event_args = kwargs.get('args', ())
+        return obj.evtProcess(sender, *event_args)
     dispatcher.connect(rtMsg, signal=strEvt, weak=False)
-
-# 同步查询消息，收集第一个非 None 返回值
-# def evtQuery(strEvt, *args):
-#     def getValue(index):
-#         return args[index] if index < len(args) else ''
-#     responses = dispatcher.send(signal=strEvt, sender=strEvt,
-#                                 value=getValue(0), value1=getValue(1),
-#                                 value2=getValue(2), value3=getValue(3))
-#     for _, result in responses:
-#         if result is not None:
-#             return result
-#     return None
-
-# 发送消息(最多3参数) - 同步版本
+# 发送消息 - 同步版本
 def evtFire(strEvt, *args):
-    def getValue(index):
-        if index < len(args):
-            return args[index]
-        return ''
-    rt = dispatcher.send(signal=strEvt, sender=strEvt, 
-                            value=getValue(0), value1=getValue(1),
-                            value2=getValue(2), value3=getValue(3))
-    if rt:
-        for receiver, response in rt:
-            if response:
-                return response
+    responses = dispatcher.send(signal=strEvt, sender=strEvt, args=args)
+    for _, result in responses:
+        if result is not None:
+            return result
     return None
 
-# 发送消息(最多3参数) - 异步版本
-async def evtFireAsync(strEvt, *args):
-    def getValue(index):
-        return args[index] if index < len(args) else ''
-    
-    # 获取所有监听者
+# 发送消息 - 异步版本,没有返回值，自动判断事件循环
+def evtFireAsync(strEvt, *args):
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_evtFireAsync_impl(strEvt, *args))
+    except RuntimeError:
+        asyncio.run(_evtFireAsync_impl(strEvt, *args))
+
+async def _evtFireAsync_impl(strEvt, *args):
     receivers = dispatcher.getAllReceivers(sender=dispatcher.Any, signal=strEvt)
     if not receivers:
         return
-    
-    # 并发执行所有回调
+
     tasks = []
     for receiver in receivers:
-        # try:
-        if inspect.iscoroutinefunction(receiver):# 异步回调：创建task
-            task = receiver(
-                sender=strEvt,
-                value=getValue(0),
-                value1=getValue(1),
-                value2=getValue(2),
-                value3=getValue(3))
+        kwargs = {"sender": strEvt, "args": args}
+        if inspect.iscoroutinefunction(receiver):
+            task = asyncio.create_task(receiver(**kwargs))
             tasks.append(task)
-        else:# 同步回调
-            receiver(
-                sender=strEvt,
-                value=getValue(0),
-                value1=getValue(1),
-                value2=getValue(2),
-                value3=getValue(3))
-        # except Exception as e:
-        #     print(f"事件回调执行失败: {strEvt}, 错误: {e}")
-    
-    # 等待所有异步任务完成
+        else:
+            task = asyncio.to_thread(receiver, **kwargs)
+            tasks.append(task)
+
     if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for receiver, res in zip(receivers, results):
+            if isinstance(res, Exception):
+                func_name = getattr(receiver, '__name__', str(receiver))
+                print(f"❌ [事件错误] 信号: {strEvt} -> 回调: {func_name} 执行失败: {res}")
 
 # 返回文件后缀
 def getFileExtension(fileName):
@@ -101,11 +76,12 @@ def getFileExtension(fileName):
 # 时间转换
 def str2ms(strTime: str, utc=0):
     date = str2time(strTime)
-    if utc > 0:
-        date += datetime.timedelta(hours=utc)
+    reversed_utc = -utc 
+    if reversed_utc != 0:
+        date += timedelta(hours=reversed_utc)
     return int(date.timestamp() * 1000)
 
-def str2time(strTime: str):
+def str2time(strTime: str, utc=0):
     def now():
         return datetime.now()
     def pre():
@@ -113,19 +89,23 @@ def str2time(strTime: str):
         return reviseTime('now', -time_val)
     def strNow():
         return now().strftime('%Y-%m-%d %H:%M:%S')
-    if isinstance(strTime, datetime):  # 时间直接返回
-        return strTime
-    rt = switchFn({"now": now, "pre5": pre,'strNow': strNow}, key=strTime)
-    if not rt:
-        return datetime.strptime(strTime, '%Y-%m-%d %H:%M:%S')
+    rt = strTime # 时间格式不转化
+    if not isinstance(strTime, datetime):
+        rt = switchFn({"now": now, "pre5": pre, 'strNow': strNow}, key=strTime)
+        if not rt:
+            rt = datetime.strptime(strTime, '%Y-%m-%d %H:%M:%S')
+    #添加时区
+    reversed_utc = -utc
+    if reversed_utc != 0:
+        rt += timedelta(hours=reversed_utc)
     return rt
 
 # 修正时间，+-(秒)
 def reviseTime(strTime, sconds):
     date = str2time(strTime)
     if sconds > 0:
-        return date + datetime.timedelta(seconds=abs(sconds))
-    return date - datetime.timedelta(seconds=abs(sconds))
+        return date + timedelta(seconds=abs(sconds))
+    return date - timedelta(seconds=abs(sconds))
 # 时间差
 def diff_Pdtime(pdBegin, endTime='now'):
     time = pd.Timestamp.now() if endTime == 'now' else pd.to_datetime(endTime,format="%Y-%m-%d %H:%M:%S")
@@ -134,11 +114,9 @@ def diff_Pdtime(pdBegin, endTime='now'):
 # str，替换
 def strReplace(symbolName, strRep=['/', '-']):
     return symbolName.replace(strRep[0], strRep[1])
-
 #字符串分割
 def split_by(src: str, sep: str) -> list[str]:
     return [s.strip() for s in src.split(sep)]
-
 def slit(src, target):
     parts = src.split(target)
     if len(parts) > 1:
@@ -172,13 +150,13 @@ def aContainB(input, strOrTab):
     return False
 
 # 分支调用,如不存在触发default
-def switch(dice, key):
+def switch(dice, key:str):
     if not dice.get(key):
         if dice.get('default'):
             return dice['default']
         return False
     return dice.get(key)
-def switchFn(diceFn, key, **kwargs):
+def switchFn(diceFn, key:str, **kwargs):
     if not diceFn.get(key):
         if diceFn.get('default'):
             return diceFn['default'](**kwargs)

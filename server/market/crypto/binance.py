@@ -1,18 +1,39 @@
-import asyncio
-import aiohttp
+# import asyncio
+# import aiohttp
 import json
+# import datetime
 
 from server.market.baseExchange import *
 from server.market import kPm, eMarketId
-from server.utils.science import binanceTimestamp
-from server.utils import timeFrame2Float, sec2min, logFormat, log, evtFireAsync, kEvt_Market
+# from server.utils.science import binanceTimestamp
+from server.utils import timeFrame2Float, sec2min, logFormat, log, evtFireAsync, kEvt_Market, str2time,binanceTimestamp
 
 kMaxLimit = 1000   # 现货最大 K 线
 kfMaxLimit = 1500  # 合约最大
 
-# STATUS_MAP = {'NEW': 'open', 'FILLED': 'closed', 'CANCELED': 'cancel'}
+def _wsCreate(cls: type,api_key: str,secret: str,proxy: str,**options) -> ccxtpro.Exchange:
+    return cls({
+        'apiKey':          api_key,
+        'secret':          secret,
+        'socksProxy':      proxy,
+        'wsSocksProxy':    proxy,
+        'enableRateLimit': True,
+        'timeout':         30_000,
+        'options':         options,
+    })
+class BinancePAPI(ccxtpro.binance):
+    #修复 ccxt.pro PAPI 账户资金键名混乱
+    def handle_balance(self, client, message):
+        self.balance.setdefault("papi", {})
+        self.balance[""] = self.balance["papi"]
+        super().handle_balance(client, message)
+        self.balance["papi"] = self.balance.get("", self.balance["papi"])
+        if client:
+            snapshot = self.balance["papi"]
+            for key in list(client.futures.keys()):
+                if "balance" in key.lower():
+                    client.resolve(snapshot, key)
 
-#todo:历史k线
 
 class binance(baseExchange):
     '币安:只支持 现货/统一账号下的u本位'
@@ -23,48 +44,43 @@ class binance(baseExchange):
     def _create(self, config: dict):
         super()._create(config)
         api = self._info['api']
-        proxy = 'socks5://127.0.0.1:10808'#config.get('proxy') #todo暂时替代
-        if proxy:
-            api['proxy'] = proxy
-        ccxtList = [{'ccxt':ccxt.binance, 'class':'_ccxt','options':kSpot},          # 现货+U本位永续+交割
-                    # {'ccxt':ccxt.binanceusdm, 'class':'_um'},                         # U本位永续+交割               
-                    # {'ccxt':ccxt.binancecoinm, 'class':'_cm'},]                    # 币本位,统一账号下没必要开币本位和u本位一致都是统一保证金
-                    # {'ccxt':ccxt.binance, 'class':'_ccxt','options':option}]       #期货
-                    ]
-        for inst in ccxtList:
-            params = {'apiKey': api['apiKey'],
-                        'secret': api['secret'],
-                        'timeout': 30000,
-                        'enableRateLimit': True,
-                        'options': {
-                            'adjustForTimeDifference': True},
-                            'portfolioMargin': True, }             #联合保证金
-            if proxy:
-                params['proxies'] = {'http': proxy, 'https': proxy}
-            if inst.get('options'):
-                params['options']['defaultType'] = inst.get('options')
-            obj = inst['ccxt'](params)
-            obj.load_time_difference()
-            # print("~~~~~~inst~~~~~~",inst['select'], params, obj)
-            setattr(self, inst['class'], obj)
+        proxy = 'socks5://127.0.0.1:10808'
+        #ccxt
+        self._ccxt = ccxt.binance({
+            'apiKey':          api['apiKey'],
+            'secret':          api['secret'],
+            'timeout':         30000,
+            'enableRateLimit': True,
+            'options': {
+                'adjustForTimeDifference': True,
+                'recvWindow':  10000,
+                'defaultType': kSpot,
+            },
+            'portfolioMargin': True,
+            'proxies': {'http': proxy, 'https': proxy},
+        })
+        self._ccxt.load_time_difference()
+        # ws
+        self._ccxtSpot = _wsCreate(ccxtpro.binance, api['apiKey'], api['secret'], proxy,defaultType='spot')
+        self._ccxtUm = _wsCreate( BinancePAPI,api['apiKey'], api['secret'], proxy,defaultType='papi', portfolioMargin=True)
 
     # 根据币类型返回对应ccxt实例
-    def _getEx(self, typeEx: str):
-        # return switch({
-        #     kSpot: self._ccxt,
-        #     kSwap: self._um,
-        #     kFuture: self._um,
-        #     kDelivery: self._cm
-        # }, key=typeEx)
-        return self._ccxt
+    # def _getEx(self, typeEx: str):
+    #     return switch({
+    #         kSpot: self._ccxt,
+    #         kSwap: self._um,
+    #         # kFuture: self._um,
+    #         # kDelivery: self._cm
+    #     }, key=typeEx)
+    #     return self._ccxt
 
-    def _selectApi(self, category: str, pmUm, pmCm, normalUm, normalCm):
-        """根据 category 和 PM 模式选择对应 API"""
-        isUm = category in (kSwap, kFuture)
-        if self._isPm:
-            return pmUm if isUm else pmCm
-        ex = self._getEx(category)
-        return normalUm(ex) if isUm else normalCm(ex)
+    # def _selectApi(self, category: str, pmUm, pmCm, normalUm, normalCm):
+    #     """根据 category 和 PM 模式选择对应 API (已废弃: 仅支持 PM 模式 u本位)"""
+    #     isUm = category in (kSwap, kFuture)
+    #     if self._isPm:
+    #         return pmUm if isUm else pmCm
+    #     ex = self._getEx(category)
+    #     return normalUm(ex) if isUm else normalCm(ex)
 
     # def markets(self, reset=False):
     #     def _loadMarket(coin: dict, exchange):
@@ -112,22 +128,13 @@ class binance(baseExchange):
             'total': coin,
         }
         # 返回格式:{'total':{},'free':{},kPm:{}}
-        return {
-            'total': {k: float(v) for k, v in bal.get('total', {}).items() if v and float(v) > 0},
-            'free':  {k: float(v) for k, v in bal.get('free', {}).items() if v and float(v) > 0},
-            kPm: pmData,
-        }
+        self._acc[kPm] = pmData
+        return self._acc
 
-    def _accPm(self, account: dict, coin: str):
-        # pm = account[kPm]
-        # if coin == 'all':return pm['coin']
-        # if coin != '':
-        #     # print("~~~~~_accPm~~~~~",coin, pm['coin'])
-        #     pmCoin = pm['coin'].get(coin)
-        #     if pmCoin:return pmCoin.get('free') 
-        #     return 0
-        # return float(pm['margin'])
-        pass
+    def accFree(self, coin: str = '',isPm = False):
+        if isPm:
+            return self._acc[kPm].get('free') #联合账号可用金额
+        return super().accFree(coin)
 
     # ── 合约订单查询 ──
     def findOrder(self, symbol: str, orderId: int  = -1,isOpen = False,isPos = True):
@@ -166,7 +173,7 @@ class binance(baseExchange):
             for order in orders:
                 status = float(order['positionAmt']) > 0 and kBuy or kSell
                 newData = { #查 仓位格式
-                    # 'symbol':order['symbol'],
+                    'symbol':order['symbol'],
                     'dir':status+'_'+order['positionSide'],
                     'open': order['entryPrice'],
                     'lv':order['leverage'],
@@ -186,15 +193,15 @@ class binance(baseExchange):
             #设置杠杆
             lvApi = self._ccxt.papiPostUmLeverage if isUm else self._ccxt.papiPostCmLeverage
             lvApi(params={'symbol': symbolInfo.get('id'), 'leverage': lv, 'timestamp': binanceTimestamp()})
-            orderApi = self._ccxt.papiPostUmOrder if isUm else self._ccxt.papiPostCmOrder
-            return orderApi(params=params)
+            # orderApi = self._ccxt.papiPostUmOrder if isUm else self._ccxt.papiPostCmOrder
+            return  self._ccxt.papiPostUmOrder(params=params)#orderApi(params=params)
             # return switchFn({kBuy: orderApi,
             #                 kSell: orderApi,
             #                 # 'cancel': cancelApi
             #             }, key=state, params=params)
-        def _normalOrder(state: str, category: str, params: dict):
-            ex = self._getEx(category)
-            return ex.create_order(**params)
+        # def _normalOrder(state: str, category: str, params: dict):
+            # ex = self._getEx(category)
+            # return self._ccxt.create_order(**params)
             # return tryCatch(lambda: switchFn({kBuy: ex.create_order,
             #                                 kSell: ex.create_order,
             #                                 'cancel': ex.cancel_order
@@ -222,7 +229,7 @@ class binance(baseExchange):
             params['reduceOnly'] = True
         print("~~~~_contractOrder~~~~~~", isUm, lv, params)
         # if self._isPm: # PM 模式
-        return _pmOrder(state, isUm, params)
+        # return _pmOrder(state, isUm, params)
         # Normal 模式
         # return _normalOrder(state, category, params)
 
@@ -232,14 +239,8 @@ class binance(baseExchange):
         params = {'symbol': symbolInfo.get('id'),
                   'orderId': id,
                   'timestamp': binanceTimestamp()}
-        api = self._selectApi(category,
-            pmUm=self._ccxt.papiDeleteUmOrder,
-            pmCm=self._ccxt.papiDeleteCmOrder,
-            normalUm=lambda ex: ex.fapiPrivateDeleteOrder,
-            normalCm=lambda ex: ex.dapiPrivateDeleteOrder)
-        # print("~~~~~~_cancelOrder~~~~~~~~", params)
-        return api(params=params)
-        # return tryCatch(lambda: api(params=params))
+        # 仅支持 PM 模式 u本位
+        return self._ccxt.papiDeleteUmOrder(params=params)
 
     # ── 批量下单 ──
     def _batchOrders(self, category: str, orders: list[dict]):
@@ -258,39 +259,32 @@ class binance(baseExchange):
             batchList.append(item)
 
         params = {'batchOrders': json.dumps(batchList), 'timestamp': binanceTimestamp()}
-        api = self._selectApi(category,pmUm=self._ccxt.papiPostUmBatchOrders,
-                                        pmCm=self._ccxt.papiPostCmBatchOrders,
-                                        normalUm=lambda ex: ex.fapiPrivatePostBatchOrders,
-                                        normalCm=lambda ex: ex.dapiPrivatePostBatchOrders)
-        return tryCatch(lambda: api(params=params))
+        # 仅支持 PM 模式 u本位
+        return tryCatch(lambda: self._ccxt.papiPostUmBatchOrders(params=params))
 
     # def checkPosition(self, category: str = '', symbol: str | None = None):
     # def checkPosition(self):
     #     pass
     
     # ── K线 ──
-    def _marketKline(self, symbol: str, seTime: list, timeframe: str = '5m', limit: int = 0):
+    def _marketKline(self, symbol: str, beginTime, endTime =None, timeframe: str = '5m', limit: int = 0):
         category, newSymbol = slit(symbol, '_')
         if category == kSpot:
             self._maxLimit = kMaxLimit
-            kLineData = super()._marketKline(newSymbol, seTime, limit=limit if limit else self._maxLimit)
+            kLineData = super()._marketKline(newSymbol, beginTime, endTime, limit=limit if limit else self._maxLimit)
         elif category in (kSwap, kFuture, kDelivery):
             self._maxLimit = kfMaxLimit
             params = {'symbol': newSymbol,
                       'interval': timeframe,
                       'limit': limit if limit else kfMaxLimit}
-            if len(seTime) > 0:
-                params['startTime'] = str2ms(seTime[0])
-                params['endTime'] = str2ms(seTime[1])
-            ex = self._getEx(category)
-            api = ex.fapiPublicGetKlines if category != kDelivery else ex.dapiPublicGetKlines
-            kLineData = tryCatch(lambda: api(params=params))
+            if beginTime is not None:
+                params['startTime'] = beginTime
+            if endTime is not None:
+                params['endTime'] = endTime
+            # api = self._um.fapiPublicGetKlines# if category != kDelivery else self._ccxt.dapiPublicGetKlines
+            kLineData = self._ccxt.fapiPublicGetKlines(params=params) #tryCatch(lambda: api(params=params))
             if not kLineData:
                 return None
-        else:
-            err('币安还没完成以下币种获取:', symbol)
-            return None
-        # 格式化k线
         pd = pdData()
         pd.format(kLineData, utc=self._utc)
         return pd.get()
@@ -300,9 +294,9 @@ class binance(baseExchange):
         category, newSymbol = slit(symbol, '_')
         params = {'symbol': newSymbol, 'limit': limit}
         return tryCatch(lambda: switchFn({kSpot: self._ccxt.publicGetDepth,
-                                            kSwap: self._um.fapiPublicGetDepth,
-                                            kFuture: self._um.fapiPublicGetDepth,
-                                            kDelivery: self._cm.dapiPublicGetDepth
+                                            kSwap: self._ccxt.fapiPublicGetDepth,
+                                            kFuture: self._ccxt.fapiPublicGetDepth,
+                                            kDelivery: self._ccxt.dapiPublicGetDepth
                                         }, key=category, params=params))
 
     # 成交历史
@@ -310,9 +304,9 @@ class binance(baseExchange):
         category, newSymbol = slit(symbol, '_')
         params = {'symbol': newSymbol, 'limit': limit}
         return tryCatch(lambda: switchFn({ kSpot: self._ccxt.publicGetTrades,
-                                            kSwap: self._um.fapiPublicGetTrades,
-                                            kFuture: self._um.fapiPublicGetTrades,
-                                            kDelivery: self._cm.dapiPublicGetTrades
+                                            kSwap: self._ccxt.fapiPublicGetTrades,
+                                            kFuture: self._ccxt.fapiPublicGetTrades,
+                                            kDelivery: self._ccxt.dapiPublicGetTrades
                                         }, key=category, params=params))
 
     # ── 最新价格 ──
@@ -320,108 +314,35 @@ class binance(baseExchange):
         category, newSymbol = slit(symbol, '_')
         params = {'symbol': newSymbol}
         return tryCatch(lambda: switchFn({kSpot: self._ccxt.publicGetTickerPrice,
-                                        kSwap: self._um.fapiPublicGetTickerPrice,
-                                        kFuture: self._um.fapiPublicGetTickerPrice,
-                                        kDelivery: self._cm.dapiPublicGetTickerPrice
+                                        kSwap: self._ccxt.fapiPublicGetTickerPrice,
+                                        kFuture: self._ccxt.fapiPublicGetTickerPrice,
+                                        kDelivery: self._ccxt.dapiPublicGetTickerPrice
                                     }, key=category, params=params))
 
     # ── 订单本 ──
     def orderBook(self, symbol: str, limit: int):
         category, symbolInfo = self.coinInfo(symbol)
-        ex = self._getEx(category)
-        return ex.fetch_order_book(symbol=symbolInfo.get('id'), limit=limit)
+        return self._ccxt.fetch_order_book(symbol=symbolInfo.get('id'), limit=limit)
 
     # ── 资金费率 ──
     def fundingRate(self, symbol: str, category: str):
         _, newSymbol = slit(symbol, '_')
         params = {'symbol': newSymbol}
         isUm = category in (kSwap, kFuture)
-        api = self._um.fapiPublicGetFundingRate if isUm else self._cm.dapiPublicGetFundingRate
+        api = self._ccxt.fapiPublicGetFundingRate if isUm else self._ccxt.dapiPublicGetFundingRate
         return tryCatch(lambda: api(params=params))
     
-    # ── _watchBalance 重载: PM + spot 双通道监听 ──
-    async def _watchBalance(self, session: aiohttp.ClientSession, title: str, api: dict):
-        apiKey = api['apiKey']
-        URL_PM_LISTENKEY = 'https://papi.binance.com/papi/v1/listenKey'
-        # URL_SPOT_LISTENKEY = 'https://api.binance.com/api/v3/userDataStream'
-        print("~~~~~~~~_watchBalance~~~~~~~~~~")
-        async def _getListenKey(url: str) -> str:
-            async with session.post(url, headers={'X-MBX-APIKEY': apiKey}) as resp:
-                resp.raise_for_status() # 增加状态码校验，如果非200会抛出异常
-                data = await resp.json()
-                return data['listenKey']
-        async def _watch_ws(listen_key: str, ws_base_url: str, event_type: str, balance_key: str, accType: str):
-            url = f'{ws_base_url}/{listen_key}'
-            async with session.ws_connect(url) as ws:
-                async for msg in ws:
-                    if msg.type != aiohttp.WSMsgType.TEXT:
-                        continue
-                    try:
-                        data = json.loads(msg.data)
-                    except json.JSONDecodeError:
-                        continue
-                    # 过滤非目标事件
-                    if data.get('e') != event_type:
-                        continue
-                    
-                    balances = {}
-                    assets_list = data.get('a', {}).get('B', []) if event_type == 'ACCOUNT_UPDATE' else data.get('B', [])
-                    for b in assets_list:
-                        amount = float(b.get(balance_key, 0))
-                        if amount > 0:
-                            balances[b['a']] = amount
-                    # 
-                    if balances:
-                        # await evtFireAsync(kEvt_Market, eMarketId['wsBalance'], title, 'pmFutures' if account_name == 'PM' else 'spot', balances)
-                        print(f"ws币安{accType}账号更新", balances)
+    # async def _close_ws(self):
+    #     """关闭 ccxtpro WebSocket 连接"""
+    #     for attr in ('_ccxtSpot', '_ccxtUm'):
+    #         ex = getattr(self, attr, None)
+    #         if ex:
+    #             try:
+    #                 await ex.close()
+    #             except Exception:
+    #                 pass
 
-                raise ConnectionResetError(f"币安{accType}账户 WebSocket 连接已被服务端关闭")
-
-        # 启动监听pm账号和现货账号
-        self._pmKey = await _getListenKey(URL_PM_LISTENKEY)
-        # self._spotKey = await _getListenKey(URL_SPOT_LISTENKEY)
-        tasks = [
-            asyncio.create_task(_watch_ws(self._pmKey, 'wss://fstream.binance.com/pm/ws', None, 'wb', 'binance_pm_unified')),
-            # asyncio.create_task(_watch_ws(self._pmKey, 'wss://fstream.binance.com/pm/ws', 'ACCOUNT_UPDATE', 'wb', 'pmFutures')),
-            # asyncio.create_task(_watch_ws(self._spotKey, 'wss://stream.binance.com/ws', 'outboundAccountPosition', 'f', 'spot'))
-        ]
-        #等待任务
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        for task in pending:
-            task.cancel()
-        for task in done:
-            if not task.cancelled():
-                exc = task.exception()
-                if exc:
-                    raise exc
-
-    async def _keepAlive(self, session: aiohttp.ClientSession) -> None:
-            apiKey = self._info['api']['apiKey']
-            pmUrl = 'https://papi.binance.com/papi/v1/listenKey'
-            # spotUrl = 'https://api.binance.com/api/v3/userDataStream'
-            headers = {'X-MBX-APIKEY': apiKey}
-            async def _updateKey(key):
-                print('_updateKey',key)
-                if not key: return
-                async with session.put(pmUrl, headers=headers, params={'listenKey': key}) as resp:
-                            resp.raise_for_status()
-                            await resp.read()
-            while True:
-                await asyncio.sleep(1800) 
-                try:
-                    # 【Bug 修复】：PUT 请求必须在 query parameters 中携带 listenKey
-                    # if hasattr(self, '_pmKey') and self._pmKey:
-                    #     async with session.put(pmUrl, headers=headers, params={'listenKey': self._pmKey}) as resp:
-                    #         resp.raise_for_status()
-                    #         await resp.read()
-                            
-                    # if hasattr(self, '_spotKey') and self._spotKey:
-                    #     async with session.put(spotUrl, headers=headers, params={'listenKey': self._spotKey}) as resp:
-                    #         resp.raise_for_status()
-                    #         await resp.read()
-                    _updateKey(self._pmKey)
-                    # _updateKey(self._spotKey)
-
-                except Exception as e:
-                    log(f"[ws] binance keepAlive error: {e}")
-                    raise
+    # ws监听
+    def _wsListen(self) -> list[tuple]:
+        return [(self._ccxtSpot, 'SPOT'),
+                (self._ccxtUm,   'UM_FUTURE')]

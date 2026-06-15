@@ -2,6 +2,9 @@ import asyncio
 from server.utils import evtConnect, evtFireAsync, kEvt_Market, kEvt_Engine, extInterface, log
 from server.market import eMarketId
 
+#todo:平仓信号直接发到oms
+#todo:定期查看风险率，不要只盯着保证金数字。
+
 _NORMAL_INTERVAL = 60.0   # 正常检测间隔 1m
 _VOLATILE_INTERVAL = 1.0  # 行情波动大时 1s
 _LOSS_LIMIT = 5            # 连续亏损笔数阈值
@@ -59,9 +62,9 @@ class circuitBreaker:
         if name in self._tripped:
             return
         self._tripped.add(name)
-        await evtFireAsync(kEvt_Market, eMarketId['sCancel'], name)
-        await evtFireAsync(kEvt_Market, eMarketId['sForceClose'], name)
-        await evtFireAsync(kEvt_Market, eMarketId['iCircuitTrip'], name)
+        evtFireAsync(kEvt_Market, eMarketId['sCancel'], name)
+        evtFireAsync(kEvt_Market, eMarketId['sForceClose'], name)
+        evtFireAsync(kEvt_Market, eMarketId['iCircuitTrip'], name)
 
     def _riskConfig(self, name: str) -> dict:
         # return evtQuery(kEvt_Engine, eEngineId['getRiskConfig'], name) or {}

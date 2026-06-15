@@ -232,7 +232,7 @@ class bybit(baseExchange):
         """设置保证金模式 marginMode: 'REGULAR_MARGIN'(普通) / 'PORTFOLIO_MARGIN'(组合保证金)"""
         return tryCatch(lambda: self._ccxt.privatePostV5AccountSetMarginMode(params={'setMarginMode': marginMode}))
 
-    def _marketKline(self, symbol: str, seTime: list, timeframe: str = '5m', limit: int = 0):
+    def _marketKline(self, symbol: str, beginTime: int | None, endTime: int | None, timeframe: str = '5m', limit: int = 0):
         """获取 K 线数据"""
         category, newSymbol = self._getCategory(symbol)
         effectiveLimit = limit if limit > 0 else self._maxLimit
@@ -240,10 +240,12 @@ class bybit(baseExchange):
             'category': category,
             'symbol': newSymbol,
             'interval': str(sec2min(int(timeFrame2Float(timeframe)))),
-            'start': str2ms(seTime[0]),
-            'end': str2ms(seTime[1]),
             'limit': effectiveLimit
         }
+        if beginTime is not None:
+            params['start'] = beginTime
+        if endTime is not None:
+            params['end'] = endTime
 
         rt = tryCatch(lambda: self._ccxt.publicGetV5MarketKline(params))
         if not rt or not rt.get('result', {}).get('list'):

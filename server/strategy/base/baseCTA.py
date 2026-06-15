@@ -1,6 +1,6 @@
 import abc
 from server.utils import pdData, require, err, warn, info, log, spot, swapU, swapC, futureU, futureC, getRootName, slit, str2time,openWeb
-from server.market.consts import kLong, kShort, kSwap, kFuture, kDelivery, kSpot, kBuy, kSell
+from server.market import kLong, kShort, kSwap, kFuture, kDelivery, kSpot, kBuy, kSell
 from server.core.task import taskHandle
 from server.utils.fileConfig import g_config, kLogBufType, kOrderBufType, recordBuffer
 kIndicatorsFile = 'server.indicators.'
@@ -21,7 +21,7 @@ class baseCTA(taskHandle):
             setattr(self, name, indicator)
             dictIndicator[name] = indicator
         #保存指标到共享
-        self.indicators[self.className()] = dictIndicator
+        self.indicators[self.name()] = dictIndicator
 
     #记录
     def record(self, exName: str, category: str, symbol: str, orderId: str, lv: int, dir: str,orderPrice: float = 0, avgPrice: float = 0, origQty: float = 0,cumQuote: float = 0, fee: float = 0) -> str:

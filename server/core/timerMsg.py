@@ -1,4 +1,4 @@
-from server.utils import evtConnect, evtFireAsync, eTimeTs, kEvt_GetTime, kEvt_Time, log,timeFrame2Float
+from server.utils import evtConnect, eTimeTs, kEvt_GetTime, kEvt_Time, log,timeFrame2Float,evtFire
 from datetime import datetime,timedelta
 import asyncio,heapq
 kMaxSleepTime = 60  # 最大休眠时间60秒
@@ -25,12 +25,10 @@ class schedule:
         #
         self.__pool = []  # 任务ID列表
         self.__timeKey = timeKey
-        # print("~~~schedule init~~~~",timeKey, _parseTime(timeKey))
         beginData,interval = _parseTime(timeKey) #开始时间,间隔
         self.__interval = timeFrame2Float(interval) # 间隔时间转换
-        # print("~~~~interval~~~~",self.__interval,float(timeKey[:-1]),eTimeTs[timeKey[-1]])
         self.__nextRun = self._nextTime(beginData)
-        # log(f"Schedule::",timeKey, '  ',datetime.now().strftime('%m-%d %H:%M:%S'),'  next=',self.__nextRun.strftime('%m-%d %H:%M:%S'))
+        # log(f"Schedule::",timeKey, '  curTime',datetime.now().strftime('%m-%d %H:%M:%S'),'  next=',self.__nextRun.strftime('%m-%d %H:%M:%S'))
 
     #下次触发时间
     def _nextTime(self,t = datetime.now()):
@@ -44,12 +42,12 @@ class schedule:
             return
         # 触发时间事件
         begin = datetime.now()
-        await evtFireAsync(kEvt_GetTime, self.__timeKey, self.__pool.copy())
+        evtFire(kEvt_GetTime, self.__timeKey, self.__pool.copy())
         end = datetime.now()
         # 计算下一次触发时间
         if end > self._nextTime(begin) : #处理卡顿的情况
             self.__nextRun = self._nextTime(datetime.now())
-            print("~~~~判断大于15分钟补触发一次(这里暂时先不管)~~~~",end, self._nextTime(begin))
+            # print("~~~~判断大于15分钟补触发一次(这里暂时先不管)~~~~",end, self._nextTime(begin))
             return
         self.__nextRun = self._nextTime(begin)
         # print("~~evt~~~~~",self.__timeKey, datetime.now().strftime("%m-%d %H:%M:%S"),'  next:',self.__nextRun.strftime('%m-%d %H:%M:%S'))

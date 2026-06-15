@@ -1,6 +1,6 @@
 import asyncio
-from server.utils import evtConnect, kEvt_Market,kEvt_GetTime, pdData,switchFn,diff_Pdtime,timeFrame2Float
-from server.market import eMarketId
+from server.utils import evtConnect, kEvt_Market,kEvt_GetTime, pdData,switchFn,diff_Pdtime,timeFrame2Float,kEvt_Time,evtFire
+from server.market import eMarketId,baseExchange
 
 
 class storageSubscribe:
@@ -15,9 +15,10 @@ class storageSubscribe:
         self._exchanges = {}    #对应交易所,用于获取数据()
         evtConnect(kEvt_Market, self)
         evtConnect(kEvt_GetTime, self)
+        evtFire(kEvt_Time, 'subscribe', ['5m'])
 
     #全交易所初始化
-    def setMarket(self,markets):
+    def setMarket(self, markets):
         self._exMarkets = markets
         self._exchanges = {}
         for ex in self._exMarkets.items():
@@ -39,7 +40,7 @@ class storageSubscribe:
                     if not self._buffer[exKey].get(symbol):
                         self._buffer[exKey][symbol] = {'kLine':None,'depth':None,'trades':None}
 
-        def _getCandles():
+        def _getCandles(): #返回k线数据
             exName = args[1]
             symbol = args[2]
             if not self._exchanges.get(exName):return
@@ -57,7 +58,7 @@ class storageSubscribe:
         pass
     
     #返回最新的k线,自动更新到最新
-    def _newestCandles(self, ex, symbol: str, timeFrame: str = '5m'):
+    def _newestCandles(self, ex:baseExchange, symbol: str, timeFrame: str = '5m'):
         pd = self._buffer.get(ex.get('id')).get(symbol).get('kLine') #直接取出保存的数据
         if not pd: #初始化
             fileName = ex.get('id')+'_'+ symbol
@@ -69,11 +70,12 @@ class storageSubscribe:
         lastTime = pd.get(-1, 'candle_begin_time')
         if diff_Pdtime(lastTime) < timeFrame2Float(timeFrame):
             return pd
+        # print("~~~~文件数据~~~~~~",pd.get(0, 'candle_begin_time'),'~',lastTime)
         #合拼最新数据
         fillPd = ex.getKline(symbol, [lastTime,'now'], timeFrame)
-        pd.pfConcat(fillPd)
+        if fillPd is not None and not fillPd.empty:
+            pd.pfConcat(fillPd)
         return pd
-    
 
     def save2File(self):
         pass

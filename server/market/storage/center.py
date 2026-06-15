@@ -1,32 +1,39 @@
-# import asyncio
+import copy
 from server.utils import evtConnect, evtFireAsync, kEvt_Market,switchFn,logFormat
 from server.market import eMarketId
 
+#todo余额更新,oms和circuitBreaker监听余额更新
 
 class storageCenter:
-    "交易所个人资产数据缓存"
+    "个人资产数据缓存"
 
     def __init__(self):
         self.__snapshot: dict[str, dict] = {}  # {okx: {'main': {},... },bybit:{'xx':{}},...}
         evtConnect(kEvt_Market, self)
 
     def evtProcess(self, key, *args):
-        id, exName = args[0], args[1]
+        id, exName = args[0], args[1] if len(args) > 2 else None
         def _balanceUpdata(exName,key,data):
             self.__snapshot.setdefault(exName, {}).setdefault(key, {}).update(data)
-            print("~~~~updata balance~~~~~~~~")
+            print("账号详情:")
             logFormat(self.__snapshot)
         #evt事件
         def _balance():
             key, data = args[2],args[3]
             _balanceUpdata(exName, key, data)
+        
         def _increment():
             key, data = args[2],args[3]
-            _balanceUpdata(exName, key, data)
-        switchFn({eMarketId['balance']: _balance,
-                  eMarketId['wsBalance']: _increment,
-                  }, key=id)
+            # _balanceUpdata(exName, key, data)
+            print("~~~~updata balance~~~~~~~~")
 
+        return switchFn({eMarketId['balance']: _balance,
+                  eMarketId['wsBalance']: _increment,
+                  eMarketId['gBalance']: self._getBalance},
+                  key=id)
+    
+    def _getBalance(self):
+        return copy.deepcopy(self.__snapshot)
     
 
     # def position(self, exName: str = '') -> dict:

@@ -1,12 +1,16 @@
-import asyncio,aiohttp,ccxt
-# import 
-# import json
-# import ccxt
+import asyncio,aiohttp,ccxt,datetime,traceback
 import pandas as pd
 import ccxt.pro as ccxtpro
-from aiohttp_socks import ProxyConnector
-from server.market import kSpot, kSwap, kFuture, kDelivery, kBuy, kSell, kShort, kLong, kMarket, kLimit, eMarketId
-from server.utils import switch, switchFn, tryCatch, aContainB, slit, str2ms, pdData, err, log, inRange, utc_now, reviseTime, timeFrame2Float, diff_Pdtime, logFormat, trySwitchFn, evtFireAsync, kEvt_Market
+# from aiohttp_socks import ProxyConnector
+from server.market import kSpot, kSwap, kFuture, kDelivery, kBuy, kSell, kShort, kLong, kMarket, kLimit, eMarketId,kCancel
+from server.utils import switch, switchFn, tryCatch, aContainB, slit, str2ms, str2time, pdData, err, log, inRange, utc_now, reviseTime, timeFrame2Float, diff_Pdtime, logFormat, trySwitchFn, evtFireAsync, kEvt_Market
+kSymbol = 'coinInfo'
+
+def _backoff(start: float = 5.0, factor: float = 1.5, cap: float = 60.0):
+    delay = start
+    while True:
+        yield delay
+        delay = min(delay * factor, cap)
 
 class baseExchange:
 
@@ -15,8 +19,8 @@ class baseExchange:
         self._maxLimit = maxLimit
         self._ccxt = None
         self._title = ''        #绑定的交易所名字
-        self._info = { 'coin': {}, 'api': {}} #coin币种信息,api交易所api信息
-        # self._watches: list[tuple] = []  # [(symbol, timeframe), ...]
+        self._acc = 0           #账号
+        self._info = { kSymbol: {}, 'api': {}} #coin币种信息,api交易所api信息
 
     def get(self, key: str):
         return switch({
@@ -24,7 +28,7 @@ class baseExchange:
             'des': self.__description,
             'title':self._title,
             'ccxt': self._ccxt,
-            'coinInfo': self._info['coin']}, key=key)
+            'coinInfo': self._info[kSymbol]}, key=key)
 
     def enroll(self, config: dict,title:str):
         self._create(config)
@@ -38,32 +42,19 @@ class baseExchange:
 
     #账户信息
     def balance(self):
-        return self._ccxt.fetch_balance()
-
-    # def account(self) -> dict:
-    #     info = self._ccxt.fetch_balance()
-    #     self._info['acc'] = {
-    #         'total': {coin: amount for coin, amount in info['total'].items() if amount > 0},
-    #         'used': {coin: amount for coin, amount in info['used'].items() if amount > 0},
-    #         'free': {coin: amount for coin, amount in info['free'].items() if amount > 0}}
-    #     return self._info['acc']
+        bal = self._ccxt.fetch_balance()
+        self._acc = {
+            'total': {k: float(v) for k, v in bal.get('total', {}).items() if v and float(v) > 0},
+            'free':  {k: float(v) for k, v in bal.get('free', {}).items() if v and float(v) > 0},
+        }
+        return self._acc
 
     #余额查询
-    def accFree(self, coin: str = 'USDT'):
-        # account = self.get("acc")
-        # # print("~~~~~accFree~~~~~~",account)
-        # if isSpot:
-        #     amt = float(account['free'].get('USDT', 0))
-        #     if coin == 'all':return account['free']
-        #     if coin != '':
-        #         amt = account['free'].get(coin) or 0
-        #     return amt
-        # return self._accPm(account, coin)
-        pass
+    def accFree(self, coin: str = '', isPm: bool = False):
+        return self._acc.get('free', {}).get('USDT', 0)
 
     #当前交易所的所有币种
     def initMarkets(self, reset: bool = False) -> dict:
-        kSymbol = 'coin'
         if not reset and self._info.get(kSymbol):
             return self._info[kSymbol]
         self._info[kSymbol] = {kSpot: {}, kSwap: {}, kFuture: {}, kDelivery: {}}
@@ -113,49 +104,58 @@ class baseExchange:
 
     #symbol: 交易对,seTime: [开始时间, 结束时间],timeframe: K线周期,limit: 单次获取数量，0表示使用交易所最大值
     def getKline(self, symbol: str, seTime: list, timeframe: str = '5m', limit: int = 0):
-        dateFrame = self._marketKline(symbol, seTime, timeframe, limit)
-        lastTime = dateFrame.iloc[-1].candle_begin_time
-        timeInterval = timeFrame2Float(timeframe)
-        if len(seTime) < 2 or \
-            diff_Pdtime(lastTime, seTime[1]) < timeInterval:
+        beginMs = str2ms(seTime[0], self._utc) if len(seTime) > 0 else None
+        endMs = str2ms(seTime[1], self._utc) if len(seTime) > 1 else None
+        dateFrame = self._marketKline(symbol, beginMs, endMs, timeframe, limit)
+        if dateFrame is None or dateFrame.empty or not endMs:
             return dateFrame
-        end = pd.Timestamp(seTime[1])
-        if lastTime >= end:
-            return dateFrame
-        # 按时间范围获取全部数据
+        # 准备进行分页获取
         allData = [dateFrame]
-        nextTime = lastTime
-        endTime = pd.Timestamp(seTime[1])
-        log(f"开始从交易所获取k线: {symbol}")
+        intervalMs = int(timeFrame2Float(timeframe) * 1000)
+        log(f"开始从交易所分页获取K线: {symbol}")
         while True:
-            dateFrame = self._marketKline(symbol, [nextTime.strftime("%Y-%m-%d %H:%M:%S"), str(seTime[1])], timeframe, limit)
-            nextTime = dateFrame.iloc[-1].candle_begin_time
-            allData.append(dateFrame)
-            print(f" 时间: {nextTime} ~ {endTime},跳出判断:{diff_Pdtime(nextTime, endTime)}<{timeInterval}")
-            if diff_Pdtime(nextTime, endTime) <= timeInterval:
+            lastPdTime = dateFrame.iloc[-1].candle_begin_time
+            lastTimeMs = int((pd.Timestamp(lastPdTime) + pd.Timedelta(hours=self._utc)).timestamp() * 1000)
+            nextBeginMs = lastTimeMs + intervalMs
+            log("循环退出:",nextBeginMs,'>',endMs)
+            if nextBeginMs > endMs:
                 break
-        # 合并全部数据
+            dateFrame = self._marketKline(symbol, nextBeginMs, endMs, timeframe, limit)
+            # 如交易所因任何原因没有返回新数据，立刻跳出防止死循环
+            if dateFrame is None or dateFrame.empty:
+                break
+            allData.append(dateFrame)
+        #合并
+        if len(allData) == 1:
+            return allData[0]
         allpd = pdData()
         allpd.format(allData, style='concat')
         return allpd.get()
 
     #订单接口state:  'buy' | 'sell' | 'cancel'
-    def order(self, state: str, symbol: str, totelPrice, amount: float, price: float | None = None, isMarket=False, inForce='GTC', posSide: str | None = None, lv: int = 1):
+    def order(self, typeState: str, symbol: str, totelPrice, amount: float, price: float | None = None, isMarket=False, inForce='GTC', posSide: str | None = None, lv: int = 1):
         category, symbolInfo = self.coinInfo(symbol)
-        kwargs = {'state': state, 'symbol': symbolInfo['id']}
+        kwargs = {'state': typeState, 'symbol': symbolInfo['id']}
         isSpot = category == kSpot
-        def _validateOrderParams(symbolInfo: dict):
-            if amount and not inRange([symbolInfo['amount'].get('min'), symbolInfo['amount'].get('max')], amount):
-                print(symbol, ":amount取值范围为:", symbolInfo['amount'])
-                return False
-            if price and not inRange([symbolInfo['price'].get('min'), symbolInfo['price'].get('max')], price):
-                print(symbol, ":price取值范围为:", symbolInfo['price'])
-                return False
-            totle = amount * price if amount and price else totelPrice
-            if not inRange([symbolInfo['cost'].get('min'), symbolInfo['cost'].get('max')], totle):
-                print(symbol, ":总下单金额范围:", symbolInfo['cost'], '当前价格:', totle)
-                return False
-            return True
+        # print("~~order1~~",typeState,symbol, totelPrice, amount,price, isMarket, inForce, posSide,  lv)
+        def _sporOrder(state: str, symbol, totelPrice=None, amount=None, price=None):
+            params = {'symbol': symbol.get('id'),
+                    'side': state,
+                    'type': kMarket,
+                    'amount':None, 
+                    'price':None,
+                    'params':{'quoteOrderQty': totelPrice}}
+            if amount and price:
+                params.update(type=kLimit, amount=amount, price=price)
+                del params['params']            
+            if state == kSell:
+                params['params']['reduceOnly'] = True
+            self._ccxt.create_order(**params)
+            # rt = tryCatch(lambda: self._ccxt.create_order(**params))
+            # print("~~~~~_sporOrder~~~~~~~~~~",rt)
+            # if not rt:
+            #     return None
+            # return self._formatCcxtOrder(rt)
         #参数调整
         def _setkWargs():
             nonlocal kwargs
@@ -167,26 +167,19 @@ class baseExchange:
         def _setCancel():
             nonlocal kwargs
             kwargs = {'id':totelPrice, 'symbol':symbolInfo.get('symbol')}
-            # print("~~~~~~~~~~~~~~~~~~",kwargs)
             if isSpot:
                 return
             kwargs['symbol'] = symbol
         #logic
-        if state in (kBuy, kSell):
-            if not _validateOrderParams(symbolInfo):
-                return
-        switchFn({
-            # kFind: lambda kwargs:{'symbol':symbol,'orderId':totelPrice}, #
-                    'cancel': _setCancel,
-                    'default': _setkWargs
-                }, key=state)
+        switchFn({kCancel: _setCancel,
+                    'default': _setkWargs}, 
+                    key=typeState)
         
-        return switchFn({
-            # kFind: self._findOrder,#self._ccxt.fetchOrder if isSpot else self._findOrder,
-                        kBuy: self._sporOrder if isSpot else self._contractOrder,
-                        kSell: self._sporOrder if isSpot else self._contractOrder,
-                        'cancel': self._ccxt.cancelOrder if isSpot else self._cancelOrder
-                        }, key=state, **kwargs)
+        # print("~~~~~~order3~~~~~~~", kwargs)
+        return switchFn({kBuy: _sporOrder if isSpot else self._contractOrder,
+                        kSell: _sporOrder if isSpot else self._contractOrder,
+                        'cancel': self._ccxt.cancelOrder if isSpot else self._cancelOrder}, 
+                        key=typeState, **kwargs)
     #获取个人交易记录
     def trades(self, symbol: str, limit: int = 500) -> list[dict]:
         category, symbolInfo = self.coinInfo(symbol)
@@ -195,7 +188,8 @@ class baseExchange:
         rt = tryCatch(lambda: self._ccxt.fetch_my_trades(symbolInfo['symbol'], limit=limit))
         if not rt:
             return []
-        return [self._formatTrade(t) for t in rt]
+        # return [self._formatTrade(t) for t in rt]
+        print("~~~~trades个人交易~~~~~", rt)
 
     #批量下单
     def batchOrders(self, category: str, orders: list[dict]) -> list:
@@ -204,54 +198,82 @@ class baseExchange:
             return []
         return self._batchOrders(category, orders)
     
-    # WebSocket 入口 - session + 重连循环
+    # WebSocket 入口
     async def run(self) -> None:
-        api = self._info.get('api', {})
-        if not api.get('apiKey'):
+        ws_pairs = self._wsListen()
+        if not ws_pairs:
             return
-        title = self.get('title')
-        print("~~~Connector~~~~~~",api.get('proxy'))
-        connector = ProxyConnector.from_url(api.get('proxy'))
-        async with aiohttp.ClientSession(connector=connector) as session:
-            while True:
-                try:
-                    tasks = [
-                        asyncio.create_task(self._watchBalance(session, title, api)),
-                        asyncio.create_task(self._keepAlive(session)),
-                    ]
-                    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-                    for task in pending:
-                        task.cancel()
-                    for task in done:
-                        if not task.cancelled() and task.exception():
-                            raise task.exception()
-                except Exception as e:
-                    log(f"[ws] {self.__class__.__name__} {title} 断线重连: {e}")
-                await asyncio.sleep(5)
-                
-    #ws 账号信息推送
-    async def _watchBalance(self, session, title, api) -> None:
-        # try:
-        #     import ccxt.pro as ccxtpro
-        # except ImportError:
-        #     log(f"[ws] ccxt.pro 未安装，跳过 {self.__class__.__name__}")
-        #     return
-        name = self.__class__.__name__
-        if not hasattr(ccxtpro, name):
-            log(f"[ws] ccxt.pro 不支持交易所: {name}")
-            return
-        ws = getattr(ccxtpro, name)(api)
+        await asyncio.gather(*[e.fetch_balance() for e, _ in ws_pairs])
+        tasks = [
+            asyncio.create_task(coro)
+            for exchange, market_type in ws_pairs
+            for coro in (self._listen_balance(exchange, market_type),
+                        self._listen_orders(exchange, market_type))]
+ 
+        print(f"~~~~ws 开始监听~~~")
         try:
-            while True:
-                bal = await ws.watch_balance()
-                # await evtFireAsync(kEvt_Market, eMarketId['wsBalance'], title, 'main', bal)
-                print("~~~~~baseEx~~~_watchBalance~~",bal)
+            await asyncio.gather(*tasks)
+        except asyncio.CancelledError:
+            raise
         finally:
-            await ws.close()
-    # 心跳包
-    async def _keepAlive(self, session) -> None:
+            await self._close_ws(ws_pairs)
+
+    def _wsListen(self) -> list[tuple[ccxtpro.Exchange, str]]:
+        return []
+    async def _close_ws(self, ws_pairs: list[tuple]) -> None:
+        await asyncio.gather(*[e.close() for e, _ in ws_pairs],return_exceptions=True)
+
+    #账号资金监听
+    async def _listen_balance(self, exchange, market_type: str):
+        delays = _backoff()
         while True:
-            await asyncio.sleep(3600)
+            try:
+                balances = await exchange.watch_balance()
+                delays = _backoff()  # 成功后重置退避
+                usdt_free = balances.get('USDT', {}).get('free')
+                print(f"[{market_type}] 资金更新: USDT 可用 = {usdt_free}:{balances}")
+            except asyncio.CancelledError:
+                raise
+            except ccxt.AuthenticationError as e:
+                delay = next(delays)
+                print(f"[{market_type}] 资金流认证失败: {e} — {delay:.0f}s 后重试")
+                await asyncio.sleep(delay)
+            except ccxt.NetworkError as e:
+                delay = next(delays)
+                print(f"[{market_type}] 资金流网络异常: [{type(e).__name__}] {e} — {delay:.0f}s 后重试")
+                await asyncio.sleep(delay)
+            except Exception as e:
+                delay = next(delays)
+                print(f"[{market_type}] 资金流严重错误: {e}")
+                traceback.print_exc()
+                await asyncio.sleep(delay)
+
+    #订单监听
+    async def _listen_orders(self,exchange: ccxtpro.Exchange,market_type: str, symbol= None) -> None:
+        delays = _backoff()
+        while True:
+            try:
+                orders = await exchange.watch_orders(symbol)
+                delays = _backoff()
+                for order in orders:
+                    # print(f"[{market_type}] 订单更新: {order['status']} : {order}")
+                    if order['status'] == 'closed':#订单关闭
+                        evtFireAsync(kEvt_Market, eMarketId['wsOrder'], self.get('title'), order)
+            except asyncio.CancelledError:
+                raise
+            except ccxt.AuthenticationError as e:
+                delay = next(delays)
+                print(f"[{market_type}] 订单流认证失败: {e} — {delay:.0f}s 后重试")
+                await asyncio.sleep(delay)
+            except ccxt.NetworkError as e:
+                delay = next(delays)
+                print(f"[{market_type}] 订单流网络异常: [{type(e).__name__}] {e} — {delay:.0f}s 后重试")
+                await asyncio.sleep(delay)
+            except Exception as e:
+                delay = next(delays)
+                print(f"[{market_type}] 订单流严重错误: {e}")
+                traceback.print_exc()
+                await asyncio.sleep(delay)
 
     # 子类可继承接口
     def _create(self, config: dict):
@@ -269,60 +291,57 @@ class baseExchange:
     def _cancelOrder(self, symbol: str, id: str): pass
     def _batchOrders(self, category, orders): pass
     def _trades(self, symbol: str, limit: int = 500) -> list[dict]:pass
-    def _formatCcxtOrder(self, rt: dict) -> dict:
-        fee = rt.get('fee', {})
-        return {
-            'orderId': str(rt.get('id', '')),
-            'symbol': rt.get('symbol', ''),
-            'status': 'closed' if rt.get('status') == 'closed' else ('cancel' if rt.get('status') == 'canceled' else 'open'),
-            'side': rt.get('side', ''),
-            'positionSide': rt.get('info', {}).get('positionSide'),
-            'origQty': float(rt.get('amount') or 0),
-            'avgPrice': float(rt.get('average') or rt.get('price') or 0),
-            'cumQuote': float(rt.get('cost') or 0),
-            'fee': float(fee.get('cost') or 0) if fee else 0,
-            'time': rt.get('timestamp') or 0,
-            'updateTime': rt.get('lastUpdateTimestamp') or 0}
+    # def _formatCcxtOrder(self, rt: dict) -> dict:
+    #     fee = rt.get('fee', {})
+    #     return {
+    #         'orderId': str(rt.get('id', '')),
+    #         'symbol': rt.get('symbol', ''),
+    #         'status': 'closed' if rt.get('status') == 'closed' else ('cancel' if rt.get('status') == 'canceled' else 'open'),
+    #         'side': rt.get('side', ''),
+    #         'positionSide': rt.get('info', {}).get('positionSide'),
+    #         'origQty': float(rt.get('amount') or 0),
+    #         'avgPrice': float(rt.get('average') or rt.get('price') or 0),
+    #         'cumQuote': float(rt.get('cost') or 0),
+    #         'fee': float(fee.get('cost') or 0) if fee else 0,
+    #         'time': rt.get('timestamp') or 0,
+    #         'updateTime': rt.get('lastUpdateTimestamp') or 0}
 
-    def _formatTrade(self, t: dict) -> dict:
-        fee = t.get('fee', {})
-        info = t.get('info', {})
-        return {
-            'symbol': t.get('symbol', ''),
-            'orderId': str(t.get('order', '')),
-            'side': t.get('side', ''),
-            'positionSide': info.get('positionSide', ''),
-            'price': float(t.get('price') or 0),
-            'qty': float(t.get('amount') or 0),
-            'cost': float(t.get('cost') or 0),
-            'fee': abs(float(fee.get('cost') or 0)) if fee else 0,
-            'realizedPnl': float(info.get('realizedPnl') or 0),
-            'time': t.get('timestamp') or 0}
+    # def _formatTrade(self, t: dict) -> dict:
+    #     fee = t.get('fee', {})
+    #     info = t.get('info', {})
+    #     return {
+    #         'symbol': t.get('symbol', ''),
+    #         'orderId': str(t.get('order', '')),
+    #         'side': t.get('side', ''),
+    #         'positionSide': info.get('positionSide', ''),
+    #         'price': float(t.get('price') or 0),
+    #         'qty': float(t.get('amount') or 0),
+    #         'cost': float(t.get('cost') or 0),
+    #         'fee': abs(float(fee.get('cost') or 0)) if fee else 0,
+    #         'realizedPnl': float(info.get('realizedPnl') or 0),
+    #         'time': t.get('timestamp') or 0}
 
-    def _marketKline(self, symbol: str, seTime: list, timeframe: str = '5m', limit: int = 0):
-        time = None
-        if len(seTime) > 0:
-            time = str2ms(seTime[0])
-        return self._ccxt.fetch_ohlcv(symbol=symbol, timeframe=timeframe, since=time, limit=limit)
+    def _marketKline(self, symbol: str, beginTime: int | None, endTime = None, timeframe: str = '5m', limit: int = 1000):
+        return self._ccxt.fetch_ohlcv(symbol=symbol, timeframe=timeframe, since=beginTime, limit=limit)
 
-    def _sporOrder(self, state: str, symbol, totelPrice=None, amount=None, price=None):
-        params = {'symbol': symbol.get('id'),
-                  'side': state,
-                  'type': kMarket,
-                   'amount':None, 
-                   'price':None,
-                   'params':{'quoteOrderQty': totelPrice}}
-        if amount and price:
-            params.update(type=kLimit, amount=amount, price=price)
-            del params['params']
-        # if state == kSell:
-        #     params['params']['reduceOnly'] = True
+    # def _sporOrder(self, state: str, symbol, totelPrice=None, amount=None, price=None):
+    #     params = {'symbol': symbol.get('id'),
+    #               'side': state,
+    #               'type': kMarket,
+    #                'amount':None, 
+    #                'price':None,
+    #                'params':{'quoteOrderQty': totelPrice}}
+    #     if amount and price:
+    #         params.update(type=kLimit, amount=amount, price=price)
+    #         del params['params']
+    #     # if state == kSell:
+    #     #     params['params']['reduceOnly'] = True
 
-        # exit()
-        rt = tryCatch(lambda: self._ccxt.create_order(**params))
-        if not rt:
-            return None
-        return self._formatCcxtOrder(rt)
+    #     # exit()
+    #     rt = tryCatch(lambda: self._ccxt.create_order(**params))
+    #     if not rt:
+    #         return None
+    #     return self._formatCcxtOrder(rt)
         
         #现货返回值
         # {'info': {'symbol': 'DOGEUSDT', 'orderId': '13856448896', 'orderListId': '-1', 'clientOrderId': 'x-TKT5PX2F583f2601e4dfe7ae40fac2', 'transactTime': '1771961066709', 'price': '0.00000000', 

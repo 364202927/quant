@@ -1,5 +1,5 @@
 from server.strategy.base.baseCTA import *
-from server.market import g_marketMgr
+# from server.market import g_marketMgr
 
 class contractCTA(baseCTA):
     '辅助合约交易'
@@ -105,7 +105,7 @@ class contractCTA(baseCTA):
         self._history.clear()
         targets = self._exName if exName is None else exName
         for name in targets:
-            ex = g_marketMgr.get(name)
+            # ex = g_marketMgr.get(name)
             if not ex:
                 continue
             for symbol in symbols:

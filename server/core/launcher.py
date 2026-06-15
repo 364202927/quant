@@ -5,7 +5,9 @@ from server.external import web, cli, msgHandler, telegram, feishu
 from server.market import marketMgr
 from server.market.oms import oms
 from server.market.storage.center import storageCenter
+from server.market.storage.orders import storageOrders
 from server.market.storage.subscribe import storageSubscribe
+import traceback
 
 # 模块类型映射表
 _MODULE_FACTORY: dict[str, type] = {
@@ -24,8 +26,9 @@ class launcher:
         self.__msgHandler:msgHandler = None #消息转换
         self.__marketMgr: marketMgr = None   #交易所
         self.__oms:oms  =None               #订单管理
-        self.__center:storageCenter = None  #账号缓存
-        self.__subscribe:storageSubscribe=None #订单/交易所最新数据
+        self.__center = None                #账号缓存
+        self.__subscribe = None             #交易所 更新/数据缓存
+        self.__orders = None                #订单更新/任务订单缓存
         #
         self._initModules()
 
@@ -42,13 +45,17 @@ class launcher:
                 self.__modules.append(cls())
         # 交易所模块
         if kOpenMarket and g_config.marketsApi():
+            self.__center = storageCenter()
+            self.__orders = storageOrders()
             self.__marketMgr = marketMgr()
             self.__modules.append(self.__marketMgr)
-        log("Launcher初始化完成")
+            #k线数据订阅每5分钟触发数据更新
+            self.__subscribe = storageSubscribe()
+            self.__subscribe.setMarket(self.__marketMgr.get())
+            # evtFire(kEvt_Time, 'subscribe', ['5m'])
+            self.__oms = oms(self.__marketMgr.get)
+        log("Launcher初始化完成")#,self.__modules)
 
-    # 通常用于测试任务
-    def addProject(self, projectName: str) -> None:
-        self.__engine.loadTask(projectName)
     def run(self) -> None:
         asyncio.run(self._async_run())
     async def _async_run(self) -> None:
@@ -57,11 +64,15 @@ class launcher:
                 await module.run()
             except Exception as e:
                 log(f"[{module.__class__.__name__}] 运行异常: {e}")
+                traceback.print_exc()
         try:
             await asyncio.gather(*[_guard(m) for m in self.__modules])
         except (KeyboardInterrupt, asyncio.CancelledError):
             log("用户中断，正在退出...")
 
+    # 通常用于测试任务
+    def addProject(self, projectName: str) -> None:
+        self.__engine.loadTask(projectName)
     # 根据start.json读取任务
     def start(self) -> None:
         self.__engine.loadTaskList()

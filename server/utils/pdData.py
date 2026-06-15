@@ -76,6 +76,9 @@ class pdData:
     # 初始格式化
     def format(self, dataOrTab, style='candle', utc=0):
         def candle():  # 原始数据合并(数据类型一定是float)
+            if not dataOrTab:
+                self._pf = pd.DataFrame(columns=self._head)
+                return
             self._pf = pd.DataFrame(dataOrTab, dtype=float)
             self._pf.rename(columns=self._strHead, inplace=True)
             # self.__pdata = self.__pdata[[kHeadIndex,'open','high','low','close','volume']]#暂时只保存以下5个值，币安得数据会多给
@@ -107,7 +110,7 @@ class pdData:
                   'copy': copy},
                  key=style)
         # 转换为当前utc时间
-        if utc > 0:
+        if utc != 0:
             self._pf[self._frist()] += pd.Timedelta(hours=utc)
         # self._pf.drop_duplicates(subset=[self._frist()], inplace=True) #去重
         # self._pf.dropna(subset=[self._head[1]], inplace=True)  # 去除一天都没有交易的周期
@@ -299,7 +302,7 @@ class pdData:
         # log(f"读取完成: {fileName}, 共 {len(allData)} 个文件, 总数据: {len(self._pf)}")
         return True
     
-    #清洗数据,range_time: [start, end]不为空检测时间范围内的缺失数据,否则检测全量异常数据
+    #清洗数据,range_time: [start, end]不为空检测时间范围内的缺失数据,否则检测全量异常数据  //todo不要
     def detection(self, timeFrame: str = '5m',range_time: list[str] = [], adjUtc = True) -> list[tuple]:
         def offsetUtc(timeList: list[tuple]) -> list[tuple]: #调整时间
             if not adjUtc:
