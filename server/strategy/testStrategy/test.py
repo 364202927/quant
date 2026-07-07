@@ -1,8 +1,7 @@
 from server.strategy.base.contractCTA import *
 from server.strategy.base.realTrade import *
-# from server.utils import pdData, log
+from server.utils import log
 # from datetime import datetime
-import time
 
 class test(contractCTA, realTrade):
     "交易所api测试调用"
@@ -11,6 +10,7 @@ class test(contractCTA, realTrade):
         super().__init__()
         realTrade.__init__(self)
         self.bInit = False
+        self._testStep = 0
      
     def info(self):
         return "demo+k线数据,交易所成交"
@@ -67,49 +67,24 @@ class test(contractCTA, realTrade):
 
     def update_10s(self, id, timeKey):
         if self.bInit: return
-        self.bInit = True
-        print("~~~~~~update_10s~~~~~~~~")
+        if self._testStep == 0:
+            log("~~~~~~test初始化完成~~~~~~~~")
         #现货
-        self.buy('DOGE/USDT', totelPrice = 1)                            #市价买入1u,如totelPrice少于最少下单按最少下单
-        # self.buy('DOGE/USDT', totelPrice = 'bet:10', orderBook=0)      #以现货总仓位的10%,挂单最优价买入 未测试
-        # self.cencel('DOGE/USDT')                                        #测单未测试
-        # self.sell('DOGE/USDT')
-
-
-
-
-
-
-
-#任务
-# 优化:
-# web
-# 1.每次切换进入页面时刷新到初始状态
-# 2.web添加load画面(中间刷新图标在旋转),load过程全页面阻挡不能点击
-# 3.webapp初始化时,app会调用2次init
-# 4.优化页面布局
-# 后端
-# 1.task1 逻辑优化修改,task2指标优化检测
-# 2.检测所有核心代码的async是否成功,询问该框架和成熟的金融框架有什么区别，那些不足需要完善的
-# 3.回测系统优化为run没有未来数据,web添加快速测试按钮
-# 4.绑定交易所时添加risk(0~5,默认0管),有risk会进入风控 管控进行平仓操作
-# 5.ws 开始监听 才发送init对task进行初始化调用,task.init,等所有初始化完成后再调用(run)
-# 2.oms拆分订单要维护一个id,所有子订单完成时才会策略发送完成事件
-
-# 任务:
-# 0.框架(不一样的风格（进取，中等，保守）)
-# 1.日志系统还没做 web+后端
-# 2.资产页面
-# 3.行情页面
-# 4.策略管理页面
-# 5.订单管理页面
-# 6.完成第一个双均线策略
-# 7.完成监控更新币种
-# 8,添加最重要交易量oi和cvd指标
-# 2.成交历史和深度数据的修改
-# 3.缓存优化,每天切分数据
-
-
-# #优先任务整理
-# 1.优先调通下单 现货买卖   合约买卖  撤单
-# 2.orders需要记录task的下单信息,现货记录到历史(订单确认后),合约记录到持仓
+        if self._testStep == 0:
+            self.buy('DOGE/USDT', totelPrice = 1,orderBook=1)                         #市价买入1u,如totelPrice少于最少下单按最少下单
+        elif self._testStep == 1:
+            self.buy('DOGE/USDT', totelPrice = 'bet:10', orderBook=1)     #以现货总仓位的10%,挂单最优价买入
+        elif self._testStep == 2:
+            self.buy('DOGE/USDT', totelPrice = 1, price = 0.07)          #挂单价0.007,总单价1u
+        # elif self._testStep == 3:
+        #     self.cencel('DOGE/USDT')                                      #取消挂单
+        elif self._testStep == 3:
+            self.sell('DOGE/USDT',orderBook=1)                                        #默认全卖
+            self.bInit = True
+        
+        
+        
+        
+        
+        log("~~~Step~~~~",self._testStep)
+        self._testStep += 1

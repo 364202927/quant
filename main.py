@@ -1,5 +1,5 @@
 from server.core.launcher import launcher
-from server.utils.common import publicIp
+# from server.utils.common import publicIp
 # import webbrowser
 
 def main():

@@ -2,7 +2,7 @@ import asyncio,aiohttp,ccxt,datetime,traceback
 import pandas as pd
 import ccxt.pro as ccxtpro
 # from aiohttp_socks import ProxyConnector
-from server.market import kSpot, kSwap, kFuture, kDelivery, kBuy, kSell, kShort, kLong, kMarket, kLimit, eMarketId,kCancel
+from server.market import kSpot, kSwap, kFuture, kDelivery, kBuy, kSell, kShort, kLong, kMarket, kLimit, eMarketId,kCancel,kPm
 from server.utils import switch, switchFn, tryCatch, aContainB, slit, str2ms, str2time, pdData, err, log, inRange, utc_now, reviseTime, timeFrame2Float, diff_Pdtime, logFormat, trySwitchFn, evtFireAsync, kEvt_Market
 kSymbol = 'coinInfo'
 
@@ -51,7 +51,7 @@ class baseExchange:
 
     #余额查询
     def accFree(self, coin: str = '', isPm: bool = False):
-        return self._acc.get('free', {}).get('USDT', 0)
+        return self._acc.get('free', {}).get(coin or 'USDT', 0)
 
     #当前交易所的所有币种
     def initMarkets(self, reset: bool = False) -> dict:
@@ -142,15 +142,15 @@ class baseExchange:
             params = {'symbol': symbol.get('id'),
                     'side': state,
                     'type': kMarket,
-                    'amount':None, 
-                    'price':None,
-                    'params':{'quoteOrderQty': totelPrice}}
+                    'amount': amount,
+                    'price':None}
             if amount and price:
-                params.update(type=kLimit, amount=amount, price=price)
-                del params['params']            
-            if state == kSell:
-                params['params']['reduceOnly'] = True
-            self._ccxt.create_order(**params)
+                params.update(type=kLimit, price=price)
+            elif state == kBuy and amount is None:
+                params['params'] = {'quoteOrderQty': totelPrice}
+            elif state == kSell and amount is None:
+                raise ValueError(f"现货卖出缺少 amount: {symbol.get('id')}")
+            return self._ccxt.create_order(**params)
             # rt = tryCatch(lambda: self._ccxt.create_order(**params))
             # print("~~~~~_sporOrder~~~~~~~~~~",rt)
             # if not rt:
@@ -170,15 +170,23 @@ class baseExchange:
             if isSpot:
                 return
             kwargs['symbol'] = symbol
+        def _cancelSpot(symbol: str, id: str):
+            if id:
+                return self._ccxt.cancelOrder(id, symbol)
+            open_orders = self._ccxt.fetch_open_orders(symbol)
+            results = []
+            for item in open_orders:
+                results.append(self._ccxt.cancelOrder(item.get('id'), symbol))
+            return results
         #logic
         switchFn({kCancel: _setCancel,
                     'default': _setkWargs}, 
                     key=typeState)
         
-        # print("~~~~~~order3~~~~~~~", kwargs)
+        log("~~~~~~send order~~~~~~~", kwargs)
         return switchFn({kBuy: _sporOrder if isSpot else self._contractOrder,
                         kSell: _sporOrder if isSpot else self._contractOrder,
-                        'cancel': self._ccxt.cancelOrder if isSpot else self._cancelOrder}, 
+                        'cancel': _cancelSpot if isSpot else self._cancelOrder}, 
                         key=typeState, **kwargs)
     #获取个人交易记录
     def trades(self, symbol: str, limit: int = 500) -> list[dict]:
@@ -210,7 +218,7 @@ class baseExchange:
             for coro in (self._listen_balance(exchange, market_type),
                         self._listen_orders(exchange, market_type))]
  
-        print(f"~~~~ws 开始监听~~~")
+        log(f"~~~~ws 开始监听~~~")
         try:
             await asyncio.gather(*tasks)
         except asyncio.CancelledError:
@@ -229,9 +237,11 @@ class baseExchange:
         while True:
             try:
                 balances = await exchange.watch_balance()
+                self._sync_balance(balances, market_type)
                 delays = _backoff()  # 成功后重置退避
                 usdt_free = balances.get('USDT', {}).get('free')
-                print(f"[{market_type}] 资金更新: USDT 可用 = {usdt_free}:{balances}")
+                log(f"[{market_type}] ws资金更新: USDT 可用 = {usdt_free}:{balances}")
+                evtFireAsync(kEvt_Market, eMarketId['wsBalance'], self.get('id'), self.get('title'), balances)
             except asyncio.CancelledError:
                 raise
             except ccxt.AuthenticationError as e:
@@ -248,6 +258,24 @@ class baseExchange:
                 traceback.print_exc()
                 await asyncio.sleep(delay)
 
+    def _sync_balance(self, balances: dict, market_type: str) -> None:
+        if not isinstance(balances, dict):
+            return
+        def _collect(key: str) -> dict:
+            data = balances.get(key, {})
+            return {k: float(v) for k, v in data.items() if v is not None} if isinstance(data, dict) else {}
+        if market_type == 'SPOT':
+            for key in ('free', 'used', 'total'):
+                self._acc.setdefault(key, {}).update(_collect(key))
+            return
+        pm = self._acc.setdefault(kPm, {})
+        usdt = balances.get('USDT', {}) if isinstance(balances.get('USDT'), dict) else {}
+        if usdt.get('free') is not None:
+            pm['free'] = float(usdt.get('free'))
+        if usdt.get('total') is not None:
+            pm['equity'] = float(usdt.get('total'))
+        pm.setdefault('total', {}).update(_collect('total'))
+
     #订单监听
     async def _listen_orders(self,exchange: ccxtpro.Exchange,market_type: str, symbol= None) -> None:
         delays = _backoff()
@@ -256,8 +284,8 @@ class baseExchange:
                 orders = await exchange.watch_orders(symbol)
                 delays = _backoff()
                 for order in orders:
-                    # print(f"[{market_type}] 订单更新: {order['status']} : {order}")
-                    if order['status'] == 'closed':#订单关闭
+                    log(f"[{market_type}] ws订单更新: {order['status']} : {order}")
+                    if order['status'] in ('closed', 'canceled'):#订单关闭/取消
                         evtFireAsync(kEvt_Market, eMarketId['wsOrder'], self.get('title'), order)
             except asyncio.CancelledError:
                 raise

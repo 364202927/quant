@@ -1,26 +1,20 @@
-# import asyncio
-# import aiohttp
 import json
-# import datetime
-
 from server.market.baseExchange import *
 from server.market import kPm, eMarketId
-# from server.utils.science import binanceTimestamp
 from server.utils import timeFrame2Float, sec2min, logFormat, log, evtFireAsync, kEvt_Market, str2time,binanceTimestamp
 
 kMaxLimit = 1000   # 现货最大 K 线
 kfMaxLimit = 1500  # 合约最大
 
 def _wsCreate(cls: type,api_key: str,secret: str,proxy: str,**options) -> ccxtpro.Exchange:
-    return cls({
-        'apiKey':          api_key,
-        'secret':          secret,
-        'socksProxy':      proxy,
-        'wsSocksProxy':    proxy,
-        'enableRateLimit': True,
-        'timeout':         30_000,
-        'options':         options,
-    })
+    return cls({'apiKey':          api_key,
+            'secret':          secret,
+            'socksProxy':      proxy,
+            'wsSocksProxy':    proxy,
+            'enableRateLimit': True,
+            'timeout':         30000,
+            'options':         options})
+
 class BinancePAPI(ccxtpro.binance):
     #修复 ccxt.pro PAPI 账户资金键名混乱
     def handle_balance(self, client, message):
@@ -171,10 +165,13 @@ class binance(baseExchange):
             orders = self._ccxt.papiGetUmPositionRisk()
             pos_orders = []
             for order in orders:
+                if float(order['positionAmt']) == 0:
+                    continue
                 status = float(order['positionAmt']) > 0 and kBuy or kSell
                 newData = { #查 仓位格式
                     'symbol':order['symbol'],
                     'dir':status+'_'+order['positionSide'],
+                    'side': order['positionSide'],
                     'open': order['entryPrice'],
                     'lv':order['leverage'],
                     'unRealized':order['unRealizedProfit'],
@@ -182,7 +179,7 @@ class binance(baseExchange):
                 }
                 pos_orders.append(newData)
             if id != '':
-                pos_orders = [pos for pos in pos_orders if pos['symbol'] == id and float(pos['positionAmt']) != 0]
+                pos_orders = [pos for pos in pos_orders if pos['symbol'] == id]
             # [{'symbol': 'DOGEUSDT', 'positionAmt': '-53.0', 'entryPrice': '0.09522', 'markPrice': '0.09406', 'unRealizedProfit': '0.06148', 'liquidationPrice': '32.22623582', 
             #   'leverage': '1', 'positionSide': 'SHORT', 'updateTime': '1772197402977', 'maxNotionalValue': '200000000', 'notional': '-4.98518', 'breakEvenPrice': '0.09517239'}, 
         
@@ -224,18 +221,20 @@ class binance(baseExchange):
             # params['orderId'] = symbol
             # params = {'orderId':price}
         #平仓时只减仓
-        if (params['side'] == kBuy and params['positionSide'] == kShort) or \
-            (params['side'] == kSell and params['positionSide'] == kLong):
+        if (state == kBuy and params['positionSide'] == kShort) or \
+            (state == kSell and params['positionSide'] == kLong):
             params['reduceOnly'] = True
         print("~~~~_contractOrder~~~~~~", isUm, lv, params)
-        # if self._isPm: # PM 模式
-        # return _pmOrder(state, isUm, params)
+        return _pmOrder(state, isUm, params)
         # Normal 模式
         # return _normalOrder(state, category, params)
 
     # ── 合约撤单 ──
     def _cancelOrder(self, symbol: str, id: str):
         category, symbolInfo = self.coinInfo(symbol)
+        if not id:
+            params = {'symbol': symbolInfo.get('id'), 'timestamp': binanceTimestamp()}
+            return self._ccxt.papiDeleteUmAllOpenOrders(params=params)
         params = {'symbol': symbolInfo.get('id'),
                   'orderId': id,
                   'timestamp': binanceTimestamp()}

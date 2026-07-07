@@ -50,9 +50,9 @@ class realTrade(baseTrade):
                 'dir': kSell,
                 'exName': name,
             }
-            evtFire(kEvt_Market, eMarketId['oms'], data)
+            evtFire(kEvt_Market, eMarketId['preTrade'], data)
 
-    def cancel(self, symbol: str, orderID: str = '',exName: list[str] | None = None) -> None:
+    def cencel(self, symbol: str, orderID: str = '',exName: list[str] | None = None) -> None:
         targets = exName if exName else [self._exName]
         for name in targets:
             data = {
@@ -62,7 +62,7 @@ class realTrade(baseTrade):
                 'orderID': orderID,
                 'exName': name,
             }
-            # evtFire(kEvt_Market, eMarketId['preTrade'], data)
+            evtFire(kEvt_Market, eMarketId['oms'], data)
 
     # ── 合约 ──
     def openLong(self, symbol: str, totelPrice: float | str, orderBook: int = 0, price: float | None = None,lv: int = 0, isMarket: bool = False, inForce: str = 'GTC', exName: list[str] | None = None) -> None:

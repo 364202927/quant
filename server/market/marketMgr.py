@@ -1,4 +1,5 @@
 import asyncio
+from itertools import count
 from server.utils import g_config, require, err, log, warn, tryCatch, logFormat, evtConnect, evtFire, kEvt_Market, switchFn
 from server.market import eMarketId, kPriority_Normal, kPriority_Cancel, kPriority_ForceClose, kCancel
 from server.market.baseExchange import baseExchange
@@ -13,6 +14,7 @@ class marketMgr(extInterface):
         super().__init__()
         self.__exchangeMgr: dict = {}
         self.__queue: asyncio.PriorityQueue = None
+        self.__queueSeq = count()
         self.__preTrade = preTrade(self.get)
         self.__circuitBreaker = circuitBreaker()
         self.initExchange()
@@ -63,7 +65,7 @@ class marketMgr(extInterface):
                 priority = kPriority_Cancel
                 # 撤单去重：检查队列中是否已有相同 symbol + exName 的撤单
                 dup = False
-                for p, item in list(self.__queue._queue):
+                for _, _, item in list(self.__queue._queue):
                     if (item.get('type') == kCancel and
                         item.get('symbol') == symbol and
                         item.get('exName') == exName):
@@ -75,7 +77,7 @@ class marketMgr(extInterface):
             else:
                 priority = kPriority_Normal
 
-            self.__queue.put_nowait((priority, data))
+            self.__queue.put_nowait((priority, next(self.__queueSeq), data))
 
         switchFn({eMarketId['order']: _order}, key=id_)
 
@@ -89,7 +91,7 @@ class marketMgr(extInterface):
     # ── 下单网关 ──
     async def _gateway(self) -> None:
         while True:
-            priority, item = await self.__queue.get()
+            priority, _, item = await self.__queue.get()
             exName = item.get('exName', '')
             orderType = item.get('type', '')
             ex:baseExchange = self.__exchangeMgr.get(exName)
@@ -104,8 +106,9 @@ class marketMgr(extInterface):
                                 item.get('orderID', ''), 0)
                 else:
                     # 普通下单
+                    # result = ex.order(
                     ex.order(
-                        typeState=item.get('dir', ''),
+                        typeState=item.get('orderDir', item.get('dir', '')),
                         symbol=item.get('symbol', ''),
                         totelPrice=item.get('totelPrice', 0),
                         amount=item.get('amount'),
@@ -113,7 +116,20 @@ class marketMgr(extInterface):
                         isMarket=item.get('isMarket', False),
                         inForce=item.get('inForce', 'GTC'),
                         posSide=item.get('posSide'),
-                        lv=item.get('lv', 1),
-                    )
+                        lv=item.get('lv', 1))
+                    # if result is None:
+                    #     continue
+                    # if isinstance(result, dict):
+                    #     item['orderID'] = result.get('id', item.get('orderID', ''))
+                    #     item['clientOrderId'] = result.get('clientOrderId', item.get('clientOrderId', ''))
+                    #     if result.get('amount') is not None:
+                    #         item['amount'] = result.get('amount')
+                    #     if result.get('price') is not None:
+                    #         item['price'] = result.get('price')
+                    #     if result.get('cost'):
+                    #         item['totelPrice'] = result.get('cost')
+                    #     elif item.get('amount') is not None and item.get('price') is not None:
+                    #         item['totelPrice'] = item.get('amount') * item.get('price')
+                    # evtFire(kEvt_Market, eMarketId['orderCache'], item)
             except Exception as e:
                 log(f"[marketMgr] 下单失败 {exName}: {e}")

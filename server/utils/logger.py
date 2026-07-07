@@ -1,7 +1,10 @@
-import sys,os,pprint,json
+import sys,os,pprint,json,threading
 from server.utils import kLog,kInfo,kError,kWarn
 from server.utils.fileConfig import g_config,kLogBufType
 from server.utils.common import str2time
+
+_logLock = threading.RLock()
+
 #log显示时间,其他显示 类+调用位置
 def _logBase(tag: str, *args) -> None:
     des = '[' + str2time('strNow') + ']' 
@@ -15,10 +18,12 @@ def _logBase(tag: str, *args) -> None:
         except (ValueError, AttributeError):
             des = "[Unknown_Location]"
     message = ''.join(map(str, args))
-    # print("~~~~log~~~~~~",g_config.external('console')['enable'])
-    g_config.get(kLogBufType).push(msg=des + message, tags=tag)
-    if g_config.external('console')['enable'] == False:
-        print(des + message)
+    fullMessage = des + message
+    with _logLock:
+        # print("~~~~log~~~~~~",g_config.external('console')['enable'])
+        g_config.get(kLogBufType).push(msg=fullMessage, tags=tag)
+        if g_config.external('console')['enable'] == False:
+            print(fullMessage, flush=True)
 
 def log(*msgs) -> None:
     _logBase(kLog, *msgs)
@@ -29,6 +34,6 @@ def warn(*msgs) -> None:
 def err(*msgs) -> None:
     _logBase(kError, *msgs)
 def logFormat(value) -> None:
-    pprint.pprint(value)
+    _logBase(kLog, "\n", pprint.pformat(value))
 def logJson(value) -> None:
-    print(json.dumps(value, indent=4, ensure_ascii=False))
+    _logBase(kLog, "\n", json.dumps(value, indent=4, ensure_ascii=False))

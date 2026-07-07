@@ -1,5 +1,5 @@
 from server.utils import evtConnect, kEvt_Market, log, switchFn, slit, inRange,warn,evtFire
-from server.market import eMarketId, kSpot, kSell, kSwap,kBuy, kCancel,baseExchange
+from server.market import eMarketId, kSpot, kSell, kSwap,kBuy, kCancel,kClose,baseExchange
 
 #todo:检测策略连续亏损,风格等
 #todo:价格偏离
@@ -31,17 +31,17 @@ class preTrade:
         orderType = data.get('type', '')
         direction = data.get('dir', '')
         totelPrice = data.get('totelPrice', 0)
-        price = data.get('price')
-        amount = data.get('amount')
-        _, newSymbol = slit(symbol, '_')
+        splitSymbol = slit(symbol, '_')
+        newSymbol = splitSymbol[1] if splitSymbol else symbol
         _, symbolInfo = ex.coinInfo(data['symbol'])
         isPm = (orderType == kSwap)
-        def _bet2U(freeFunds) -> float: # bet转换成u
+        def _bet2Value(value) -> float:
             if isinstance(totelPrice, str) and totelPrice.startswith('bet:'):
-                proportion = float(totelPrice[4:]) * 0.01
-                return proportion * freeFunds
-            return totelPrice
+                return float(totelPrice[4:]) * 0.01 * value
+            return float(totelPrice or 0)
         #暂时只支持现货和合约
+        if orderType == kCancel:
+            return True
         if orderType not in (kSpot, kSwap):
             return f"不支持的下单类型: {orderType}, 仅支持 {kSpot}/{kSwap}"
         if not symbolInfo:
@@ -51,33 +51,48 @@ class preTrade:
         if not any(p in symbol_lower for p in self._passList()):
             return  f"symbol {symbol} 不在 passList 中"
         
-        # b. 仓位检测
-        
-        # 'type': kSpot//kSwap类型
-        # 'dir': kBuy/kSell/close    方向
-        # 1.现货
-        # type:kSpot
-        # dir:kBuy/kSell
-        # 2.合约
-        # type:kSwap
-        # dir': kBuy/kSell/close
-        # self, coin: str = 'USDT', isPm: bool = False
-        coin = 'USDT' if (isPm == False and direction == kBuy) or (isPm == True and (direction==kBuy or direction== kSell)) else slit(newSymbol,"/")[0]
-        assets = ex.accFree(coin= coin,isPm = isPm)
-        totelPrice = _bet2U(assets)
-        # if totelPrice > symbolInfo['cost'].get('max'): totelPrice = symbolInfo['cost'].get('max')
-        # if isinstance(total, (int, float)) and not inRange(
-        #     [symbolInfo['cost'].get('min'), symbolInfo['cost'].get('max')], total):
-        #     return False, f"下单金额范围: {symbolInfo['cost']}, 当前: {total}"
-        # print("~~~~~_check~~~~~~~",coin,assets,totelPrice)
-        # 现货买/买合约开仓
-        if coin == 'USDT':
-            coinMin = symbolInfo['cost'].get('min') 
-            totelPrice = coinMin > totelPrice and coinMin or totelPrice #下单金额必须 >min
-            if totelPrice > assets:
-                return f"下单金额不足: {totelPrice}, 余额: {assets}"
-        else: #现货卖出/合约平仓
-            pass
+        baseCoin = slit(newSymbol, "/")[0]
+        quoteCoin = slit(newSymbol, "/")[1].split(":")[0] if slit(newSymbol, "/") else 'USDT'
+
+        if orderType == kSpot and direction == kBuy:
+            assets = ex.accFree(coin=quoteCoin, isPm=False)
+            total = _bet2Value(assets)
+            coinMin = symbolInfo['cost'].get('min')
+            total = coinMin > total and coinMin or total
+            if total > assets:
+                return f"现货买入金额不足: {total}, {quoteCoin}余额: {assets}"
+            data['consumeCoin'] = quoteCoin
+            data['totelPrice'] = total
+
+        elif orderType == kSpot and direction == kSell:
+            assets = ex.accFree(coin=baseCoin, isPm=False)
+            if isinstance(totelPrice, str) and totelPrice.startswith('bet:'):
+                if assets <= 0:
+                    return f"现货卖出余额不足: {baseCoin}余额: {assets}"
+            else:
+                orderValue = float(totelPrice or 0)
+                if orderValue <= 0:
+                    return f"现货卖出金额无效: {totelPrice}"
+            data['consumeCoin'] = baseCoin
+
+        elif orderType == kSwap and direction in (kBuy, kSell):
+            assets = ex.accFree(coin=quoteCoin, isPm=True)
+            total = _bet2Value(assets)
+            coinMin = symbolInfo['cost'].get('min')
+            total = coinMin > total and coinMin or total
+            if total > assets:
+                return f"合约开仓金额不足: {total}, 可用: {assets}"
+            data['consumeCoin'] = quoteCoin
+            data['totelPrice'] = total
+
+        elif orderType == kSwap and direction == kClose:
+            positions = evtFire(kEvt_Market, eMarketId['gPosit'], 'ex', symbolInfo.get('id'))
+            if not positions or data.get('exName') not in positions:
+                return f"未找到可平仓位: {symbol}"
+            data['consumeCoin'] = quoteCoin
+            data['_positions'] = positions[data.get('exName')]
+        else:
+            return f"不支持的方向: {orderType}/{direction}"
         
 
         # isClosePos = (direction == 'close') or \
@@ -113,8 +128,6 @@ class preTrade:
         
         
         #赋值给oms
-        data['consumeCoin'] = coin
-        data['totelPrice'] = totelPrice
         data['coinInfo'] = symbolInfo
         # data['ex'] = ex
         return True
