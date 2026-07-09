@@ -1,6 +1,6 @@
 import copy
 from server.utils import evtConnect, evtFireAsync, kEvt_Market,switchFn,logFormat,log
-from server.market import eMarketId, kBuy, kSell
+from server.market import eMarketId, kBuy, kSell,kPm
 
 class storageCenter:
     "个人资产数据缓存"
@@ -28,7 +28,7 @@ class storageCenter:
                 self._pruneSpotCost(cleanData.get('total', {}))
             # print("~~~~updata balance~~~~~~~~",exName,key, data)
             log("ws 更新storageCenter账号详情:")
-            logFormat(self.__snapshot[exName][key]['free'])
+            logFormat(self.__snapshot[exName][key][kPm])
 
         def _wsOrder():
             order = args[2] if len(args) > 2 else {}

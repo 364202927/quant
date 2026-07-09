@@ -58,7 +58,7 @@ class realTrade(baseTrade):
             data = {
                 'type': kCancel,
                 'taskName': self.name(),
-                'symbol': spot(symbol),
+                'symbol': symbol,
                 'orderID': orderID,
                 'exName': name,
             }
@@ -107,7 +107,7 @@ class realTrade(baseTrade):
             }
             evtFire(kEvt_Market, eMarketId['preTrade'], data)
 
-    def closePos(self, symbol: str, dir: str = 'all', totelPrice: float | str = 'bet:100', orderBook: int = 0,price: float | None = None, lv: int = 0, isMarket: bool = False, inForce: str = 'GTC', exName: list[str] | None = None) -> None:
+    def closePos(self, symbol: str, dir: str, totelPrice: float | str = 'bet:100', orderBook: int = 0,price: float | None = None, lv: int = 0, isMarket: bool = False, inForce: str = 'GTC', exName: list[str] | None = None) -> None:
         lv = self._defLv if lv == 0 else lv
         targets = exName if exName else [self._exName]
         for name in targets:

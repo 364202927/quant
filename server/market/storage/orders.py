@@ -8,7 +8,7 @@ class storageOrders:
 
     def __init__(self):
         self.__holdings: dict[str, list] = {}   # 交易所现持有的原始订单数据
-        self.__taskOrders = recordBuffer()      # task正持有的订单
+        self.__taskOrders: dict[str, list[dict]] = {}  # task正持有的订单
         self.__taskHistory = recordBuffer()     # 任务历史订单
         self.__openOrders = {}                  #task开仓记录
         #todo:读取__taskOrders保存的文件
@@ -22,18 +22,34 @@ class storageOrders:
             self.__holdings.setdefault(exName, {}).setdefault(key, {}).update(data)
             log("持仓记录:\n", self.__holdings)
             # todo:修改,先加载__taskOrders,看看能不能对应上__holdings
+
+        def _wsBalancePositions():
+            account = args[2] if len(args) > 2 else ''
+            data = args[3] if len(args) > 3 else {}
+            if not account:
+                return
+            positions = self._positionsFromWsBalance(data)
+            if not positions:
+                return
+            target = self.__holdings.setdefault(exName, {}).setdefault(account, {}).setdefault('pos', [])
+            for position in positions:
+                self._upsertPosition(target, position)
         
         #返回持仓
         def _gPosit():
-            queryType, symbol = args[2], args[3]
+            queryType = args[1] if len(args) > 1 else ''
+            symbol = args[2] if len(args) > 2 else ''
+            account = args[3] if len(args) > 3 else ''
             # queryType: 'task'从运行任务中找 / 'ex'从交易所中寻找
             if queryType == 'task':
-                return self.__taskOrders.filter(lambda x: x.get('symbol') == symbol)
+                return self._taskPositions(symbol, account)
             # 'ex': 从交易所原始持仓中查找
             result = {}
             querySymbol = self._cleanSymbol(symbol)
             for _, accounts in self.__holdings.items():
                 for accountName, data in accounts.items():
+                    if account and accountName != account:
+                        continue
                     posList = data.get('pos', [])
                     for p in posList:
                         sym = p.get('symbol', '') if isinstance(p, dict) else ''
@@ -83,7 +99,7 @@ class storageOrders:
             coinId = info.get('s', '')
             wsPs = info.get('ps', None)           # 持仓方向: LONG/SHORT/None(现货)
             wsSide = order.get('side', '')        # 'buy' / 'sell'
-            isReduce = order.get('reduceOnly', False)
+            isReduce = order.get('reduceOnly', False) or self._bool(info.get('R')) or self._bool(info.get('reduceOnly'))
             
             # 确定 WS 对应的 dir (kBuy/kSell/kClose)
             if isReduce and wsPs is not None:
@@ -129,26 +145,28 @@ class storageOrders:
                 log("~~~~~~find tempData~~~~~",matched)
                 log("~~~~~~saveRec~~~~~~~~",fullRecord)
                 log("~~~~__openOrders~~~~~",self.__openOrders)
-                log("~~~~__taskOrders~~~~~",self.__taskOrders.buffer())
+                log("~~~~__taskOrders~~~~~",self.__taskOrders)
                 log("~~~~__taskHistory~~~~~",self.__taskHistory.buffer())
                 return
             else:
-                self.__taskOrders.push(**fullRecord)
+                self._updateTaskOrders(matchedTask, matched, fullRecord)
                 self.__taskHistory.push(**fullRecord)
                 # print(f"[storageOrders] 合约→活跃+历史: {coinId} {wsSide}")
             log("~~~~~~find tempData~~~~~",matched)
             log("~~~~~~saveRec~~~~~~~~",fullRecord)
             log("~~~~__openOrders~~~~~",self.__openOrders)
-            log("~~~~__taskOrders~~~~~",self.__taskOrders.buffer())
+            log("~~~~__taskOrders~~~~~",self.__taskOrders)
             log("~~~~__taskHistory~~~~~",self.__taskHistory.buffer())
             
 
-        switchFn({eMarketId['positions']: _initHoldings,
-                  eMarketId['order']: _saveOrder,
-                #   eMarketId['orderCache']: _saveOrder,
-                  eMarketId['wsOrder']: _wsUpdateOrder,
-                  eMarketId['gPosit']: _gPosit,
-                }, key=id)
+        result = switchFn({eMarketId['positions']: _initHoldings,
+                           eMarketId['order']: _saveOrder,
+                         # eMarketId['orderCache']: _saveOrder,
+                           eMarketId['wsBalance']: _wsBalancePositions,
+                           eMarketId['wsOrder']: _wsUpdateOrder,
+                           eMarketId['gPosit']: _gPosit,
+                         }, key=id)
+        return None if result is False else result
 
     def _cleanSymbol(self, symbol: str) -> str:
         if not symbol:
@@ -156,6 +174,96 @@ class storageOrders:
         clean = symbol.split('_')[-1]
         clean = clean.split(':')[0]
         return clean.replace('/', '').replace('-', '')
+
+    def _positionsFromWsBalance(self, data: dict) -> list[dict]:
+        rawPositions = data.get('info', {}).get('a', {}).get('P', []) if isinstance(data, dict) else []
+        if not isinstance(rawPositions, list):
+            return []
+        positions = []
+        for item in rawPositions:
+            symbol = item.get('s', '')
+            side = item.get('ps', '')
+            amount = self._float(item.get('pa'))
+            if not symbol or not side:
+                continue
+            positions.append({
+                'symbol': symbol,
+                'dir': f"{amount > 0 and kBuy or kSell}_{side}",
+                'side': side,
+                'open': item.get('ep'),
+                'unRealized': item.get('up'),
+                'amount': abs(amount),
+            })
+        return positions
+
+    def _upsertPosition(self, positions: list[dict], position: dict) -> None:
+        symbol = self._cleanSymbol(position.get('symbol', ''))
+        side = position.get('side', '')
+        for index, item in enumerate(list(positions)):
+            if self._cleanSymbol(item.get('symbol', '')) != symbol or item.get('side') != side:
+                continue
+            if position.get('amount', 0) <= 0:
+                positions.pop(index)
+            else:
+                positions[index] = {**item, **position}
+            return
+        if position.get('amount', 0) > 0:
+            positions.append(position)
+
+    def _taskPositions(self, symbol: str, taskName: str = '') -> dict:
+        result = {}
+        querySymbol = self._cleanSymbol(symbol)
+        for task, orders in self.__taskOrders.items():
+            if taskName and task != taskName:
+                continue
+            for order in orders:
+                if querySymbol and querySymbol not in self._cleanSymbol(order.get('symbol', '')):
+                    continue
+                result.setdefault(task, []).append(order)
+        return result
+
+    def _updateTaskOrders(self, taskName: str, matched: dict, record: dict) -> None:
+        direction = self._taskOrderDir(matched, record)
+        if not direction:
+            return
+        if record.get('dir') == kClose:
+            self._removeTaskOrder(taskName, matched.get('symbol', ''), direction)
+            return
+        self._upsertTaskOrder(taskName, {
+            'orderID': record.get('orderID', ''),
+            'symbol': matched.get('symbol', ''),
+            'dir': direction,
+            'price': record.get('price'),
+        })
+
+    def _taskOrderDir(self, matched: dict, record: dict) -> str:
+        posSide = matched.get('posSide')
+        recordDir = record.get('dir', '')
+        if posSide == kLong or recordDir.endswith(kLong):
+            return 'long'
+        if posSide == kShort or recordDir.endswith(kShort):
+            return 'short'
+        return ''
+
+    def _upsertTaskOrder(self, taskName: str, order: dict) -> None:
+        orders = self.__taskOrders.setdefault(taskName, [])
+        symbol = self._cleanSymbol(order.get('symbol', ''))
+        direction = order.get('dir', '')
+        for index, item in enumerate(orders):
+            if self._cleanSymbol(item.get('symbol', '')) == symbol and item.get('dir') == direction:
+                orders[index] = order
+                return
+        orders.append(order)
+
+    def _removeTaskOrder(self, taskName: str, symbol: str, direction: str) -> None:
+        orders = self.__taskOrders.get(taskName, [])
+        cleanSymbol = self._cleanSymbol(symbol)
+        self.__taskOrders[taskName] = [
+            order for order in orders
+            if self._cleanSymbol(order.get('symbol', '')) != cleanSymbol or order.get('dir') != direction
+        ]
+        if not self.__taskOrders[taskName]:
+            del self.__taskOrders[taskName]
 
     def _taskName(self, taskName: str | None) -> str:
         return taskName or 'other'
@@ -194,6 +302,12 @@ class storageOrders:
         if isinstance(value, str):
             return value.lower() == 'true'
         return bool(value)
+
+    def _float(self, value: object) -> float:
+        try:
+            return float(value or 0)
+        except (TypeError, ValueError):
+            return 0.0
 
     def _profit(self, info: dict) -> float:
         profit = info.get('rp')

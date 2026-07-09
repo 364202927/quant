@@ -34,27 +34,6 @@ class test(contractCTA, realTrade):
         # kLine = self.candles.historyCandles(symbol = 'spot_BTCUSDT', seTime = ['2020-1-01 00:00:00','2020-05-01 00:00:00'], timeFrame = '15m')
         # print("~~~historyCandles 15m~~~~~\n",kLine.get())
         
-        #现货
-        # self.buy('DOGE/USDT', totelPrice = 1)                            #市价买入1u,如totelPrice少于最少下单按最少下单
-        # time.sleep(10)
-        # self.buy('DOGE/USDT', totelPrice = 'bet:10', orderBook=0)        #以现货总仓位的10%,挂单最优价买入
-        # time.sleep(10)
-        # self.buy('DOGE/USDT', totelPrice = 1, price = 0.07)               #挂单价0.07,总单价1u
-        # time.sleep(10)
-        # self.cencel('DOGE/USDT')
-        # self.sell('DOGE/USDT')                                            #默认全卖
-        # time.sleep(10)
-        #合约
-        # self.openLong(swapU('DOGE/USDT'), totelPrice = 'bet:5',price = 0.07,lv=2)      #u本位永续,bet:10是总仓位的10%
-        # self.openLong(swapU('DOGE/USDT'), totelPrice = 1)
-        # time.sleep(20)
-        # self.openShort(swapU('DOGE/USDT'), totelPrice = 1,isMarket=True)                #市价买入(立即吃单)
-        # time.sleep(20)
-        # self.openShort(futureU('BTC/USDT', timeIndex = 1), totelPrice = 1)              #u本位交割开空
-        # self.closePos(swapU('DOGE/USDT'),dir=kLong)
-        # self.closePos(swapU('DOGE/USDT'),dir=kShort)
-        # self.closePos(swapU('DOGE/USDT'),dir='open')
-        
         # history = self.historyOrders([swapU('BTC/USDT')])
         # history = self.historyOrders([spot('DOGE/USDT')])
         # logFormat(history)
@@ -70,21 +49,36 @@ class test(contractCTA, realTrade):
         if self._testStep == 0:
             log("~~~~~~test初始化完成~~~~~~~~")
         #现货
-        if self._testStep == 0:
-            self.buy('DOGE/USDT', totelPrice = 1,orderBook=1)                         #市价买入1u,如totelPrice少于最少下单按最少下单
-        elif self._testStep == 1:
-            self.buy('DOGE/USDT', totelPrice = 'bet:10', orderBook=1)     #以现货总仓位的10%,挂单最优价买入
-        elif self._testStep == 2:
-            self.buy('DOGE/USDT', totelPrice = 1, price = 0.07)          #挂单价0.007,总单价1u
+        # if self._testStep == 0:
+        #     self.buy('DOGE/USDT', totelPrice = 1,orderBook=1)                         #市价买入1u,如totelPrice少于最少下单按最少下单
+        # elif self._testStep == 1:
+        #     self.buy('DOGE/USDT', totelPrice = 'bet:10', orderBook=1)     #以现货总仓位的10%,挂单最优价买入
+        # elif self._testStep == 2:
+        #     self.buy('DOGE/USDT', totelPrice = 1, price = 0.07)          #挂单价0.007,总单价1u
         # elif self._testStep == 3:
-        #     self.cencel('DOGE/USDT')                                      #取消挂单
+        #     self.cencel(spot('DOGE/USDT'))                                      #取消挂单
+        # elif self._testStep == 4:
+        #     self.sell('DOGE/USDT',orderBook=1)                                        #默认全卖
+        #     self.bInit = True
+        
+        #合约
+        if self._testStep == 0:
+            # self.openLong(swapU('DOGE/USDT'), totelPrice = 5,price = 0.07,lv=2)
+            self.openLong(swapU('DOGE/USDT'), totelPrice = 5,orderBook=1)
+        elif self._testStep == 1:
+            # self.openShort(swapU('DOGE/USDT'), totelPrice = 5,price = 0.1)
+            self.openShort(swapU('DOGE/USDT'), totelPrice = 5,orderBook=1)
+        elif self._testStep == 2:
+            # self.openShort(futureU('ETH/USDT', timeIndex = 1), totelPrice = 1)
+            pass
         elif self._testStep == 3:
-            self.sell('DOGE/USDT',orderBook=1)                                        #默认全卖
+            self.cencel(swapU('DOGE/USDT'))                                      #取消挂单
+            # self.cencel(futureU('ETH/USDT', timeIndex = 1))                       #取消季单
+        elif self._testStep == 4:
+            self.closePos(swapU('DOGE/USDT'),dir=kLong)
+            self.closePos(swapU('DOGE/USDT'),dir=kShort)
+            # self.closePos(futureU('ETH/USDT', timeIndex = 1),dir=kShort)
             self.bInit = True
-        
-        
-        
-        
         
         log("~~~Step~~~~",self._testStep)
         self._testStep += 1

@@ -217,14 +217,15 @@ class binance(baseExchange):
             params['price'] = price#self._ccxt.price_to_precision(symbolInfo['symbol'], price)
             params['timeInForce'] = inForce
             # postOnly #强制订单只能作为 Maker,需要配合偏离一下现价
+        # if (state == kBuy and params['positionSide'] == kShort) or \
+        #     (state == kSell and params['positionSide'] == kLong):
+        #     params['reduceOnly'] = True
         # elif state == 'cancel':
             # params['orderId'] = symbol
             # params = {'orderId':price}
-        #平仓时只减仓
-        if (state == kBuy and params['positionSide'] == kShort) or \
-            (state == kSell and params['positionSide'] == kLong):
-            params['reduceOnly'] = True
-        print("~~~~_contractOrder~~~~~~", isUm, lv, params)
+        # Binance PM hedge mode rejects reduceOnly when positionSide is present.
+        # Opposite side + positionSide is enough to close that side.
+        # print("~~~~_contractOrder~~~~~~", isUm, lv, params)
         return _pmOrder(state, isUm, params)
         # Normal 模式
         # return _normalOrder(state, category, params)

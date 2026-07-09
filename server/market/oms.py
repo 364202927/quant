@@ -43,9 +43,15 @@ class oms:
             else:
                 # 买入/开仓: 扣减 consumeCoin 余额
                 fixTotel = data.get('price', 0) * data.get('amount', 0) or data.get('totelPrice', 0)
-                localData = self._localCoin(data.get('exName'), isPm)
-                consumeCoin = data.get('consumeCoin', 'USDT')
-                if localData.get(consumeCoin, 0) < fixTotel:
+                if isPm:
+                    localData = self._localCoin(data.get('exName'), isPm)
+                    consumeCoin = 'free'
+                    money = localData.get(consumeCoin, 0) * 0.9
+                else:
+                    localData = self._localCoin(data.get('exName'), isPm, key='total')
+                    consumeCoin = data.get('consumeCoin', 'USDT')
+                    money = localData.get(consumeCoin, 0)
+                if money < fixTotel:
                     warn(f"下单金额不足: {fixTotel}, 余额: {localData.get(consumeCoin, 0)}")
                     return
                 localData[consumeCoin] -= fixTotel
@@ -64,14 +70,14 @@ class oms:
         return target[order][0]
 
     # 更新本地数据
-    def _localCoin(self, exName:str, isPm:bool, coin:str = ''):
+    def _localCoin(self, exName:str, isPm:bool, coin:str = '', key: str | None = None) -> float | dict:
         trageEx = {}
         for k,v in self._localFree.items():
             for ex,it in v.items():
                 if ex == exName:
                     trageEx = it
                     break
-        key = isPm == True and kPm or 'free'
+        key = key or (isPm == True and kPm or 'free')
         if coin == '':
             return trageEx.setdefault(key, {})
         return trageEx.setdefault(key, {}).get(coin, 0)
@@ -140,17 +146,16 @@ class oms:
             positions = data.get('_positions')
             if positions is None:
                 querySymbol = symbolInfo.get('id') if symbolInfo else symbol
-                positions = evtFire(kEvt_Market, eMarketId['gPosit'], 'ex', querySymbol)
+                positions = evtFire(kEvt_Market, eMarketId['gPosit'], 'ex', querySymbol, exName)
                 if not positions or exName not in positions:
                     return f"未找到持仓: {symbol} @ {exName}"
                 positions = positions[exName]
                 data['_positions'] = positions
             target = data.get('posSide')
-            pos = positions[0] if positions else {}
-            for item in positions:
-                if target in ('all', '', None) or item.get('side') == target:
-                    pos = item
-                    break
+            pos = self._targetPosition(positions, target)
+            if not pos:
+                return f"未找到持仓方向: {symbol} {target}"
+            data['_positions'] = [pos]
             if pos.get('side') == kLong:
                 data['_orderLookupDir'] = kSell
             elif pos.get('side') == kShort:
@@ -220,11 +225,10 @@ class oms:
         data.pop('_orderLookupDir', None)
         if positions:
             target = data.get('posSide')
-            pos = positions[0]
-            for item in positions:
-                if target in ('all', '', None) or item.get('side') == target:
-                    pos = item
-                    break
+            pos = self._targetPosition(positions, target)
+            if not pos:
+                warn(f"未找到可平仓方向: {data.get('symbol', '')} {target}")
+                return
             posSide = pos.get('side', '')
             if posSide == kLong:
                 data['posSide'] = kLong
@@ -233,6 +237,16 @@ class oms:
                 data['posSide'] = kShort
                 data['orderDir'] = kBuy
             data['amount'] = float(pos.get('amount', data.get('amount', 0)))
+
+    def _targetPosition(self, positions: list[dict], target: str | None) -> dict:
+        if not positions:
+            return {}
+        if target in ('all', '', None):
+            return positions[0]
+        for item in positions:
+            if item.get('side') == target:
+                return item
+        return {}
 
     # ── 记录 + 发送 ──
     def _send(self, data: dict):

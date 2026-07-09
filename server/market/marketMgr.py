@@ -100,13 +100,11 @@ class marketMgr(extInterface):
                 continue
             try:
                 # print("~order~~~", item)
-                if orderType == kCancel:
-                    # 撤单: (state, symbol, orderID, 0)
+                if orderType == kCancel:# 撤单: (state, symbol, orderID, 0)
                     ex.order('cancel', item.get('symbol', ''),
                                 item.get('orderID', ''), 0)
                 else:
                     # 普通下单
-                    # result = ex.order(
                     ex.order(
                         typeState=item.get('orderDir', item.get('dir', '')),
                         symbol=item.get('symbol', ''),
@@ -117,19 +115,5 @@ class marketMgr(extInterface):
                         inForce=item.get('inForce', 'GTC'),
                         posSide=item.get('posSide'),
                         lv=item.get('lv', 1))
-                    # if result is None:
-                    #     continue
-                    # if isinstance(result, dict):
-                    #     item['orderID'] = result.get('id', item.get('orderID', ''))
-                    #     item['clientOrderId'] = result.get('clientOrderId', item.get('clientOrderId', ''))
-                    #     if result.get('amount') is not None:
-                    #         item['amount'] = result.get('amount')
-                    #     if result.get('price') is not None:
-                    #         item['price'] = result.get('price')
-                    #     if result.get('cost'):
-                    #         item['totelPrice'] = result.get('cost')
-                    #     elif item.get('amount') is not None and item.get('price') is not None:
-                    #         item['totelPrice'] = item.get('amount') * item.get('price')
-                    # evtFire(kEvt_Market, eMarketId['orderCache'], item)
             except Exception as e:
                 log(f"[marketMgr] 下单失败 {exName}: {e}")

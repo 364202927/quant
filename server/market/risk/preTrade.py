@@ -86,7 +86,9 @@ class preTrade:
             data['totelPrice'] = total
 
         elif orderType == kSwap and direction == kClose:
-            positions = evtFire(kEvt_Market, eMarketId['gPosit'], 'ex', symbolInfo.get('id'))
+            positions = evtFire(kEvt_Market, eMarketId['gPosit'], 'ex', symbolInfo.get('id'), data.get('exName'))
+            if not positions or data.get('exName') not in positions:
+                positions = self._exchangePositions(ex, symbol, data.get('exName', ''))
             if not positions or data.get('exName') not in positions:
                 return f"未找到可平仓位: {symbol}"
             data['consumeCoin'] = quoteCoin
@@ -94,53 +96,17 @@ class preTrade:
         else:
             return f"不支持的方向: {orderType}/{direction}"
         
-
-        # isClosePos = (direction == 'close') or \
-        #              (category == kSpot and direction == kSell) #平仓检查
-
-        # if not isClosePos:
-        #     # 非平仓：检查账户余额
-        #     freeMoney = ex.accFree(category == kSpot)
-        #     if isinstance(totelPrice, str) and totelPrice.startswith('bet:'):
-        #         # bet 格式暂不在此处转换（oms 处理），跳过余额检查
-        #         pass
-        #     elif isinstance(totelPrice, (int, float)) and totelPrice > freeMoney:
-        #         return False, f"下单金额不足: {totelPrice}, 余额: {freeMoney}"
-        # else:
-        #     # 平仓检测
-        #     if category == kSpot:
-        #         coin = newSymbol.split('/')[0]
-        #         accCoin = ex.accFree(category == kSpot, coin)
-        #         if accCoin == 0:
-        #             return False, f"现货账号 {coin} 不存在"
-
-        # c. 参数校验（从 baseExchange._validateOrderParams 搬运）
-        # if orderType == kCancel:
-        #     return True, 'ok'  # 取消订单不校验价格/数量
-
-        # if amount and not inRange(
-        #     [symbolInfo['amount'].get('min'), symbolInfo['amount'].get('max')], amount):
-        #     return False, f"amount 取值范围: {symbolInfo['amount']}, 当前: {amount}"
-
-        # if price and not inRange(
-        #     [symbolInfo['price'].get('min'), symbolInfo['price'].get('max')], price):
-        #     return False, f"price 取值范围: {symbolInfo['price']}, 当前: {price}"
-        
-        
         #赋值给oms
         data['coinInfo'] = symbolInfo
-        # data['ex'] = ex
         return True
 
     def _passList(self) -> list[str]:
         return ['btc', 'eth', 'doge']  # symbol 含有此字段才能通关
-    
-    # def _bet2U(self, ex: baseExchange, symbol: str, bet: str, isCoin: bool) -> float:
-        # category, newSymbol = slit(symbol, '_')
-        # coin = newSymbol.split('/')[0] if isCoin else ''
-        # freeFunds = ex.accFree(category == kSpot, coin)
-        # if bet.startswith("bet:"):
-        #     proportion = int(bet[4:]) * 0.01
-        #     return proportion * freeFunds
-        # return 0.0
-        # pass
+
+    def _exchangePositions(self, ex: baseExchange, symbol: str, exName: str) -> dict:
+        try:
+            _, positions = ex.findOrder(symbol=symbol, isPos=True, isOpen=False)
+        except Exception as e:
+            warn(f"[preTrade] 查询持仓失败: {symbol} @ {exName}: {e}")
+            return {}
+        return {exName: positions} if positions else {}
