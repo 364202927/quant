@@ -1,6 +1,6 @@
 import time
 from server.indicators.baseIndicators import *
-from server.utils import diff_Pdtime, reviseTime, log, err,timeFrame2Float,utc_now,kEvt_Market,evtFire
+from server.utils import diff_Pdtime, reviseTime, log, err,timeFrame2Float,utc_now,kEvt_Market,evtFire,evtReturn
 from server.market import eMarketId
 kFileType = '.parquet'
 
@@ -46,7 +46,7 @@ class kLine(baseIndicators):
     
     # 返回最新的100条k线
     def getCandles(self,symbol: str, seTime: list, timeFrame: str = '5m', cover:bool = True,save2File = True):
-        pd = evtFire(kEvt_Market, eMarketId['gcKline'], self._exName, symbol)
+        pd = evtReturn(kEvt_Market, 'storageSubscribe', eMarketId['gcKline'], self._exName, symbol)
         if timeFrame == '5m' and save2File:
             pd.save2File(self._exName+'_'+ symbol + kFileType)
         if timeFrame != '5m':

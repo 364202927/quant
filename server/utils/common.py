@@ -30,11 +30,26 @@ def evtConnect(strEvt, obj):
         event_args = kwargs.get('args', ())
         return obj.evtProcess(sender, *event_args)
     dispatcher.connect(rtMsg, signal=strEvt, weak=False)
+
+    target_signal = _evtTargetSignal(strEvt, obj.__class__.__name__)
+    dispatcher.connect(rtMsg, signal=target_signal, weak=False)
+
+def _evtTargetSignal(strEvt: object, targetName: str) -> tuple[object, str]:
+    return (strEvt, targetName)
+
 # 发送消息 - 同步版本
 def evtFire(strEvt, *args):
     responses = dispatcher.send(signal=strEvt, sender=strEvt, args=args)
     for _, result in responses:
         if result is not None:
+            return result
+    return None
+
+# 发送消息 - 指定监听类返回
+def evtReturn(strEvt: object, targetName: str, *args: object) -> Any:
+    responses = dispatcher.send(signal=_evtTargetSignal(strEvt, targetName), sender=strEvt, args=args)
+    for _, result in responses:
+        if result is not None and result is not False:
             return result
     return None
 

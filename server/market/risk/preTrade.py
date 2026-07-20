@@ -1,8 +1,9 @@
-from server.utils import evtConnect, kEvt_Market, log, switchFn, slit, inRange,warn,evtFire
-from server.market import eMarketId, kSpot, kSell, kSwap,kBuy, kCancel,kClose,baseExchange
+from server.utils import evtConnect, kEvt_Market, log, switchFn, slit, inRange,warn,evtFire,evtReturn
+from server.market import eMarketId, kSpot, kSell, kSwap,kBuy, kCancel,kClose,kLong,kShort,baseExchange
 
 #todo:检测策略连续亏损,风格等
 #todo:价格偏离
+
 
 class preTrade:
     "开仓/买入(风控检测)：限额/价格偏离/黑名单，通过则转发 oms"
@@ -86,13 +87,14 @@ class preTrade:
             data['totelPrice'] = total
 
         elif orderType == kSwap and direction == kClose:
-            positions = evtFire(kEvt_Market, eMarketId['gPosit'], 'ex', symbolInfo.get('id'), data.get('exName'))
-            if not positions or data.get('exName') not in positions:
-                positions = self._exchangePositions(ex, symbol, data.get('exName', ''))
-            if not positions or data.get('exName') not in positions:
-                return f"未找到可平仓位: {symbol}"
+            taskName = data.get('taskName', '')
+            querySymbol = symbolInfo.get('id')
+            positions = evtReturn(kEvt_Market, 'storageOrders', eMarketId['gPosit'], 'task', querySymbol, taskName)
+            taskPositions = positions.get(taskName, []) if isinstance(positions, dict) else []
+            matched = self._matchTaskPosition(taskPositions, data.get('posSide'))
+            if not matched:
+                return f"未找到task可平仓位: {symbol} {data.get('posSide')}"
             data['consumeCoin'] = quoteCoin
-            data['_positions'] = positions[data.get('exName')]
         else:
             return f"不支持的方向: {orderType}/{direction}"
         
@@ -100,13 +102,16 @@ class preTrade:
         data['coinInfo'] = symbolInfo
         return True
 
+    def _matchTaskPosition(self, positions: list[dict], posSide: str | None) -> bool:
+        if posSide in ('all', '', None):
+            return bool(positions)
+        if posSide == kLong:
+            target = 'long'
+        elif posSide == kShort:
+            target = 'short'
+        else:
+            target = posSide.lower()
+        return any(item.get('dir') == target for item in positions)
+
     def _passList(self) -> list[str]:
         return ['btc', 'eth', 'doge']  # symbol 含有此字段才能通关
-
-    def _exchangePositions(self, ex: baseExchange, symbol: str, exName: str) -> dict:
-        try:
-            _, positions = ex.findOrder(symbol=symbol, isPos=True, isOpen=False)
-        except Exception as e:
-            warn(f"[preTrade] 查询持仓失败: {symbol} @ {exName}: {e}")
-            return {}
-        return {exName: positions} if positions else {}

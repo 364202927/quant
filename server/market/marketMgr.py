@@ -103,9 +103,10 @@ class marketMgr(extInterface):
                 if orderType == kCancel:# 撤单: (state, symbol, orderID, 0)
                     ex.order('cancel', item.get('symbol', ''),
                                 item.get('orderID', ''), 0)
+                    ex.requestBalanceRefresh()
                 else:
                     # 普通下单
-                    ex.order(
+                    result = ex.order(
                         typeState=item.get('orderDir', item.get('dir', '')),
                         symbol=item.get('symbol', ''),
                         totelPrice=item.get('totelPrice', 0),
@@ -115,5 +116,8 @@ class marketMgr(extInterface):
                         inForce=item.get('inForce', 'GTC'),
                         posSide=item.get('posSide'),
                         lv=item.get('lv', 1))
+                    if result is None:
+                        ex.requestBalanceRefresh()
             except Exception as e:
                 log(f"[marketMgr] 下单失败 {exName}: {e}")
+                ex.requestBalanceRefresh()

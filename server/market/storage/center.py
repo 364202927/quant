@@ -1,5 +1,5 @@
 import copy
-from server.utils import evtConnect, evtFireAsync, kEvt_Market,switchFn,logFormat,log
+from server.utils import evtConnect, evtFireAsync, kEvt_Market,switchFn,log
 from server.market import eMarketId, kBuy, kSell,kPm
 
 class storageCenter:
@@ -19,6 +19,7 @@ class storageCenter:
         def _balance():
             key, data = args[2],args[3]
             _balanceUpdata(exName, key, data)
+            self._logSnapshot(exName, key)
         
         def _increment():
             key, data = args[2],args[3]
@@ -27,8 +28,8 @@ class storageCenter:
                 _balanceUpdata(exName, key, cleanData)
                 self._pruneSpotCost(cleanData.get('total', {}))
             # print("~~~~updata balance~~~~~~~~",exName,key, data)
-            log("ws 更新storageCenter账号详情:")
-            logFormat(self.__snapshot[exName][key][kPm])
+            # log("ws 更新storageCenter账号详情:")
+            # logFormat(self.__snapshot[exName][key][kPm])
 
         def _wsOrder():
             order = args[2] if len(args) > 2 else {}
@@ -48,6 +49,8 @@ class storageCenter:
     def _cleanWsBalance(self, data: dict) -> dict:
         if not isinstance(data, dict):
             return {}
+        if data.get('info', {}).get('fs') in ('UM', 'CM'):
+            return {}
         clean = {}
         for key in ('free', 'total'):
             value = data.get(key)
@@ -62,10 +65,17 @@ class storageCenter:
 
     def _mergeBalance(self, target: dict, data: dict) -> None:
         for key, value in data.items():
+            value = copy.deepcopy(value)
             if isinstance(value, dict) and isinstance(target.get(key), dict):
                 target[key].update(value)
             else:
                 target[key] = value
+
+    def _logSnapshot(self, exName: str, account: str) -> None:
+        pmData = self.__snapshot.get(exName, {}).get(account, {}).get(kPm, {})
+        log("[center.balance] __snapshot REST更新:",
+            {'exName': exName, 'account': account, 'free': pmData.get('free'),
+             'equity': pmData.get('equity'), 'USDT': pmData.get('total', {}).get('USDT')})
 
     def _updateSpotCost(self, order: dict) -> bool:
         if not self._isSpotFilledOrder(order):
