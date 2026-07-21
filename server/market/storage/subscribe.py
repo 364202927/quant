@@ -11,6 +11,7 @@ class storageSubscribe:
         # self._depthLatest: dict[tuple, dict] = {}   # (exName,symbol) -> latest ob
         # self._tradesBuffer: dict[tuple, list] = {}  # (exName,symbol) -> [trade,...]
 
+        self._markets = {}
         self._exMarkets = []    #全交易所
         self._exchanges = {}    #对应交易所,用于获取数据()
         evtConnect(kEvt_Market, self)
@@ -19,6 +20,7 @@ class storageSubscribe:
 
     #全交易所初始化
     def setMarket(self, markets):
+        self._markets = markets
         self._exMarkets = markets
         self._exchanges = {}
         for ex in self._exMarkets.items():

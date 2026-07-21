@@ -100,10 +100,16 @@ class binance(baseExchange):
     #     return coin
     
     #http取账号数据
-    def balance(self) -> dict:
-        bal = super().balance() #现货数据
+    def balance(self, isSpot = True) -> dict:
+        super().balance(isSpot) #现货数据
         pmAcc = self._ccxt.sapiGetPortfolioAccount() #统一账号总数据
+        # print("~~pmAcc1~~", pmAcc)
         pmCoin = self._ccxt.papi_get_balance()      #统一账号里存在币种
+        # print("~~pmCoin~~", pmCoin)
+        # pmAcc = self._ccxt.papi_get_account()
+        # print("~~pmAcc2~~", pmAcc)
+        # exit()
+        
         coin = {}
         for item in pmCoin:
             asset = item.get('asset')

@@ -46,7 +46,7 @@ class task:
         if not isinstance(self.__handle, taskHandle):
             return False
         self.__handle.pause,self.__handle.resume = self.pause, self.resume
-        self.__handle.init()
+        self.__handle.init() #task初始化
         if not self.get('tacticsTime'):
             return False
         # 第一次激活向定时器注册任务

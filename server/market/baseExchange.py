@@ -2,7 +2,7 @@ import asyncio,aiohttp,ccxt,datetime,traceback
 import pandas as pd
 import ccxt.pro as ccxtpro
 # from aiohttp_socks import ProxyConnector
-from server.market import kSpot, kSwap, kFuture, kDelivery, kBuy, kSell, kShort, kLong, kMarket, kLimit, eMarketId,kCancel,kPm
+from server.market import kSpot, kSwap, kFuture, kDelivery, kBuy, kSell, kShort, kLong, kMarket, kLimit, eMarketId,kCancel
 from server.utils import switch, switchFn, tryCatch, aContainB, slit, str2ms, str2time, pdData, err, log, inRange, utc_now, reviseTime, timeFrame2Float, diff_Pdtime, logFormat, trySwitchFn, evtFireAsync, kEvt_Market
 kSymbol = 'coinInfo'
 
@@ -21,6 +21,8 @@ class baseExchange:
         self._title = ''        #绑定的交易所名字
         self._acc = 0           #账号
         self._info = { kSymbol: {}, 'api': {}} #coin币种信息,api交易所api信息
+        self._balanceRefreshPending = False
+        self._balanceRefreshDelay = 1.0
 
     def get(self, key: str):
         return switch({
@@ -41,13 +43,35 @@ class baseExchange:
         print('\n~~~~支持信息~~~~~~\n', self._ccxt.has)
 
     #账户信息
-    def balance(self):
+    def balance(self,isSpot = True):
+        if not isSpot: return
         bal = self._ccxt.fetch_balance()
         self._acc = {
             'total': {k: float(v) for k, v in bal.get('total', {}).items() if v and float(v) > 0},
             'free':  {k: float(v) for k, v in bal.get('free', {}).items() if v and float(v) > 0},
         }
         return self._acc
+
+    def refreshBalance(self) -> dict:
+        bal = self.balance()
+        if bal:
+            evtFireAsync(kEvt_Market, eMarketId['balance'], self.get('id'), self.get('title'), bal)
+        return bal
+
+    def requestBalanceRefresh(self) -> None:
+        if self._balanceRefreshPending:
+            return
+        self._balanceRefreshPending = True
+        asyncio.create_task(self._refreshBalanceLater())
+
+    async def _refreshBalanceLater(self) -> None:
+        try:
+            await asyncio.sleep(self._balanceRefreshDelay)
+            await asyncio.to_thread(self.refreshBalance)
+        except Exception as e:
+            log(f"[{self.get('title')}] 余额刷新失败: {e}")
+        finally:
+            self._balanceRefreshPending = False
 
     #余额查询
     def accFree(self, coin: str = '', isPm: bool = False):
@@ -65,6 +89,7 @@ class baseExchange:
                     'id': market['id'],
                     'symbol':symbol,
                     'step':market['precision']['amount'],
+                    'priceStep': market['precision'].get('price'),
                     'market': market['limits']['market'],
                     'amount': market['limits']['amount'],   #币个数
                     'price': market['limits']['price'],
@@ -237,10 +262,12 @@ class baseExchange:
         while True:
             try:
                 balances = await exchange.watch_balance()
-                self._sync_balance(balances, market_type)
+                if market_type == 'SPOT':
+                    self._sync_balance(balances, market_type)
+                else:
+                    self.requestBalanceRefresh()
                 delays = _backoff()  # 成功后重置退避
-                usdt_free = balances.get('USDT', {}).get('free')
-                log(f"[{market_type}] ws资金更新: USDT 可用 = {usdt_free}:{balances}")
+                # log(f"[{market_type}] ws资金更新: {balances}")
                 evtFireAsync(kEvt_Market, eMarketId['wsBalance'], self.get('id'), self.get('title'), balances)
             except asyncio.CancelledError:
                 raise
@@ -268,13 +295,6 @@ class baseExchange:
             for key in ('free', 'used', 'total'):
                 self._acc.setdefault(key, {}).update(_collect(key))
             return
-        pm = self._acc.setdefault(kPm, {})
-        usdt = balances.get('USDT', {}) if isinstance(balances.get('USDT'), dict) else {}
-        if usdt.get('free') is not None:
-            pm['free'] = float(usdt.get('free'))
-        if usdt.get('total') is not None:
-            pm['equity'] = float(usdt.get('total'))
-        pm.setdefault('total', {}).update(_collect('total'))
 
     #订单监听
     async def _listen_orders(self,exchange: ccxtpro.Exchange,market_type: str, symbol= None) -> None:
@@ -287,6 +307,8 @@ class baseExchange:
                     log(f"[{market_type}] ws订单更新: {order['status']} : {order}")
                     if order['status'] in ('closed', 'canceled'):#订单关闭/取消
                         evtFireAsync(kEvt_Market, eMarketId['wsOrder'], self.get('title'), order)
+                        if market_type != 'SPOT':
+                            self.requestBalanceRefresh()
             except asyncio.CancelledError:
                 raise
             except ccxt.AuthenticationError as e:

@@ -8,6 +8,7 @@ class storageCenter:
     def __init__(self):
         self.__snapshot: dict[str, dict] = {}  # {okx: {'main': {},... },bybit:{'xx':{}},...}
         self.__spotCost: dict[str, list[dict]] = {}     # {coinId: [现货成交成本轨迹]}
+        self.__spotDustPrice: dict[str, float] = {}      # {coinId: 成本轨迹扣空后暂存的均价}
         evtConnect(kEvt_Market, self)
 
     def evtProcess(self, key, *args):
@@ -20,13 +21,16 @@ class storageCenter:
             key, data = args[2],args[3]
             _balanceUpdata(exName, key, data)
             self._logSnapshot(exName, key)
+            self._logSpotBalance(exName, key, "[center.balance] spot账号余额:")
         
         def _increment():
             key, data = args[2],args[3]
             cleanData = self._cleanWsBalance(data)
             if cleanData:
                 _balanceUpdata(exName, key, cleanData)
-                self._pruneSpotCost(cleanData.get('total', {}))
+                if self._pruneSpotCost(cleanData.get('total', {})):
+                    log("ws 更新现货成本轨迹:",self.__spotCost)
+                self._logSpotBalance(exName, key, "[center.wsBalance] spot账号余额:")
             # print("~~~~updata balance~~~~~~~~",exName,key, data)
             # log("ws 更新storageCenter账号详情:")
             # logFormat(self.__snapshot[exName][key][kPm])
@@ -77,6 +81,15 @@ class storageCenter:
             {'exName': exName, 'account': account, 'free': pmData.get('free'),
              'equity': pmData.get('equity'), 'USDT': pmData.get('total', {}).get('USDT')})
 
+    def _logSpotBalance(self, exName: str, account: str, title: str) -> None:
+        data = self.__snapshot.get(exName, {}).get(account, {})
+        log(title, {
+            'exName': exName,
+            'account': account,
+            'free': data.get('free', {}),
+            'total': data.get('total', {}),
+        })
+
     def _updateSpotCost(self, order: dict) -> bool:
         if not self._isSpotFilledOrder(order):
             return False
@@ -85,6 +98,7 @@ class storageCenter:
             return False
         side = order.get('side')
         if side == kBuy:
+            self.__spotDustPrice.pop(coinId, None)
             lot = self._spotCostLot(order)
             if lot['amount'] <= 0:
                 return False
@@ -136,6 +150,7 @@ class storageCenter:
         lots = self.__spotCost.get(coinId)
         if not lots or amount <= 0:
             return False
+        avgPrice = self._avgSpotPrice(lots)
         remaining = amount
         while lots and remaining > 0:
             lot = lots[0]
@@ -148,27 +163,57 @@ class storageCenter:
             remaining = 0
         if not lots:
             del self.__spotCost[coinId]
+            if avgPrice > 0:
+                self.__spotDustPrice[coinId] = avgPrice
         return True
 
-    def _pruneSpotCost(self, total: dict) -> None:
+    def _pruneSpotCost(self, total: dict) -> bool:
         if not isinstance(total, dict):
-            return
-        for coinId, lots in list(self.__spotCost.items()):
+            return False
+        changed = False
+        for coinId in list(set(self.__spotCost) | set(self.__spotDustPrice)):
             baseCoin = self._baseCoin(coinId)
             coinAmount = self._float(total.get(baseCoin))
             if baseCoin and coinAmount <= 0:
-                del self.__spotCost[coinId]
-            elif baseCoin and coinAmount < 1:
-                self._syncDustSpotCost(coinId, coinAmount)
+                if coinId in self.__spotCost:
+                    del self.__spotCost[coinId]
+                    changed = True
+                self.__spotDustPrice.pop(coinId, None)
+            elif baseCoin and self._isDustValue(coinId, coinAmount):
+                if coinId in self.__spotCost:
+                    changed = self._syncDustSpotCost(coinId, coinAmount) or changed
+                elif coinId in self.__spotDustPrice:
+                    self.__spotCost[coinId] = [{'amount': coinAmount, 'price': self.__spotDustPrice[coinId]}]
+                    self.__spotDustPrice.pop(coinId, None)
+                    changed = True
+            else:
+                self.__spotDustPrice.pop(coinId, None)
+        return changed
 
-    def _syncDustSpotCost(self, coinId: str, coinAmount: float) -> None:
+    def _isDustValue(self, coinId: str, coinAmount: float) -> bool:
+        price = self._spotCostPrice(coinId)
+        return price > 0 and coinAmount * price < 1
+
+    def _spotCostPrice(self, coinId: str) -> float:
+        dustPrice = self.__spotDustPrice.get(coinId)
+        if dustPrice:
+            return dustPrice
+        return self._avgSpotPrice(self.__spotCost.get(coinId, []))
+
+    def _syncDustSpotCost(self, coinId: str, coinAmount: float) -> bool:
         lots = self.__spotCost.get(coinId)
         if not lots or coinAmount <= 0:
-            return
+            return False
+        avgPrice = self._avgSpotPrice(lots)
+        self.__spotCost[coinId] = [{'amount': coinAmount, 'price': avgPrice}]
+        return True
+
+    def _avgSpotPrice(self, lots: list[dict]) -> float:
         totalAmount = sum(self._float(lot.get('amount')) for lot in lots)
         totalCost = sum(self._float(lot.get('amount')) * self._float(lot.get('price')) for lot in lots)
-        avgPrice = totalCost / totalAmount if totalAmount else 0
-        self.__spotCost[coinId] = [{'amount': coinAmount, 'price': avgPrice}]
+        if totalAmount:
+            return totalCost / totalAmount
+        return 0.0
 
     def _baseCoin(self, coinId: str) -> str:
         infoSymbol = coinId

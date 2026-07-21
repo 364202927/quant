@@ -84,6 +84,7 @@ class storageOrders:
             info = order.get('info', {})
             if not info:
                 return
+            status = order.get('status')
             # log("~~~~~~_wsUpdateOrder~~~~~~~",self.__openOrders)
             # print("~~~~~~__openOrders~~~~~~~",self.__openOrders)
             coinId = info.get('s', '')
@@ -109,7 +110,7 @@ class storageOrders:
                 matchedTask = matched['taskName']
             if matchedTask == 'other':
                 return
-            if order.get('status') == 'canceled':
+            if status == 'canceled':
                 # log("~~~~~~cancel tempData~~~~~",matched)
                 # log("~~~~__openOrders~~~~~",self.__openOrders)
                 return
@@ -139,7 +140,7 @@ class storageOrders:
                 # log("~~~~~~saveRec~~~~~~~~",fullRecord)
                 # log("~~~~__openOrders~~~~~",self.__openOrders)
                 # log("~~~~__taskOrders~~~~~",self.__taskOrders)
-                # log("~~~~__taskHistory~~~~~",self.__taskHistory.buffer())
+                log("~~~~__taskHistory~~~~~",self.__taskHistory.buffer())
                 return
             else:
                 if matched.get('dir') == kClose:
@@ -147,6 +148,7 @@ class storageOrders:
                 self._updateHoldingFromOrder(exName, matched, order)
                 self._updateTaskOrders(matchedTask, matched, fullRecord)
                 self.__taskHistory.push(**fullRecord)
+                log("~~~~__taskHistory~~~~~",self.__taskHistory.buffer())
                 # print(f"[storageOrders] 合约→活跃+历史: {coinId} {wsSide}")
             # log("~~~~~~find tempData~~~~~",matched)
             # log("~~~~~~saveRec~~~~~~~~",fullRecord)
