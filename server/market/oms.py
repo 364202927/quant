@@ -1,7 +1,7 @@
 import copy
-from decimal import Decimal, ROUND_DOWN, ROUND_UP
-from server.utils import evtConnect, evtFireAsync, kEvt_Market, log, switchFn, evtReturn, slit, division,inRange,warn
-from server.market import eMarketId, kSpot, kSwap, kBuy, kSell,kPm,kClose,kCancel,kLong,kShort
+from decimal import Decimal, ROUND_DOWN
+from server.utils import evtConnect, evtFireAsync, kEvt_Market, log, switchFn, evtReturn, slit, division,inRange,warn,time2ID
+from server.market import eMarketId, kSwap, kBuy, kSell,kPm,kClose,kCancel,kLong,kShort
 from server.market.baseExchange import baseExchange
 
 class oms:
@@ -10,6 +10,7 @@ class oms:
     def __init__(self, exFn=None):
         self._localFree = evtReturn(kEvt_Market, 'storageCenter', eMarketId['gBalance']) or {}  # 本地缓存的 center 数据
         self._getEx = exFn            # exName → baseExchange
+        self._clientOrderSeq = 0      # 自增序号,配合 time2ID 保证并发下单时 clientOrderId 不撞车
         evtConnect(kEvt_Market, self)
 
     def evtProcess(self, key, *args):
@@ -47,7 +48,7 @@ class oms:
                 self._close(data)
             else:
                 # 买入/开仓: 扣减 consumeCoin 余额
-                fixTotel = data.get('price', 0) * data.get('amount', 0) or data.get('totelPrice', 0)
+                fixTotel = (data.get('price') or 0) * (data.get('amount') or 0) or data.get('totelPrice', 0)
                 if isPm:
                     localData = self._localCoin(data.get('exName'), isPm)
                     consumeCoin = 'free'
@@ -70,27 +71,28 @@ class oms:
 
     # ── 当前挂单最优价 ──
     def _BBO(self, ex: baseExchange, symbol: str, dir: str, order: int,
-             symbolInfo: dict | None = None, aggressive: bool = False) -> float:
+             aggressive: bool = False) -> float:
         book = ex.orderBook(symbol, limit=max(10, order + 4))
-        isBuy = dir in (kBuy, 'buy')
+        isBuy = dir == kBuy
         if aggressive:
             target = book['asks'] if isBuy else book['bids']
         else:
             target = book['bids'] if isBuy else book['asks']
         order = min(max(order, 0), len(target) - 1)
-        price = target[order][0]
-        return price
-        # return self._slipPrice(price, dir, symbolInfo, book, order) if aggressive else price
+        return target[order][0]
+
+    # 在 {exId: {account: {...}}} 快照里按 account 名找出对应字典
+    def _findAccount(self, snapshot: dict, exName: str) -> dict:
+        for accounts in snapshot.values():
+            for accountName, data in accounts.items():
+                if accountName == exName:
+                    return data
+        return {}
 
     # 更新本地数据
     def _localCoin(self, exName:str, isPm:bool, coin:str = '', key: str | None = None) -> float | dict:
-        trageEx = {}
-        for k,v in self._localFree.items():
-            for ex,it in v.items():
-                if ex == exName:
-                    trageEx = it
-                    break
-        key = key or (isPm == True and kPm or 'free')
+        trageEx = self._findAccount(self._localFree, exName)
+        key = key or (kPm if isPm else 'free')
         if coin == '':
             return trageEx.setdefault(key, {})
         return trageEx.setdefault(key, {}).get(coin, 0)
@@ -121,12 +123,7 @@ class oms:
 
     def _centerCoin(self, exName: str, isPm: bool, coin: str = '') -> float | dict:
         snapshot = evtReturn(kEvt_Market, 'storageCenter', eMarketId['gBalance']) or {}
-        target = {}
-        for _, accounts in snapshot.items():
-            for accountName, data in accounts.items():
-                if accountName == exName:
-                    target = data
-                    break
+        target = self._findAccount(snapshot, exName)
         key = kPm if isPm else 'free'
         if coin == '':
             return target.get(key, {})
@@ -186,7 +183,8 @@ class oms:
         # 卖出现货 (绕过 preTrade, 需自行处理 consumeCoin/bet)
         if direction == kSell and not isPm:
             if consumeCoin is None:
-                _, newSymbol = slit(symbol, '_')
+                splitSymbol = slit(symbol, '_')
+                newSymbol = splitSymbol[1] if splitSymbol else symbol
                 consumeCoin = newSymbol.split('/')[0] if '/' in newSymbol else ''
                 data['consumeCoin'] = consumeCoin
 
@@ -202,7 +200,7 @@ class oms:
                     return f"卖出数量低于最小下单量: 当前 {amount}, 最小 {amountMin}"
                 data['amount'] = amount
                 if orderPrice is None and orderBook >= 0 and ex:
-                    orderPrice = self._BBO(ex, symbol, direction, orderBook, symbolInfo, not data.get('isMarket', False))
+                    orderPrice = self._BBO(ex, symbol, direction, orderBook, not data.get('isMarket', False))
                     data['price'] = orderPrice
                 if orderPrice:
                     data['totelPrice'] = orderPrice * amount
@@ -213,7 +211,7 @@ class oms:
         # 获取 BBO 价格 (非卖出已处理的情况)
         if orderPrice is None and orderBook >= 0 and ex:
             orderPrice = self._BBO(ex, symbol, data.get('_orderLookupDir', direction), orderBook,
-                                   symbolInfo, not data.get('isMarket', False))
+                                   not data.get('isMarket', False))
             data['price'] = orderPrice
 
         # 计算数量
@@ -289,12 +287,13 @@ class oms:
             # }
             # self._taskOrders.setdefault(taskName, []).append(orderDetail)
 
+        if data.get('type') != kCancel and not data.get('clientOrderId'):
+            data['clientOrderId'] = self._genClientOrderId()
         evtFireAsync(kEvt_Market, eMarketId['order'], data)
 
-    def splitOrder(self):
-        # c. 若单子金额过大,需要进行拆分(冰山单)
-        # if totelPrice > symbolInfo['cost'].get('max'): totelPrice = symbolInfo['cost'].get('max')
-        pass
+    def _genClientOrderId(self) -> str:
+        self._clientOrderSeq += 1
+        return f"{time2ID()}{self._clientOrderSeq}"
 
     def _floorAmount(self, amount: float, step: float | int | None) -> float:
         if not step:
@@ -304,75 +303,3 @@ class oms:
             return amount
         amountDec = Decimal(str(amount))
         return float((amountDec / stepDec).to_integral_value(rounding=ROUND_DOWN) * stepDec)
-
-    def _slipPrice(self, price: float, direction: str, symbolInfo: dict | None,
-                   book: dict | None = None, order: int = 0) -> float:
-        priceStep = self._priceStep(symbolInfo)
-        offset = self._bookOffset(book, direction, order, priceStep)
-        if offset <= 0:
-            return price
-        priceDec = Decimal(str(price))
-        offsetDec = Decimal(str(offset))
-        if direction in (kBuy, 'buy'):
-            return self._roundPrice(priceDec + offsetDec, priceStep, ROUND_UP)
-        floorDec = Decimal(str(priceStep)) if priceStep > 0 else Decimal('0')
-        return self._roundPrice(max(floorDec, priceDec - offsetDec), priceStep, ROUND_DOWN)
-
-    def _bookOffset(self, book: dict | None, direction: str, order: int, priceStep: float) -> float:
-        minOffset = priceStep if priceStep > 0 else 0.0
-        if not isinstance(book, dict):
-            return minOffset
-        isBuy = direction in (kBuy, 'buy')
-        levels = book.get('asks' if isBuy else 'bids') or []
-        offset = self._sideOffset(levels, order, minOffset, depth=2)
-        if offset > 0:
-            return offset
-        bids = book.get('bids') or []
-        asks = book.get('asks') or []
-        if bids and asks:
-            spread = abs(self._toFloat(asks[0][0]) - self._toFloat(bids[0][0]))
-            if spread > 0:
-                return max(minOffset, spread)
-        return minOffset
-
-    def _sideOffset(self, levels: list, order: int, minOffset: float, depth: int = 2) -> float:
-        if len(levels) < 2:
-            return 0.0
-        start = min(max(order, 0), len(levels) - 2)
-        end = min(start + max(depth, 1), len(levels) - 1)
-        offset = Decimal('0')
-        for index in range(start, end):
-            currentPrice = Decimal(str(levels[index][0]))
-            nextPrice = Decimal(str(levels[index + 1][0]))
-            gap = abs(nextPrice - currentPrice)
-            if gap > 0:
-                offset += gap
-        if offset <= 0:
-            return 0.0
-        return max(minOffset, float(offset))
-
-    def _roundPrice(self, price: Decimal, priceStep: float, rounding: str) -> float:
-        if priceStep <= 0:
-            return float(price)
-        stepDec = Decimal(str(priceStep))
-        return float((price / stepDec).to_integral_value(rounding=rounding) * stepDec)
-
-    def _priceStep(self, symbolInfo: dict | None) -> float:
-        if not symbolInfo:
-            return 0.0
-        priceStep = self._toFloat(symbolInfo.get('priceStep'))
-        priceMin = self._toFloat(symbolInfo.get('price', {}).get('min'))
-        if 0 < priceStep < 1:
-            return priceStep
-        if 0 < priceMin < 1:
-            return priceMin
-        for step in (priceStep, priceMin):
-            if step > 0:
-                return step
-        return 0.0
-
-    def _toFloat(self, value: object) -> float:
-        try:
-            return float(value or 0)
-        except (TypeError, ValueError):
-            return 0.0

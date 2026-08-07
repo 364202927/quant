@@ -1,13 +1,12 @@
 from datetime import datetime, timezone
 from typing import Callable
-from server.utils import evtConnect, kEvt_Market, switchFn, pdData, recordBuffer,log
+from server.utils import evtConnect, kEvt_Market, switchFn, recordBuffer,log
 from server.market import eMarketId, kSpot, kSwap, kBuy, kSell, kClose, kLong, kShort, kCancel
 
 class storageOrders:
     "订单/状态事件监听 数据保存整理 "
 
     def __init__(self):
-        self.__holdings: dict[str, list] = {}   # 交易所现持有的原始订单数据
         self.__taskOrders: dict[str, list[dict]] = {}  # task正持有的订单
         self.__taskHistory = recordBuffer()     # 任务历史订单
         self.__openOrders = {}                  #task开仓记录
@@ -15,26 +14,9 @@ class storageOrders:
         evtConnect(kEvt_Market, self)
 
     def evtProcess(self, key, *args):
+        # len(args) > 2 而非 > 1: 用来区分"只带一个 payload"的事件(如 order/gPosit, args[1] 是 dict/查询参数)
+        # 和"携带 exName"的事件(wsOrder, args 至少有 marketId+exName+其它)
         marketId, exName = args[0], args[1] if len(args) > 2 else None
-        # 持仓记录
-        def _initHoldings():
-            key, data = args[2],args[3]
-            self.__holdings.setdefault(exName, {}).setdefault(key, {}).update(data)
-            log("持仓记录:\n", self.__holdings)
-            # todo:修改,先加载__taskOrders,看看能不能对应上__holdings
-
-        def _wsBalancePositions():
-            account = args[2] if len(args) > 2 else ''
-            data = args[3] if len(args) > 3 else {}
-            if not account:
-                return
-            positions = self._positionsFromWsBalance(data)
-            if not positions:
-                return
-            target = self.__holdings.setdefault(exName, {}).setdefault(account, {}).setdefault('pos', [])
-            for position in positions:
-                self._upsertPosition(target, position)
-        
         #返回持仓
         def _gPosit():
             queryType = args[1] if len(args) > 1 else ''
@@ -145,7 +127,6 @@ class storageOrders:
             else:
                 if matched.get('dir') == kClose:
                     fullRecord['dir'] = kClose
-                self._updateHoldingFromOrder(exName, matched, order)
                 self._updateTaskOrders(matchedTask, matched, fullRecord)
                 self.__taskHistory.push(**fullRecord)
                 log("~~~~__taskHistory~~~~~",self.__taskHistory.buffer())
@@ -157,10 +138,8 @@ class storageOrders:
             # log("~~~~__taskHistory~~~~~",self.__taskHistory.buffer())
             
 
-        result = switchFn({eMarketId['positions']: _initHoldings,
-                           eMarketId['order']: _saveOrder,
+        result = switchFn({eMarketId['order']: _saveOrder,
                          # eMarketId['orderCache']: _saveOrder,
-                           eMarketId['wsBalance']: _wsBalancePositions,
                            eMarketId['wsOrder']: _wsUpdateOrder,
                            eMarketId['gPosit']: _gPosit,
                          }, key=marketId)
@@ -172,41 +151,6 @@ class storageOrders:
         clean = symbol.split('_')[-1]
         clean = clean.split(':')[0]
         return clean.replace('/', '').replace('-', '')
-
-    def _positionsFromWsBalance(self, data: dict) -> list[dict]:
-        rawPositions = data.get('info', {}).get('a', {}).get('P', []) if isinstance(data, dict) else []
-        if not isinstance(rawPositions, list):
-            return []
-        positions = []
-        for item in rawPositions:
-            symbol = item.get('s', '')
-            side = item.get('ps', '')
-            amount = self._float(item.get('pa'))
-            if not symbol or not side:
-                continue
-            positions.append({
-                'symbol': symbol,
-                'dir': f"{amount > 0 and kBuy or kSell}_{side}",
-                'side': side,
-                'open': item.get('ep'),
-                'unRealized': item.get('up'),
-                'amount': abs(amount),
-            })
-        return positions
-
-    def _upsertPosition(self, positions: list[dict], position: dict) -> None:
-        symbol = self._cleanSymbol(position.get('symbol', ''))
-        side = position.get('side', '')
-        for index, item in enumerate(list(positions)):
-            if self._cleanSymbol(item.get('symbol', '')) != symbol or item.get('side') != side:
-                continue
-            if position.get('amount', 0) <= 0:
-                positions.pop(index)
-            else:
-                positions[index] = {**item, **position}
-            return
-        if position.get('amount', 0) > 0:
-            positions.append(position)
 
     def _taskPositions(self, symbol: str, taskName: str = '') -> dict:
         result = {}
@@ -456,40 +400,6 @@ class storageOrders:
         if wsPs is not None:
             return recPos == wsPs
         return True
-
-    def _updateHoldingFromOrder(self, exName: str, matched: dict, order: dict) -> None:
-        info = order.get('info', {})
-        posSide = info.get('ps') or matched.get('posSide')
-        if posSide not in (kLong, kShort):
-            return
-        filled = self._float(order.get('filled'))
-        if filled <= 0:
-            return
-        side = order.get('side', '')
-        if posSide == kLong:
-            delta = filled if side == kBuy else -filled
-        else:
-            delta = filled if side == kSell else -filled
-        account = matched.get('exName') or exName
-        target = self.__holdings.setdefault(exName, {}).setdefault(account, {}).setdefault('pos', [])
-        cleanSymbol = self._cleanSymbol(matched.get('symbol') or order.get('symbol', ''))
-        current = {}
-        for item in target:
-            if self._cleanSymbol(item.get('symbol', '')) == cleanSymbol and item.get('side') == posSide:
-                current = item
-                break
-        amount = max(0.0, self._float(current.get('amount')) + delta)
-        positionDir = current.get('dir', '')
-        if amount > 0:
-            positionDir = f"{posSide == kLong and kBuy or kSell}_{posSide}"
-        self._upsertPosition(target, {
-            'symbol': cleanSymbol,
-            'dir': positionDir,
-            'side': posSide,
-            'open': order.get('average') or order.get('price') or current.get('open'),
-            'unRealized': current.get('unRealized', 0),
-            'amount': amount,
-        })
 
     def _sameOrderTradeData(self, rec: dict, order: dict) -> bool:
         price = order.get('price') or order.get('average')

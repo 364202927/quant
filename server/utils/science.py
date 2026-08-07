@@ -9,8 +9,8 @@ from decimal import Decimal, ROUND_UP
 
 # 是否落在范围
 def inRange(range, num):
-    min = range[0] is None and 0 or float(range[0])
-    max = range[1] is None and math.inf or float(range[1])
+    min = 0 if range[0] is None else float(range[0])
+    max = math.inf if range[1] is None else float(range[1])
     return min <= float(num) <= max
 
 # def percentage(total, strPercentage):

@@ -86,7 +86,8 @@ class bybit(baseExchange):
 
     def _contractOrder(self, state: str, symbol: dict | str, amount: float, price: float | None = None,
                      posSide: str | None = None, category: str = kLinear, timeInForce: str | None = None,
-                     posIdx: int = 0, lv: int | None = None, orderId: str | None = None):
+                     posIdx: int = 0, lv: int | None = None, orderId: str | None = None,
+                     clientOrderId: str | None = None):
         """合约下单 (U本位/币本位)"""
         symbol_id = symbol['id'] if isinstance(symbol, dict) else symbol
 

@@ -1,9 +1,8 @@
-import asyncio,aiohttp,ccxt,datetime,traceback
+import asyncio,ccxt,traceback
 import pandas as pd
 import ccxt.pro as ccxtpro
-# from aiohttp_socks import ProxyConnector
 from server.market import kSpot, kSwap, kFuture, kDelivery, kBuy, kSell, kShort, kLong, kMarket, kLimit, eMarketId,kCancel
-from server.utils import switch, switchFn, tryCatch, aContainB, slit, str2ms, str2time, pdData, err, log, inRange, utc_now, reviseTime, timeFrame2Float, diff_Pdtime, logFormat, trySwitchFn, evtFireAsync, kEvt_Market
+from server.utils import switch, switchFn, tryCatch, slit, str2ms, pdData, err, log, utc_now, timeFrame2Float, evtFireAsync, kEvt_Market
 kSymbol = 'coinInfo'
 
 def _backoff(start: float = 5.0, factor: float = 1.5, cap: float = 60.0):
@@ -19,7 +18,7 @@ class baseExchange:
         self._maxLimit = maxLimit
         self._ccxt = None
         self._title = ''        #绑定的交易所名字
-        self._acc = 0           #账号
+        self._acc = {}          #账号
         self._info = { kSymbol: {}, 'api': {}} #coin币种信息,api交易所api信息
         self._balanceRefreshPending = False
         self._balanceRefreshDelay = 1.0
@@ -46,9 +45,11 @@ class baseExchange:
     def balance(self,isSpot = True):
         if not isSpot: return
         bal = self._ccxt.fetch_balance()
+        def _pos(src: dict) -> dict:
+            return {k: fv for k, v in src.items() if v and (fv := float(v)) > 0}
         self._acc = {
-            'total': {k: float(v) for k, v in bal.get('total', {}).items() if v and float(v) > 0},
-            'free':  {k: float(v) for k, v in bal.get('free', {}).items() if v and float(v) > 0},
+            'total': _pos(bal.get('total', {})),
+            'free':  _pos(bal.get('free', {})),
         }
         return self._acc
 
@@ -84,7 +85,7 @@ class baseExchange:
         self._info[kSymbol] = {kSpot: {}, kSwap: {}, kFuture: {}, kDelivery: {}}
         markets = self._ccxt.loadMarkets()
         for symbol, market in markets.items():
-            if market['active']:#tpye: spot/swap/future
+            if market['active'] and market['type'] in self._info[kSymbol]:
                 self._info[kSymbol][market['type']][symbol] = {
                     'id': market['id'],
                     'symbol':symbol,
@@ -96,36 +97,27 @@ class baseExchange:
                     'cost': market['limits']['cost']}
         return self._info[kSymbol]
 
-    # 获取币信息
     def coinInfo(self, symbol: str) -> tuple:
         category, newSymbol = slit(symbol, '_')
         def _find():
             res = slit(newSymbol, '-')
-            sel = 0
             futureSymbol = newSymbol if res == False else res[0]
-            # print("~~~res~~~~~~",res, futureSymbol)# ,market.get(category))
-            # 过滤出同一基础合约的所有到期/交割键，按日期后缀排序后选择目标键
-            keys = [market.get(category).get(futureSymbol)]
-            # print("~~~keys~~~~",keys)
-            if keys[0]== None:
-                keys = [k for k in market.get(category).keys() if k.split(':')[0] == futureSymbol]
-                if not keys:
-                    return category, None
-                keys.sort(key=lambda k: k.split('-')[-1])
-                sel = int(res[1])
-            # print("~~~~~~~all~~~~~~~~", keys, sel)
-            # target_key = keys[sel]
-            return market.get(category).get(keys[sel])
-        #
+            catData = market.get(category, {})
+            direct = catData.get(futureSymbol)
+            if direct is not None:
+                return direct
+            keys = sorted([k for k in catData if k.split(':')[0] == futureSymbol],
+                           key=lambda k: k.split('-')[-1])
+            if not keys:
+                return None
+            sel = int(res[1]) if res else 0
+            return catData.get(keys[sel])
         market = self.get("coinInfo")
         info = switchFn({kDelivery: _find,
                         kFuture: _find,
-                        'default': lambda: market.get(category).get(newSymbol)
+                        'default': lambda: market.get(category, {}).get(newSymbol)
                         }, key=category)
-        # print("~~~~~info2~~~~",newSymbol, market.get(category).get(newSymbol))
-        # if info:
         return category, info
-        # return None
 
     #symbol: 交易对,seTime: [开始时间, 结束时间],timeframe: K线周期,limit: 单次获取数量，0表示使用交易所最大值
     def getKline(self, symbol: str, seTime: list, timeframe: str = '5m', limit: int = 0):
@@ -157,13 +149,12 @@ class baseExchange:
         allpd.format(allData, style='concat')
         return allpd.get()
 
-    #订单接口state:  'buy' | 'sell' | 'cancel'
-    def order(self, typeState: str, symbol: str, totelPrice, amount: float, price: float | None = None, isMarket=False, inForce='GTC', posSide: str | None = None, lv: int = 1):
+    async def order(self, typeState: str, symbol: str, totelPrice, amount: float, price: float | None = None, isMarket=False, inForce='GTC', posSide: str | None = None, lv: int = 1, clientOrderId: str | None = None):
         category, symbolInfo = self.coinInfo(symbol)
         kwargs = {'state': typeState, 'symbol': symbolInfo['id']}
         isSpot = category == kSpot
-        # print("~~order1~~",typeState,symbol, totelPrice, amount,price, isMarket, inForce, posSide,  lv)
-        def _sporOrder(state: str, symbol, totelPrice=None, amount=None, price=None):
+        def _sporOrder(state: str, symbol, totelPrice=None, amount=None, price=None, clientOrderId=None):
+            extraParams = {'clientOrderId': clientOrderId} if clientOrderId else {}
             params = {'symbol': symbol.get('id'),
                     'side': state,
                     'type': kMarket,
@@ -172,19 +163,15 @@ class baseExchange:
             if amount and price:
                 params.update(type=kLimit, price=price)
             elif state == kBuy and amount is None:
-                params['params'] = {'quoteOrderQty': totelPrice}
+                extraParams['quoteOrderQty'] = totelPrice
             elif state == kSell and amount is None:
                 raise ValueError(f"现货卖出缺少 amount: {symbol.get('id')}")
+            if extraParams:
+                params['params'] = extraParams
             return self._ccxt.create_order(**params)
-            # rt = tryCatch(lambda: self._ccxt.create_order(**params))
-            # print("~~~~~_sporOrder~~~~~~~~~~",rt)
-            # if not rt:
-            #     return None
-            # return self._formatCcxtOrder(rt)
-        #参数调整
         def _setkWargs():
             nonlocal kwargs
-            kwargs.update(symbol=symbolInfo, totelPrice=totelPrice, amount=amount, price=price)
+            kwargs.update(symbol=symbolInfo, totelPrice=totelPrice, amount=amount, price=price, clientOrderId=clientOrderId)
             if isSpot:
                 return
             kwargs.update(symbol=symbol, lv=lv, posSide=posSide, isMarket=isMarket, inForce=inForce)
@@ -198,31 +185,27 @@ class baseExchange:
         def _cancelSpot(symbol: str, id: str):
             if id:
                 return self._ccxt.cancelOrder(id, symbol)
-            open_orders = self._ccxt.fetch_open_orders(symbol)
-            results = []
-            for item in open_orders:
-                results.append(self._ccxt.cancelOrder(item.get('id'), symbol))
-            return results
+            return [self._ccxt.cancelOrder(o.get('id'), symbol) for o in self._ccxt.fetch_open_orders(symbol)]
         #logic
         switchFn({kCancel: _setCancel,
                     'default': _setkWargs}, 
                     key=typeState)
         
         log("~~~~~~send order~~~~~~~", kwargs)
-        return switchFn({kBuy: _sporOrder if isSpot else self._contractOrder,
-                        kSell: _sporOrder if isSpot else self._contractOrder,
-                        'cancel': _cancelSpot if isSpot else self._cancelOrder}, 
-                        key=typeState, **kwargs)
+        dispatch = {kBuy: _sporOrder if isSpot else self._contractOrder,
+                    kSell: _sporOrder if isSpot else self._contractOrder,
+                    kCancel: _cancelSpot if isSpot else self._cancelOrder}
+        fn = dispatch.get(typeState)
+        if not fn:
+            return False
+        return await asyncio.to_thread(fn, **kwargs)
     #获取个人交易记录
     def trades(self, symbol: str, limit: int = 500) -> list[dict]:
         category, symbolInfo = self.coinInfo(symbol)
         if category == kSwap:
             return self._trades(symbol, limit)
         rt = tryCatch(lambda: self._ccxt.fetch_my_trades(symbolInfo['symbol'], limit=limit))
-        if not rt:
-            return []
-        # return [self._formatTrade(t) for t in rt]
-        print("~~~~trades个人交易~~~~~", rt)
+        return rt or []
 
     #批量下单
     def batchOrders(self, category: str, orders: list[dict]) -> list:
@@ -256,88 +239,66 @@ class baseExchange:
     async def _close_ws(self, ws_pairs: list[tuple]) -> None:
         await asyncio.gather(*[e.close() for e, _ in ws_pairs],return_exceptions=True)
 
-    #账号资金监听
-    async def _listen_balance(self, exchange, market_type: str):
+    async def _ws_loop(self, label: str, market_type: str, callback):
         delays = _backoff()
         while True:
             try:
-                balances = await exchange.watch_balance()
-                if market_type == 'SPOT':
-                    self._sync_balance(balances, market_type)
-                else:
-                    self.requestBalanceRefresh()
-                delays = _backoff()  # 成功后重置退避
-                # log(f"[{market_type}] ws资金更新: {balances}")
-                evtFireAsync(kEvt_Market, eMarketId['wsBalance'], self.get('id'), self.get('title'), balances)
+                await callback()
+                delays = _backoff()
             except asyncio.CancelledError:
                 raise
             except ccxt.AuthenticationError as e:
                 delay = next(delays)
-                print(f"[{market_type}] 资金流认证失败: {e} — {delay:.0f}s 后重试")
+                print(f"[{market_type}] {label}认证失败: {e} — {delay:.0f}s 后重试")
                 await asyncio.sleep(delay)
             except ccxt.NetworkError as e:
                 delay = next(delays)
-                print(f"[{market_type}] 资金流网络异常: [{type(e).__name__}] {e} — {delay:.0f}s 后重试")
+                print(f"[{market_type}] {label}网络异常: [{type(e).__name__}] {e} — {delay:.0f}s 后重试")
                 await asyncio.sleep(delay)
             except Exception as e:
                 delay = next(delays)
-                print(f"[{market_type}] 资金流严重错误: {e}")
+                print(f"[{market_type}] {label}严重错误: {e}")
                 traceback.print_exc()
                 await asyncio.sleep(delay)
 
-    def _sync_balance(self, balances: dict, market_type: str) -> None:
+    async def _listen_balance(self, exchange, market_type: str):
+        async def _on_balance():
+            balances = await exchange.watch_balance()
+            if market_type == 'SPOT':
+                self._sync_balance(balances)
+            else:
+                self.requestBalanceRefresh()
+            evtFireAsync(kEvt_Market, eMarketId['wsBalance'], self.get('id'), self.get('title'), balances)
+        await self._ws_loop('资金流', market_type, _on_balance)
+
+    def _sync_balance(self, balances: dict) -> None:
         if not isinstance(balances, dict):
             return
-        def _collect(key: str) -> dict:
+        for key in ('free', 'used', 'total'):
             data = balances.get(key, {})
-            return {k: float(v) for k, v in data.items() if v is not None} if isinstance(data, dict) else {}
-        if market_type == 'SPOT':
-            for key in ('free', 'used', 'total'):
-                self._acc.setdefault(key, {}).update(_collect(key))
-            return
+            if isinstance(data, dict):
+                self._acc.setdefault(key, {}).update({k: float(v) for k, v in data.items() if v is not None})
 
-    #订单监听
-    async def _listen_orders(self,exchange: ccxtpro.Exchange,market_type: str, symbol= None) -> None:
-        delays = _backoff()
-        while True:
-            try:
-                orders = await exchange.watch_orders(symbol)
-                delays = _backoff()
-                for order in orders:
-                    log(f"[{market_type}] ws订单更新: {order['status']} : {order}")
-                    if order['status'] in ('closed', 'canceled'):#订单关闭/取消
-                        evtFireAsync(kEvt_Market, eMarketId['wsOrder'], self.get('title'), order)
-                        if market_type != 'SPOT':
-                            self.requestBalanceRefresh()
-            except asyncio.CancelledError:
-                raise
-            except ccxt.AuthenticationError as e:
-                delay = next(delays)
-                print(f"[{market_type}] 订单流认证失败: {e} — {delay:.0f}s 后重试")
-                await asyncio.sleep(delay)
-            except ccxt.NetworkError as e:
-                delay = next(delays)
-                print(f"[{market_type}] 订单流网络异常: [{type(e).__name__}] {e} — {delay:.0f}s 后重试")
-                await asyncio.sleep(delay)
-            except Exception as e:
-                delay = next(delays)
-                print(f"[{market_type}] 订单流严重错误: {e}")
-                traceback.print_exc()
-                await asyncio.sleep(delay)
+    async def _listen_orders(self, exchange: ccxtpro.Exchange, market_type: str, symbol=None) -> None:
+        async def _on_orders():
+            orders = await exchange.watch_orders(symbol)
+            for order in orders:
+                log(f"[{market_type}] ws订单更新: {order['status']} : {order}")
+                if order['status'] not in ('closed', 'canceled'):
+                    continue
+                evtFireAsync(kEvt_Market, eMarketId['wsOrder'], self.get('title'), order)
+                if market_type != 'SPOT':
+                    self.requestBalanceRefresh()
+        await self._ws_loop('订单流', market_type, _on_orders)
 
-    # 子类可继承接口
     def _create(self, config: dict):
         self._info['api'] = {'apiKey': config['apiKey'], 'secret': config['secret']}
-    # def checkPosition(self): 
-        # print(self._ccxt.fetch_open_orders())
-        # print(self._ccxt.fetch_positions())
-        # return self._ccxt.fetch_positions()
     def orderBook(self, symbol: str, limit: int = 5): pass
     def depth(self, symbol, limit): pass
     def tickers(self, symbol): pass
     def findOrder(self, symbol: str, orderId: str = '',isPos = True,isOpen = False): pass 
     def _accPm(self, account, coin) -> float: return 0
-    def _contractOrder(self, state: str, symbol: dict, amount: float, isMarket, inForce, price: float | None = None, lv: int = 1, posSide: str | None = None): pass
+    def _contractOrder(self, state: str, symbol: dict, amount: float, isMarket, inForce, price: float | None = None, lv: int = 1, posSide: str | None = None, clientOrderId: str | None = None): pass
     def _cancelOrder(self, symbol: str, id: str): pass
     def _batchOrders(self, category, orders): pass
     def _trades(self, symbol: str, limit: int = 500) -> list[dict]:pass

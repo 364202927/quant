@@ -1,4 +1,4 @@
-from server.utils import evtConnect, kEvt_Market, log, switchFn, slit, inRange,warn,evtFire,evtReturn
+from server.utils import evtConnect, kEvt_Market, switchFn, slit,warn,evtFire,evtReturn
 from server.market import eMarketId, kSpot, kSell, kSwap,kBuy, kCancel,kClose,kLong,kShort,baseExchange
 
 #todo:检测策略连续亏损,风格等
@@ -28,42 +28,50 @@ class preTrade:
         switchFn({eMarketId['preTrade']: _preTrade}, key=id_)
 
     def _check(self, data: dict, ex:baseExchange):
-        symbol = data.get('symbol', '')
         orderType = data.get('type', '')
-        direction = data.get('dir', '')
-        totelPrice = data.get('totelPrice', 0)
-        splitSymbol = slit(symbol, '_')
-        newSymbol = splitSymbol[1] if splitSymbol else symbol
-        _, symbolInfo = ex.coinInfo(data['symbol'])
-        isPm = (orderType == kSwap)
-        def _bet2Value(value) -> float:
-            if isinstance(totelPrice, str) and totelPrice.startswith('bet:'):
-                return float(totelPrice[4:]) * 0.01 * value
-            return float(totelPrice or 0)
         #暂时只支持现货和合约
         if orderType == kCancel:
             return True
         if orderType not in (kSpot, kSwap):
             return f"不支持的下单类型: {orderType}, 仅支持 {kSpot}/{kSwap}"
+
+        symbol = data.get('symbol', '')
+        direction = data.get('dir', '')
+        totelPrice = data.get('totelPrice', 0)
+        splitSymbol = slit(symbol, '_')
+        newSymbol = splitSymbol[1] if splitSymbol else symbol
+        _, symbolInfo = ex.coinInfo(data['symbol'])
         if not symbolInfo:
             return  f"无法获取币种信息: {data['symbol']}"
         # a. passList 过滤
         symbol_lower = symbol.lower()
         if not any(p in symbol_lower for p in self._passList()):
             return  f"symbol {symbol} 不在 passList 中"
-        
-        baseCoin = slit(newSymbol, "/")[0]
-        quoteCoin = slit(newSymbol, "/")[1].split(":")[0] if slit(newSymbol, "/") else 'USDT'
 
-        if orderType == kSpot and direction == kBuy:
-            assets = ex.accFree(coin=quoteCoin, isPm=False)
+        splitBase = slit(newSymbol, "/")
+        baseCoin = splitBase[0] if splitBase else newSymbol
+        quoteCoin = splitBase[1].split(":")[0] if splitBase else 'USDT'
+
+        def _bet2Value(value) -> float:
+            if isinstance(totelPrice, str) and totelPrice.startswith('bet:'):
+                return float(totelPrice[4:]) * 0.01 * value
+            return float(totelPrice or 0)
+
+        def _checkOpenBalance(coin: str, isPm: bool, actionLabel: str, assetLabel: str):
+            assets = ex.accFree(coin=coin, isPm=isPm)
             total = _bet2Value(assets)
             coinMin = symbolInfo['cost'].get('min')
-            total = coinMin > total and coinMin or total
+            total = coinMin if coinMin > total else total
             if total > assets:
-                return f"现货买入金额不足: {total}, {quoteCoin}余额: {assets}"
-            data['consumeCoin'] = quoteCoin
+                return f"{actionLabel}金额不足: {total}, {assetLabel}: {assets}"
+            data['consumeCoin'] = coin
             data['totelPrice'] = total
+            return None
+
+        if orderType == kSpot and direction == kBuy:
+            reason = _checkOpenBalance(quoteCoin, False, "现货买入", f"{quoteCoin}余额")
+            if reason:
+                return reason
 
         elif orderType == kSpot and direction == kSell:
             assets = ex.accFree(coin=baseCoin, isPm=False)
@@ -77,14 +85,9 @@ class preTrade:
             data['consumeCoin'] = baseCoin
 
         elif orderType == kSwap and direction in (kBuy, kSell):
-            assets = ex.accFree(coin=quoteCoin, isPm=True)
-            total = _bet2Value(assets)
-            coinMin = symbolInfo['cost'].get('min')
-            total = coinMin > total and coinMin or total
-            if total > assets:
-                return f"合约开仓金额不足: {total}, 可用: {assets}"
-            data['consumeCoin'] = quoteCoin
-            data['totelPrice'] = total
+            reason = _checkOpenBalance(quoteCoin, True, "合约开仓", "可用")
+            if reason:
+                return reason
 
         elif orderType == kSwap and direction == kClose:
             taskName = data.get('taskName', '')
