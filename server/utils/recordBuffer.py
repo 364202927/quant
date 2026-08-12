@@ -1,4 +1,4 @@
-import uuid, json#, os
+import uuid, os
 from collections import deque, defaultdict
 from datetime import datetime, timedelta
 from server.utils.common import str2time, joinPath,writeFile,readFile
@@ -26,7 +26,10 @@ class recordBuffer:
                     'time': time,
                     'tags': tags,
                     'data': kwargs}
+        evicted = self._buffer[0] if len(self._buffer) == self._buffer.maxlen else None
         self._buffer.append(buffer)
+        if evicted is not None:
+            self._index_map.pop(evicted['id'], None)
         self._index_map[log_id] = buffer
         return log_id
     #tags
@@ -46,7 +49,7 @@ class recordBuffer:
             # tags值匹配
             if search_items:
                 data_dict = r.get('tags', {})
-                if match:                   
+                if match:
                     if not all(data_dict.get(k) == v for k, v in search_items):
                         continue
                 else:
@@ -67,7 +70,7 @@ class recordBuffer:
             return {}
         if kwargs.get('tags'):
             record['tags'] = kwargs['tags']
-            del kwargs['tags']        
+            del kwargs['tags']
         if kwargs:
             record['data'].update(kwargs)
         return record
@@ -86,7 +89,7 @@ class recordBuffer:
             day_key = t.strftime('%Y-%m-%d') if hasattr(t, 'strftime') else str(t)[:10]
             groups[day_key].append(record)
         # 逐组写入
-        # os.makedirs(self._filePath, exist_ok=True)
+        os.makedirs(self._filePath, exist_ok=True)
         for day, records in groups.items():
             filename = joinPath(self._filePath, f'{day}.jsonl')
             writeFile(records, filename, 'a')
@@ -96,38 +99,36 @@ class recordBuffer:
             #         f.write(json.dumps(record, ensure_ascii=False, default=str) + '\n')
         self._saveIdx = len(items)
         return True
-    #加载day的数据
-    def readFile(self, days: int = 7) -> bool:
+    #加载数据: days=N 只加载最近N天, days=None 全量扫描目录下所有历史文件
+    def readFile(self, days: int | None = 7) -> bool:
         if not self._filePath:
             return False
-        today = datetime.now()
         loaded = 0
-        for i in range(days, -1, -1):
-            day = today - timedelta(days=i)
-            filename = joinPath(self._filePath, f'{day.strftime("%Y-%m-%d")}.jsonl')
-            file = readFile(filename)
-            for line in file:
-                line = line.strip()
-                if not line:
+        if days is None:
+            if not os.path.isdir(self._filePath):
+                return False
+            filenames = sorted(
+                joinPath(self._filePath, f) for f in os.listdir(self._filePath) if f.endswith('.jsonl')
+            )
+        else:
+            today = datetime.now()
+            filenames = [
+                joinPath(self._filePath, f'{(today - timedelta(days=i)).strftime("%Y-%m-%d")}.jsonl')
+                for i in range(days, -1, -1)
+            ]
+        seen = {record.get('id') for record in self._buffer}
+        for filename in filenames:
+            records = readFile(filename)
+            if not records:
+                continue
+            for record in records:
+                recordId = record.get('id')
+                if recordId in seen:
                     continue
-                record = json.loads(line)
                 self._buffer.append(record)
-                self._index_map[record['id']] = record
+                seen.add(recordId)
                 loaded += 1
-            # if not os.path.exists(filename):
-            #     continue
-            # try:
-            #     with open(filename, 'r', encoding='utf-8') as f:
-            #         for line in f:
-            #             line = line.strip()
-            #             if not line:
-            #                 continue
-            #             record = json.loads(line)
-            #             self._buffer.append(record)
-            #             self._index_map[record['id']] = record
-            #             loaded += 1
-            # except (json.JSONDecodeError, IOError):
-            #     continue
+        self._index_map = {r['id']: r for r in self._buffer}
         self._saveIdx = len(self._buffer)
         return loaded > 0
 

@@ -2,7 +2,7 @@ from server.strategy.base.testCTA import *
 from datetime import datetime
 import numpy as np
 
-class test2(testCTA):
+class testIndicators(testCTA):
     """测试用法 - 验证所有指标的自写算法和talib实现"""
 
     _kLinePd = None  # 原始数据

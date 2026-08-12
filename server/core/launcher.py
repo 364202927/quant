@@ -1,7 +1,7 @@
 import asyncio
 from server.core.engine import engine
 from server.utils import g_config,log,kOpenMarket
-from server.external import web, cli, msgHandler, telegram, feishu
+from server.external import web, cli, msgHandler#, telegram, feishu
 from server.market import marketMgr
 from server.market.oms import oms
 from server.market.storage.center import storageCenter
@@ -17,6 +17,8 @@ _MODULE_FACTORY: dict[str, type] = {
     # 'feishu': feishu,
 }
 
+kWsReadyTimeout = 30  # 等待交易所WS全部就绪的超时秒数,超时后放行避免单个交易所拖死全部策略启动
+
 class launcher:
     """启动器 - 初始化并协调所有模块运行"""
 
@@ -29,6 +31,8 @@ class launcher:
         self.__center = None                #账号缓存
         self.__subscribe = None             #交易所 更新/数据缓存
         self.__orders = None                #订单更新/任务订单缓存
+        self.__pendingProject: str | None = None  #待加载的测试任务
+        self.__pendingStartFile: bool = False     #是否待按start.json加载任务
         #
         self._initModules()
 
@@ -66,14 +70,26 @@ class launcher:
                 log(f"[{module.__class__.__name__}] 运行异常: {e}")
                 traceback.print_exc()
         try:
-            await asyncio.gather(*[_guard(m) for m in self.__modules])
+            await asyncio.gather(*[_guard(m) for m in self.__modules], self._loadTasksWhenReady())
         except (KeyboardInterrupt, asyncio.CancelledError):
             log("用户中断，正在退出...")
 
+    # 等交易所WS全部连接就绪(marketMgr.ready)后再加载任务(触发task.init());没有交易所模块时立即加载
+    async def _loadTasksWhenReady(self) -> None:
+        if self.__marketMgr:
+            try:
+                await asyncio.wait_for(self.__marketMgr.ready.wait(), timeout=kWsReadyTimeout)
+            except asyncio.TimeoutError:
+                log(f"[launcher] 等待交易所WS就绪超时({kWsReadyTimeout}s),跳过等待直接加载任务")
+        if self.__pendingProject:
+            self.__engine.loadTask(self.__pendingProject)
+        elif self.__pendingStartFile:
+            self.__engine.loadTaskList()
+
     # 通常用于测试任务
     def addProject(self, projectName: str) -> None:
-        self.__engine.loadTask(projectName)
+        self.__pendingProject = projectName
     # 根据start.json读取任务
     def start(self) -> None:
-        self.__engine.loadTaskList()
+        self.__pendingStartFile = True
         self.run()

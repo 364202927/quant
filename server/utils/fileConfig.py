@@ -7,6 +7,7 @@ kMarketPath = "assets/markets/"
 kDataPath = 'assets/config/'
 kLogPath = "assets/log/"
 kOrderPath = "assets/order/"
+kOtherPath = "assets/other/"
 kUserType,kApiType,kStartType,kLogBufType,kOrderBufType = 'user','apiKey','start','logBuffer','orderBuffer'
 kConfigPath = kDataPath+kUserType+".json"
 kApikeyPath = kDataPath+kApiType+".gz"

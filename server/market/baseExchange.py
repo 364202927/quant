@@ -4,6 +4,7 @@ import ccxt.pro as ccxtpro
 from server.market import kSpot, kSwap, kFuture, kDelivery, kBuy, kSell, kShort, kLong, kMarket, kLimit, eMarketId,kCancel
 from server.utils import switch, switchFn, tryCatch, slit, str2ms, pdData, err, log, utc_now, timeFrame2Float, evtFireAsync, kEvt_Market
 kSymbol = 'coinInfo'
+kWsConnectTimeout = 30  # 单个ws连接建立超时(秒)
 
 def _backoff(start: float = 5.0, factor: float = 1.5, cap: float = 60.0):
     delay = start
@@ -22,6 +23,7 @@ class baseExchange:
         self._info = { kSymbol: {}, 'api': {}} #coin币种信息,api交易所api信息
         self._balanceRefreshPending = False
         self._balanceRefreshDelay = 1.0
+        self.wsReady = asyncio.Event()   # REST预热完成+WS订阅任务已创建(不等待首条推送,避免无限等待)
 
     def get(self, key: str):
         return switch({
@@ -218,14 +220,30 @@ class baseExchange:
     async def run(self) -> None:
         ws_pairs = self._wsListen()
         if not ws_pairs:
+            self.wsReady.set()
             return
-        await asyncio.gather(*[e.fetch_balance() for e, _ in ws_pairs])
+
+        async def _tryConnect(exchange, market_type):
+            try:
+                await asyncio.wait_for(exchange.fetch_balance(), timeout=kWsConnectTimeout)
+                return (exchange, market_type)
+            except asyncio.TimeoutError:
+                log(f"[{self.get('title')}] {market_type} WS连接超时({kWsConnectTimeout}s),跳过该连接")
+            except Exception as e:
+                log(f"[{self.get('title')}] {market_type} WS连接失败: {e},跳过该连接")
+            return None
+
+        results = await asyncio.gather(*[_tryConnect(e, mt) for e, mt in ws_pairs])
+        connected = [pair for pair in results if pair is not None]
+        if not connected:
+            err(f"[{self.get('title')}] 全部WS连接失败,本次运行该交易所没有任何实时推送")
+
         tasks = [
             asyncio.create_task(coro)
-            for exchange, market_type in ws_pairs
+            for exchange, market_type in connected
             for coro in (self._listen_balance(exchange, market_type),
                         self._listen_orders(exchange, market_type))]
- 
+        self.wsReady.set()
         log(f"~~~~ws 开始监听~~~")
         try:
             await asyncio.gather(*tasks)

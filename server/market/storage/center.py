@@ -1,20 +1,33 @@
-import copy
-from server.utils import evtConnect, evtFireAsync, kEvt_Market,switchFn,log
+import copy, os
+from server.utils import evtConnect, evtFireAsync, kEvt_Market,switchFn,log, readFile, writeFile, debouncedSaver
+from server.utils.fileConfig import kOtherPath
 from server.market import eMarketId, kBuy, kSell,kPm
+
+kCenterStateFile = kOtherPath + 'center.pkl'
 
 class storageCenter:
     "个人资产数据缓存"
 
     def __init__(self):
-        self.__snapshot: dict[str, dict] = {}  # {okx: {'main': {},... },bybit:{'xx':{}},...}
-        self.__spotCost: dict[str, list[dict]] = {}     # {coinId: [现货成交成本轨迹]}
+        state = readFile(kCenterStateFile) or {}
+        self.__snapshot: dict[str, dict] = state.get('snapshot', {})  # {okx: {'main': {},... },bybit:{'xx':{}},...}
+        self.__spotCost: dict[str, list[dict]] = state.get('spotCost', {})     # {coinId: [现货成交成本轨迹]}
+        self._requestSave = debouncedSaver(2.0, self._saveState)
         evtConnect(kEvt_Market, self)
+
+    def _saveState(self) -> None:
+        if not self.__snapshot and not self.__spotCost:
+            if os.path.isfile(kCenterStateFile):
+                os.remove(kCenterStateFile)
+            return
+        writeFile({'snapshot': self.__snapshot, 'spotCost': self.__spotCost}, kCenterStateFile)
 
     def evtProcess(self, key, *args):
         id_, exName = args[0], args[1] if len(args) > 2 else None
         def _balanceUpdate(exName,key,data):
             target = self.__snapshot.setdefault(exName, {}).setdefault(key, {})
             self._mergeBalance(target, data)
+            self._requestSave()
         #evt事件
         def _balance():
             key, data = args[2],args[3]
@@ -101,6 +114,7 @@ class storageCenter:
             if lot['amount'] <= 0:
                 return False
             self.__spotCost.setdefault(coinId, []).append(lot)
+            self._requestSave()
             return True
         if side == kSell:
             return self._reduceSpotCost(coinId, self._float(order.get('filled')))
@@ -160,6 +174,7 @@ class storageCenter:
             remaining = 0
         if not lots:
             del self.__spotCost[coinId]
+        self._requestSave()
         return True
 
     def _pruneSpotCost(self, total: dict) -> bool:
@@ -174,6 +189,8 @@ class storageCenter:
                 changed = True
             elif baseCoin and self._isDustValue(coinId, coinAmount):
                 changed = self._syncDustSpotCost(coinId, coinAmount) or changed
+        if changed:
+            self._requestSave()
         return changed
 
     # 现货仓位市值(按当前均价估算)是否低于 1u,低于则收敛成 1 条成本轨迹

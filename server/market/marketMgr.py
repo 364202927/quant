@@ -16,6 +16,7 @@ class marketMgr(extInterface):
         self.__gateways: dict = {}
         self.__preTrade = preTrade(self.get)
         self.__circuitBreaker = circuitBreaker()
+        self.ready = asyncio.Event()   # 所有交易所 wsReady 后置位,供 launcher 延迟 task init 使用
         self.initExchange()
         evtConnect(kEvt_Market, self)
 
@@ -68,7 +69,10 @@ class marketMgr(extInterface):
     # ── 运行 ──
     async def run(self) -> None:
         if not self.__exchangeMgr:
+            self.ready.set()
             return
-        ex_tasks = [ex.run() for ex in self.__exchangeMgr.values()]
-        gw_tasks = [gw.run() for gw in self.__gateways.values()]
-        await asyncio.gather(*gw_tasks, *ex_tasks)
+        ex_tasks = [asyncio.create_task(ex.run()) for ex in self.__exchangeMgr.values()]
+        gw_tasks = [asyncio.create_task(gw.run()) for gw in self.__gateways.values()]
+        await asyncio.gather(*[ex.wsReady.wait() for ex in self.__exchangeMgr.values()])
+        self.ready.set()
+        await asyncio.gather(*ex_tasks, *gw_tasks)

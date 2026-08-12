@@ -108,6 +108,9 @@ class bybit(baseExchange):
             else:
                 params['timeInForce'] = 'IOC'
 
+            if clientOrderId:
+                params['orderLinkId'] = clientOrderId
+
             if lv:
                 self._setLeverage(category, symbol_id, lv)
 

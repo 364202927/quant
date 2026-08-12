@@ -1,17 +1,39 @@
+import os
 from datetime import datetime, timezone
 from typing import Callable
-from server.utils import evtConnect, kEvt_Market, switchFn, recordBuffer,log
+from server.utils import evtConnect, kEvt_Market, switchFn, recordBuffer,log, readFile, writeFile, debouncedSaver
+from server.utils.fileConfig import kOtherPath
 from server.market import eMarketId, kSpot, kSwap, kBuy, kSell, kClose, kLong, kShort, kCancel
+
+kOrdersStateFile = kOtherPath + 'orders.json'
+kHistoryDir = kOtherPath + 'history/'
 
 class storageOrders:
     "订单/状态事件监听 数据保存整理 "
 
     def __init__(self):
-        self.__taskOrders: dict[str, list[dict]] = {}  # task正持有的订单
-        self.__taskHistory = recordBuffer()     # 任务历史订单
-        self.__openOrders = {}                  #task开仓记录
-        #todo:读取__taskOrders保存的文件
+        state = readFile(kOrdersStateFile) or {}
+        self.__taskOrders: dict[str, list[dict]] = state.get('taskOrders', {})  # task正持有的订单
+        self.__openOrders = state.get('openOrders', {})                        #task开仓记录
+        self.__taskHistory = recordBuffer(kHistoryDir, max_size=1024)          # 任务历史订单
+        self.__historyLoaded = False                                           # 读取时才全量加载
+        self._requestSave = debouncedSaver(2.0, self._saveState)
         evtConnect(kEvt_Market, self)
+
+    def _saveState(self) -> None:
+        if not self.__taskOrders and not self.__openOrders:
+            if os.path.isfile(kOrdersStateFile):
+                os.remove(kOrdersStateFile)
+        else:
+            writeFile({'taskOrders': self.__taskOrders, 'openOrders': self.__openOrders}, kOrdersStateFile)
+        self.__taskHistory.save2File()
+
+    # 历史订单只在真正需要读取时才全量加载(而非启动时预加载最近N天)
+    def _history(self) -> list[dict]:
+        if not self.__historyLoaded:
+            self.__taskHistory.readFile(days=None)
+            self.__historyLoaded = True
+        return self.__taskHistory.buffer()
 
     def evtProcess(self, key, *args):
         # len(args) > 2 而非 > 1: 用来区分"只带一个 payload"的事件(如 order/gPosit, args[1] 是 dict/查询参数)
@@ -40,8 +62,6 @@ class storageOrders:
             symbol = data.get('symbol', '')
             direction = data.get('dir', '')
             taskName = self._taskName(data.get('taskName'))
-            if taskName == 'other':
-                return
             coinInfo = data.get("coinInfo") or {}
             coinId = coinInfo.get('id') or self._cleanSymbol(symbol)
             exName = data.get('exName', '')
@@ -56,9 +76,17 @@ class storageOrders:
                 'amount': data.get('amount'),
                 'totelPrice': data.get('totelPrice', 0),
                 'taskName': taskName,
+                'time': self._orderTime(None),
             }
             self.__openOrders.setdefault(exName, {}).setdefault(taskName, {}).setdefault(coinId, []).append(record)
+            self._requestSave()
             # log("~~~~oms_saveOrder~~~~",self.__openOrders)
+
+        # 启动时用交易所真实持仓/挂单校验并矫正本地记录(依赖本地文件已在 __init__ 里加载完毕)
+        def _verifyPositions():
+            data = args[3] if len(args) > 3 else {}
+            self._reconcilePositions(exName, data.get('pos') or [])
+            self._reconcileOpenOrders(exName, data.get('open') or [])
 
         # ws订单数据更新
         def _wsUpdateOrder():
@@ -82,7 +110,7 @@ class storageOrders:
             # log("~~~~~~_wsUpdateOrder~~~~~~~",wsDir,exName,coinId)
             # exName 即交易所 classId, 直接定位 __openOrders
 
-            matched, matchedTask = self._popTempOrder(exName, coinId, order, wsDir, wsPs)
+            matched, matchedTask = self._popTempOrder(exName, coinId, order)
 
             if matched is None:
                 if wsDir == kClose and order.get('status') == 'closed':
@@ -90,8 +118,6 @@ class storageOrders:
             if matched is None:
                 matched = self._wsRecord(order, wsDir)
                 matchedTask = matched['taskName']
-            if matchedTask == 'other':
-                return
             if status == 'canceled':
                 # log("~~~~~~cancel tempData~~~~~",matched)
                 # log("~~~~__openOrders~~~~~",self.__openOrders)
@@ -117,6 +143,7 @@ class storageOrders:
 
             if matched['type'] == kSpot:
                 self.__taskHistory.push(**fullRecord)
+                self._requestSave()
                 # print(f"[storageOrders] 现货→历史: {coinId} {wsSide}")
                 # log("~~~~~~find tempData~~~~~",matched)
                 # log("~~~~~~saveRec~~~~~~~~",fullRecord)
@@ -129,6 +156,7 @@ class storageOrders:
                     fullRecord['dir'] = kClose
                 self._updateTaskOrders(matchedTask, matched, fullRecord)
                 self.__taskHistory.push(**fullRecord)
+                self._requestSave()
                 log("~~~~__taskHistory~~~~~",self.__taskHistory.buffer())
                 # print(f"[storageOrders] 合约→活跃+历史: {coinId} {wsSide}")
             # log("~~~~~~find tempData~~~~~",matched)
@@ -142,6 +170,7 @@ class storageOrders:
                          # eMarketId['orderCache']: _saveOrder,
                            eMarketId['wsOrder']: _wsUpdateOrder,
                            eMarketId['gPosit']: _gPosit,
+                           eMarketId['positions']: _verifyPositions,
                          }, key=marketId)
         return None if result is False else result
 
@@ -226,7 +255,7 @@ class storageOrders:
         orderId = str(order.get('orderID') or '')
         if not orderId:
             return self._float(order.get('amount'))
-        for record in reversed(self.__taskHistory.buffer()):
+        for record in reversed(self._history()):
             data = record.get('data', {})
             if str(data.get('orderID') or '') != orderId:
                 continue
@@ -240,8 +269,10 @@ class storageOrders:
         for index, item in enumerate(orders):
             if self._cleanSymbol(item.get('symbol', '')) == symbol and item.get('dir') == direction:
                 orders[index] = order
+                self._requestSave()
                 return
         orders.append(order)
+        self._requestSave()
 
     def _removeTaskOrder(self, taskName: str, symbol: str, direction: str) -> None:
         orders = self.__taskOrders.get(taskName, [])
@@ -252,6 +283,55 @@ class storageOrders:
         ]
         if not self.__taskOrders[taskName]:
             del self.__taskOrders[taskName]
+        self._requestSave()
+
+    # 用交易所返回的真实持仓(pos)矫正本地 __taskOrders: 以交易所数据为准
+    def _reconcilePositions(self, exName: str, exPositions: list) -> None:
+        live = {(self._cleanSymbol(p.get('symbol', '')), (p.get('side') or '').lower()) for p in exPositions}
+        for taskName, orders in list(self.__taskOrders.items()):
+            for order in list(orders):
+                symbol = self._cleanSymbol(order.get('symbol', ''))
+                direction = order.get('dir', '')
+                if (symbol, direction) in live:
+                    continue
+                log(f"[storageOrders] 持仓矫正: 本地记录 {taskName}/{symbol}/{direction} 交易所已不存在,按交易所数据删除")
+                self._removeTaskOrder(taskName, order.get('symbol', ''), direction)
+        localSet = {
+            (self._cleanSymbol(o.get('symbol', '')), o.get('dir', ''))
+            for orders in self.__taskOrders.values() for o in orders
+        }
+        for symbol, direction in live - localSet:
+            log(f"[storageOrders] 持仓矫正: 交易所持仓 {exName}/{symbol}/{direction} 本地无任何task记录,无法自动归属,请人工核实")
+
+    # 用交易所返回的当前挂单(open)清理本地 __openOrders 里已失效的待匹配记录
+    def _reconcileOpenOrders(self, exName: str, exOpenOrders: list) -> None:
+        exOrders = self.__openOrders.get(exName)
+        if not exOrders:
+            return
+        liveIds = {str(o.get('clientOrderId') or o.get('orderId') or '') for o in exOpenOrders}
+        liveIds.discard('')
+        changed = False
+        for taskName, taskOrders in list(exOrders.items()):
+            for coinId, records in list(taskOrders.items()):
+                keep = []
+                for rec in records:
+                    recId = str(rec.get('clientOrderId') or rec.get('orderID') or '')
+                    if recId and recId not in liveIds:
+                        log(f"[storageOrders] 挂单矫正: {exName}/{taskName}/{coinId} clientOrderId={rec.get('clientOrderId')} "
+                            f"交易所已无此挂单(可能已成交或撤销),历史成交明细无法回溯,移除本地待匹配记录")
+                        changed = True
+                        continue
+                    keep.append(rec)
+                if keep:
+                    taskOrders[coinId] = keep
+                else:
+                    del taskOrders[coinId]
+            if not taskOrders:
+                del exOrders[taskName]
+        if not exOrders:
+            self.__openOrders.pop(exName, None)
+        if changed:
+            self._requestSave()
 
     def _taskName(self, taskName: str | None) -> str:
         return taskName or 'other'
@@ -306,27 +386,13 @@ class storageOrders:
         except (TypeError, ValueError):
             return 0.0
 
-    def _popTempOrder(self, exName: str, coinId: str, order: dict, wsDir: str, wsPs: str | None) -> tuple[dict | None, str]:
+    def _popTempOrder(self, exName: str, coinId: str, order: dict) -> tuple[dict | None, str]:
         orderId = str(order.get('id') or '')
         clientOrderId = str(order.get('clientOrderId') or order.get('info', {}).get('c') or '')
-        matched = self._popTempOrderBy(
-            exName,
-            coinId,
-            lambda rec: self._sameOrderId(rec, orderId, clientOrderId),
-        )
-        if matched[0] is not None:
-            return matched
-        matched = self._popTempOrderBy(
-            exName,
-            coinId,
-            lambda rec: self._sameOrderSide(rec, wsDir, wsPs) and self._sameOrderTradeData(rec, order),
-        )
-        if matched[0] is not None:
-            return matched
         return self._popTempOrderBy(
             exName,
             coinId,
-            lambda rec: self._sameOrderSide(rec, wsDir, wsPs),
+            lambda rec: self._sameOrderId(rec, orderId, clientOrderId),
         )
 
     def _popTempOrderBy(self, exName: str, coinId: str, matchFn: Callable[[dict], bool]) -> tuple[dict | None, str]:
@@ -345,6 +411,7 @@ class storageOrders:
                     del exOrders[taskName]
                 if not exOrders:
                     del self.__openOrders[exName]
+                self._requestSave()
                 return matched, taskName
         return None, ''
 
@@ -387,32 +454,6 @@ class storageOrders:
         if orderId and recOrderId == orderId:
             return True
         return bool(clientOrderId and recClientOrderId == clientOrderId)
-
-    def _sameOrderSide(self, rec: dict, wsDir: str, wsPs: str | None) -> bool:
-        recDir = rec.get('dir', '')
-        recPos = rec.get('posSide')
-        if recDir == kClose:
-            return bool(wsPs and wsPs == recPos)
-        if recDir != wsDir:
-            return False
-        if wsDir == kClose:
-            return wsPs == recPos
-        if wsPs is not None:
-            return recPos == wsPs
-        return True
-
-    def _sameOrderTradeData(self, rec: dict, order: dict) -> bool:
-        price = order.get('price') or order.get('average')
-        amount = order.get('amount') or order.get('filled')
-        return self._sameNumber(rec.get('price'), price) and self._sameNumber(rec.get('amount'), amount)
-
-    def _sameNumber(self, left, right) -> bool:
-        if left is None or right is None:
-            return False
-        try:
-            return abs(float(left) - float(right)) < 1e-12
-        except (TypeError, ValueError):
-            return False
 
     def _fee(self, order: dict) -> dict:
         info = order.get('info', {})

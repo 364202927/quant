@@ -1,9 +1,8 @@
 from server.strategy.base.contractCTA import *
 from server.strategy.base.realTrade import *
 from server.utils import log
-# from datetime import datetime
 
-class test(contractCTA, realTrade):
+class testTrade(contractCTA, realTrade):
     "交易所api测试调用"
 
     def __init__(self):
@@ -39,16 +38,11 @@ class test(contractCTA, realTrade):
         # logFormat(history)
 
 
-    def update_1sLess(self, id, timeKey):
-        # cta = self.getCTA('test')
-        # print("~~evt_1sLess~~~~~",timeKey, datetime.now().strftime("%m-%d %H:%M:%S"))
-        pass
-
     def update_10s(self, id, timeKey):
         if self.bInit: return
         if self._testStep == 0:
             log("~~~~~~test初始化完成~~~~~~~~")
-        # #现货
+        #现货
         if self._testStep == 0:
             self.buy('DOGE/USDT', totelPrice = 1)                           #市价买入1u,如totelPrice少于最少下单按最少下单
         elif self._testStep == 1:
@@ -61,25 +55,25 @@ class test(contractCTA, realTrade):
             self.sell('DOGE/USDT')                                          #默认全卖
             self.bInit = True
         
-        # #合约
-        # if self._testStep == 0:
-        #     # self.openLong(swapU('DOGE/USDT'), totelPrice = 5,price = 0.07,lv=2)
-        #     self.openLong(swapU('DOGE/USDT'), totelPrice = 5)
-        # elif self._testStep == 1:
-        #     # self.openShort(swapU('DOGE/USDT'), totelPrice = 5,price = 0.1)
-        #     self.openShort(swapU('DOGE/USDT'), totelPrice = 5,isMarket= True)
-        #     # pass
-        # elif self._testStep == 2:
-        #     # self.openShort(futureU('ETH/USDT', timeIndex = 1), totelPrice = 1)
-        #     pass
-        # elif self._testStep == 3:
-        #     self.cencel(swapU('DOGE/USDT'))                                      #取消挂单
-        #     # self.cencel(futureU('ETH/USDT', timeIndex = 1))                       #取消季单
-        # elif self._testStep == 4:
-        #     self.closePos(swapU('DOGE/USDT'),dir=kLong,isMarket=True)
-        #     self.closePos(swapU('DOGE/USDT'),dir=kShort,isMarket=True)
-        #     # self.closePos(futureU('ETH/USDT', timeIndex = 1),dir=kShort)
-        #     self.bInit = True
+        #合约
+        if self._testStep == 0:
+            # self.openLong(swapU('DOGE/USDT'), totelPrice = 5,price = 0.07,lv=2)
+            self.openLong(swapU('DOGE/USDT'), totelPrice = 5)
+        elif self._testStep == 1:
+            # self.openShort(swapU('DOGE/USDT'), totelPrice = 5,price = 0.1)
+            self.openShort(swapU('DOGE/USDT'), totelPrice = 5,isMarket= True)
+            # pass
+        elif self._testStep == 2:
+            # self.openShort(futureU('ETH/USDT', timeIndex = 1), totelPrice = 1)
+            pass
+        elif self._testStep == 3:
+            self.cencel(swapU('DOGE/USDT'))                                      #取消挂单
+            # self.cencel(futureU('ETH/USDT', timeIndex = 1))                       #取消季单
+        elif self._testStep == 4:
+            self.closePos(swapU('DOGE/USDT'),dir=kLong,isMarket=True)
+            self.closePos(swapU('DOGE/USDT'),dir=kShort,isMarket=True)
+            # self.closePos(futureU('ETH/USDT', timeIndex = 1),dir=kShort)
+            self.bInit = True
         
         log("~~~Step~~~~",self._testStep)
         self._testStep += 1

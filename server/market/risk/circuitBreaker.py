@@ -32,43 +32,43 @@ class circuitBreaker:
         #         self._onOrder(order)
         pass
 
-    def _onHolding(self, exName: str, kind: str, current: dict, prev: dict):
-        if kind != 'balance':
-            return
-        drop_pct = 0.20  # 余额骤降 20% 触发，可从 riskConfig 扩展
-        for coin, prev_amt in prev.items():
-            if prev_amt <= 0:
-                continue
-            curr_amt = current.get(coin, 0)
-            if prev_amt and (prev_amt - curr_amt) / prev_amt >= drop_pct:
-                log(f"[circuitBreaker] {exName} {coin} 余额骤降，触发断路")
-                self._interval = _VOLATILE_INTERVAL
-                asyncio.ensure_future(self._trip(exName))
-                return
+    # def _onHolding(self, exName: str, kind: str, current: dict, prev: dict):
+    #     if kind != 'balance':
+    #         return
+    #     drop_pct = 0.20  # 余额骤降 20% 触发，可从 riskConfig 扩展
+    #     for coin, prev_amt in prev.items():
+    #         if prev_amt <= 0:
+    #             continue
+    #         curr_amt = current.get(coin, 0)
+    #         if prev_amt and (prev_amt - curr_amt) / prev_amt >= drop_pct:
+    #             log(f"[circuitBreaker] {exName} {coin} 余额骤降，触发断路")
+    #             self._interval = _VOLATILE_INTERVAL
+    #             asyncio.ensure_future(self._trip(exName))
+    #             return
 
-    def _onOrder(self, order: dict):
-        taskName = order.get('taskName', '')
-        if not taskName or taskName in self._tripped:
-            return
-        config = self._riskConfig(taskName)
-        loss_limit = config.get('consecutiveLossLimit', _LOSS_LIMIT)
-        pnl = float(order.get('realizedPnl', 0))
-        self._lossCount[taskName] = self._lossCount.get(taskName, 0) + 1 if pnl < 0 else 0
-        if self._lossCount.get(taskName, 0) >= loss_limit:
-            log(f"[circuitBreaker] {taskName} 连续亏损 {loss_limit} 笔，触发断路")
-            asyncio.ensure_future(self._trip(taskName))
+    # def _onOrder(self, order: dict):
+    #     taskName = order.get('taskName', '')
+    #     if not taskName or taskName in self._tripped:
+    #         return
+    #     config = self._riskConfig(taskName)
+    #     loss_limit = config.get('consecutiveLossLimit', _LOSS_LIMIT)
+    #     pnl = float(order.get('realizedPnl', 0))
+    #     self._lossCount[taskName] = self._lossCount.get(taskName, 0) + 1 if pnl < 0 else 0
+    #     if self._lossCount.get(taskName, 0) >= loss_limit:
+    #         log(f"[circuitBreaker] {taskName} 连续亏损 {loss_limit} 笔，触发断路")
+    #         asyncio.ensure_future(self._trip(taskName))
 
-    async def _trip(self, name: str):
-        if name in self._tripped:
-            return
-        self._tripped.add(name)
-        evtFireAsync(kEvt_Market, eMarketId['sCancel'], name)
-        evtFireAsync(kEvt_Market, eMarketId['sForceClose'], name)
-        evtFireAsync(kEvt_Market, eMarketId['iCircuitTrip'], name)
+    # async def _trip(self, name: str):
+    #     if name in self._tripped:
+    #         return
+    #     self._tripped.add(name)
+    #     evtFireAsync(kEvt_Market, eMarketId['sCancel'], name)
+    #     evtFireAsync(kEvt_Market, eMarketId['sForceClose'], name)
+    #     evtFireAsync(kEvt_Market, eMarketId['iCircuitTrip'], name)
 
-    def _riskConfig(self, name: str) -> dict:
-        # return evtQuery(kEvt_Engine, eEngineId['getRiskConfig'], name) or {}
-        pass
+    # def _riskConfig(self, name: str) -> dict:
+    #     # return evtQuery(kEvt_Engine, eEngineId['getRiskConfig'], name) or {}
+    #     pass
 
     # async def run(self) -> None:
     #     while True:

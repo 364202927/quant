@@ -290,6 +290,27 @@ def writeFile(data, pathFile, model='w'):
     # switchFn 找不到对应文件类型时返回 False,否则(即便回调无显式返回值/None)视为成功
     return result is not False
 
+# 防抖异步落盘: 多次调用只在最后一次后延迟 delaySec 秒执行一次 saveFn(同步函数,内部丢线程池跑,不阻塞事件循环)
+def debouncedSaver(delaySec: float, saveFn):
+    state = {'pending': False}
+    async def _later():
+        try:
+            await asyncio.sleep(delaySec)
+            await asyncio.to_thread(saveFn)
+        finally:
+            state['pending'] = False
+    def request():
+        if state['pending']:
+            return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            saveFn()   # 同步启动阶段(事件循环还没起来),没有循环可以丢任务,直接同步保存
+            return
+        state['pending'] = True
+        asyncio.create_task(_later())
+    return request
+
 # 加载
 def require(modPath):
     mod = import_module(modPath)
