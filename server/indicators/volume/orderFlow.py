@@ -90,15 +90,15 @@ class orderFlow(baseIndicators):
             totalLiquidity = []
             # 各交易所总流动性
             totalLiquidity = [
-                round(self._exsPf.get()[f"{exName}_amount"].astype(float).sum(), 4)
+                round(self._exsPf.raw()[f"{exName}_amount"].astype(float).sum(), 4)
                 for exName in exsName]
             # 根据流动性计算交易所权重
             total = sum(totalLiquidity)
             weight = [round(liq / total, 2) for liq in totalLiquidity]
         # 按价格区间合并
         tmpBucket = defaultdict(lambda: [0, 0] + [0] * 2 * exSize)
-        for i in range(len(self._exsPf.get())):
-            pf = self._exsPf.get(i)
+        for i in range(len(self._exsPf.raw())):
+            pf = self._exsPf.raw(i)
             for j in range(exSize):
                 exName = exsName[j]
                 # 计算价格区间（用 round 替代手动取整）
@@ -184,14 +184,14 @@ class orderFlow(baseIndicators):
                     'time',
                     'side'],
                 xmlData=exTradeData)
-            tradePf.get().set_index('time', inplace=True)
+            tradePf.raw().set_index('time', inplace=True)
             # tradePf.show()
-            tradePf.format(resample2Time(tradePf.get(), '1s'), style='copy')
+            tradePf.format(resample2Time(tradePf.raw(), '1s'), style='copy')
             # 记录交易所数据
             if self.tradeData.get(exName) is None:
                 self.tradeData[exName] = tradePf
                 continue
-            self.tradeData[exName].pfConcat(tradePf.get(), reset=False)
+            self.tradeData[exName].pfConcat(tradePf.raw(), reset=False)
 
         print("~~~~交易数据~~~")
         self.tradeData['binance'].show()
@@ -245,7 +245,7 @@ class orderFlow(baseIndicators):
     def tradesAnalyze(self, priceStep=1):
         # df = self._tradePf.copy()
         def tradeIntensity(window='1s', threshold=0.05):
-            df = self._tradePf.get().set_index('time')
+            df = self._tradePf.raw().set_index('time')
             rolling = df['qty'].rolling(window)
             df['rolling_qty'] = rolling.sum()
             # 主动买/卖量

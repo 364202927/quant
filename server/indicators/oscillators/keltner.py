@@ -30,7 +30,7 @@ class keltner(baseIndicators):
 
     def _keltnerTrack(self, sor_pd: pdData) -> any:
         pf = sor_pd.copy()
-        sor_pd = sor_pd.get()
+        sor_pd = sor_pd.raw()
         pf['ema'] = sor_pd['close'].ewm(span=self._maDay, adjust=False).mean()
         high_low = sor_pd['high'] - sor_pd['low']
         high_close = np.abs(sor_pd['high'] - sor_pd['close'].shift())
@@ -45,7 +45,7 @@ class keltner(baseIndicators):
 
     def _taTrack(self, sor_pd: pdData) -> any:
         pf = sor_pd.copy()
-        sor_pd = sor_pd.get()
+        sor_pd = sor_pd.raw()
         close = sor_pd['close'].values
         high, low = sor_pd['high'].values, sor_pd['low'].values
         pf['ema'] = talib.EMA(close, timeperiod=self._maDay)
@@ -58,7 +58,7 @@ class keltner(baseIndicators):
 
     # squeeze挤压，发生在布林带完全进入Keltner通道内部，当布林带再次扩展出Keltner通道时，表示市场将迎来较大的波动。
     def squeeze(self, boll):
-        pf = self._pd.get()
+        pf = self._pd.raw()
         pf['squeeze'] = (
             boll['upper'] < pf['upper_band']) & (
             boll['lower'] > pf['lower_band'])

@@ -1,5 +1,6 @@
+import asyncio
 from server.core.engine import engine
-from server.utils import switchFn,evtConnect, rtWeb,evtFire,kEvt_Web,kEvt_Engine
+from server.utils import switchFn,evtConnect, rtWeb,evtFire,kEvt_Web,kEvt_Engine,log
 from server.utils.fileConfig import g_config
 
 eMsgId = {
@@ -57,11 +58,12 @@ class msgHandler:
             g_config.saveFile()
             #todo:是否重启服务器
             return
-        def startBackTest():#开启回测
+        def startBackTest():#开启回测: 立即返回"已启动",实际回测在下一轮事件循环调度,不卡住本次web请求
             checkId = msg[0][0].get('id')
             taskName = msg[0][0].get('selectedTask')
             if checkId == 1:
-                return self.callTask(taskName,'startStrategy')
+                asyncio.create_task(self._runBackTest(taskName))
+                return {'status': 'started'}
             return {}
         return switchFn({eMsgId['eWebInit']: initWeb,
                         eMsgId['ePage_k']: initMarketTrends,
@@ -72,6 +74,12 @@ class msgHandler:
                         eMsgId['eStartBackTest']:startBackTest},
                         key=id)
     
+    async def _runBackTest(self, taskName: str) -> None:
+        try:
+            self.callTask(taskName, 'startStrategy')
+        except Exception as e:
+            log(f"[msgHandler] 回测启动失败: {e}")
+
     # 调用engine功能
     def callTask(self, taskName, fnName):
         rt = evtFire(kEvt_Engine, taskName, fnName)

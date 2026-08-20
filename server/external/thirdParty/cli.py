@@ -1,4 +1,4 @@
-import asyncio, re, ast, sys, threading
+import asyncio, re, ast, sys, threading, os, signal
 from server.utils.fileConfig import g_config,kLogBufType
 from server.utils import kLog,kInfo,kError,kWarn,warn,log,evtFire,kEvt_Web
 from server.utils.decoratorTool import extInterface
@@ -107,8 +107,9 @@ class cli(extInterface):
                     await self._printNew(buf)
                     continue
 
-                if ch == '\x03': #ctrl+c
-                    exit()
+                if ch == '\x03': #ctrl+c: 触发launcher统一停机流程(SIGINT),不用exit()绕过清理导致在途订单丢失
+                    os.kill(os.getpid(), signal.SIGINT)
+                    return
                 if ch in ('\n', '\r'): #回车
                     self._write('\n')
                     cmd = buf.strip()

@@ -166,11 +166,13 @@ class binance(baseExchange):
         return tryCatch(lambda: self._ccxt.papiPostUmBatchOrders(params=params))
 
     # ── K线 ──
-    def _marketKline(self, symbol: str, beginTime, endTime=None, timeframe: str = '5m', limit: int = 0):
+    def _marketKline(self, symbol: str, beginTime: int | None, endTime: int | None = None,
+                     timeframe: str = '5m', limit: int = 0) -> pd.DataFrame | None:
         category, newSymbol = slit(symbol, '_')
         if category == kSpot:
             self._maxLimit = kMaxLimit
-            kLineData = super()._marketKline(newSymbol, beginTime, endTime, limit=limit or self._maxLimit)
+            kLineData = super()._marketKline(
+                newSymbol, beginTime, endTime, timeframe=timeframe, limit=limit or self._maxLimit)
         elif category in (kSwap, kFuture, kDelivery):
             self._maxLimit = kfMaxLimit
             params = {'symbol': newSymbol,
@@ -187,8 +189,8 @@ class binance(baseExchange):
             raise ValueError(f"未知的交易品种类型: {category!r} (symbol={symbol!r})")
 
         kline = pdData()
-        kline.format(kLineData, utc=self._utc)
-        return kline.get()
+        kline.format(kLineData)
+        return kline.raw()
 
     # 深度数据
     def depth(self, symbol: str, limit: int):

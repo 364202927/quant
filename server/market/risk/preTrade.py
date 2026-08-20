@@ -1,4 +1,4 @@
-from server.utils import evtConnect, kEvt_Market, switchFn, slit,warn,evtFire,evtReturn
+from server.utils import kEvt_Market, slit,evtReturn
 from server.market import eMarketId, kSpot, kSell, kSwap,kBuy, kCancel,kClose,kLong,kShort,baseExchange
 
 #todo:检测策略连续亏损,风格等
@@ -6,28 +6,13 @@ from server.market import eMarketId, kSpot, kSell, kSwap,kBuy, kCancel,kClose,kL
 
 
 class preTrade:
-    "开仓/买入(风控检测)：限额/价格偏离/黑名单，通过则转发 oms"
+    "开仓/买入(风控检测)：限额/价格偏离/黑名单。由 gateway 流水线直接调用,不挂事件总线"
 
-    def __init__(self, exFn):
-        self._getEx = exFn           # self._getEx(exname) 可获得对应 baseExchange
-        evtConnect(kEvt_Market, self)
+    def __init__(self):
+        pass
 
-    def evtProcess(self, key, *args):
-        id_, data= args[0],args[1] if len(args) > 1 else {}
-        def _preTrade():
-            exName = data.get('exName', '')
-            ex = self._getEx(exName)
-            if not ex:
-                warn(f"[preTrade] 未找到交易所: {exName}")
-                return
-            reason = self._check(data, ex)
-            if isinstance(reason,str):
-                warn(f"[preTrade] 拦截: {reason}")
-                return
-            evtFire(kEvt_Market, eMarketId['oms'], data)
-        switchFn({eMarketId['preTrade']: _preTrade}, key=id_)
-
-    def _check(self, data: dict, ex:baseExchange):
+    # 通过返回True,拦截返回原因字符串
+    def check(self, data: dict, ex:baseExchange):
         orderType = data.get('type', '')
         #暂时只支持现货和合约
         if orderType == kCancel:

@@ -47,7 +47,7 @@ class vpAnalysis(baseIndicators):
 
     def _computeVp(self, sor_pd: pdData) -> None:
         """计算成交量分析指标 (自写和talib共用)"""
-        pf = self._pd.get()
+        pf = self._pd.raw()
         price_bins = pd.cut(sor_pd['high'].rolling(window=self._bins).max(), bins=self._bins)
         volume_profile = sor_pd.groupby(price_bins)['vol'].sum()
         avg_volume = volume_profile.mean()

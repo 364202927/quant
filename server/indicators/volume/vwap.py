@@ -1,4 +1,5 @@
 from server.indicators.baseIndicators import *
+from server.utils import utc_now
 
 # VWAP是成交量加权平均价格指标
 # 公式：VWAP = Σ(价格 × 成交量) / Σ(成交量)
@@ -25,11 +26,12 @@ class vwap(baseIndicators):
         return self.calculate(pd)
 
     def _computeVwap(self, sor_pd: pdData) -> None:
-        pf = self._pd.get()
+        pf = self._pd.raw()
         typical_price = (sor_pd['high'] + sor_pd['low'] + sor_pd['close']) / 3
         price_vol = typical_price * sor_pd['vol']
         # Extract date from candle_begin_time for daily grouping
-        group_col = sor_pd['candle_begin_time'].dt.date
+        local_time = sor_pd['candle_begin_time'] + pd.Timedelta(hours=utc_now())
+        group_col = local_time.dt.date
         if self._period > 0:# Rolling VWAP (reset per day)
             cum_price_vol = price_vol.groupby(group_col).rolling(window=self._period, min_periods=1).sum().reset_index(level=0, drop=True)
             cum_vol = sor_pd['vol'].groupby(group_col).rolling(window=self._period, min_periods=1).sum().reset_index(level=0, drop=True)

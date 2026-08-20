@@ -32,7 +32,7 @@ class kdj(baseIndicators):
 
     def _kdjTrack(self, sor_pd: pdData) -> any:
         pf = sor_pd.copy()
-        sor_pd = sor_pd.get()
+        sor_pd = sor_pd.raw()
         low_min = sor_pd['low'].rolling(
             window=self._period, min_periods=1).min()
         high_max = sor_pd['high'].rolling(
@@ -50,7 +50,7 @@ class kdj(baseIndicators):
 
     def _taKdj(self, sor_pd: pdData) -> any:
         pf = sor_pd.copy()
-        sor_pd = sor_pd.get()
+        sor_pd = sor_pd.raw()
         rsv = talib.momentum.stoch(
             sor_pd['high'],
             sor_pd['low'],

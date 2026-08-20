@@ -1,4 +1,4 @@
-import abc
+import abc, traceback
 from server.utils import warn,switch, evtConnect, evtFire, kEvt_GetTime, kEvt_Time, time2ID, require,eTimeTs,timeFrame2Float
 kStrategyFile = 'server.strategy.'
 
@@ -70,8 +70,17 @@ class task:
         evtFire(kEvt_Time, self.get('id'), self.get('tacticsTime'))
         self.isFirst = True
     
-    # 事件处理
+    # 事件处理: pydispatch.dispatcher.send 一旦某个receiver抛异常就终止整个分发循环,
+    # 同批注册的其余task会被连带跳过一次触发,必须在此拦住策略层异常
     def evtProcess(self, key, *args):
+        try:
+            return self._evtProcess(*args)
+        except Exception as e:
+            warn(f"[task:{self.get('className')}] 策略回调异常: {e}")
+            traceback.print_exc()
+            return True
+
+    def _evtProcess(self, *args):
         timeKey = args[0]
         tabId = args[1]
         # 过滤只触发接收的时间戳

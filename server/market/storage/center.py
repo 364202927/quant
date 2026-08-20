@@ -15,6 +15,10 @@ class storageCenter:
         self._requestSave = debouncedSaver(2.0, self._saveState)
         evtConnect(kEvt_Market, self)
 
+    # 停机时调用: 跳过防抖,强制落盘一次
+    def flush(self) -> None:
+        self._saveState()
+
     def _saveState(self) -> None:
         if not self.__snapshot and not self.__spotCost:
             if os.path.isfile(kCenterStateFile):

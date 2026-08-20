@@ -20,6 +20,10 @@ class storageOrders:
         self._requestSave = debouncedSaver(2.0, self._saveState)
         evtConnect(kEvt_Market, self)
 
+    # 停机时调用: 跳过防抖,强制落盘一次
+    def flush(self) -> None:
+        self._saveState()
+
     def _saveState(self) -> None:
         if not self.__taskOrders and not self.__openOrders:
             if os.path.isfile(kOrdersStateFile):
@@ -81,6 +85,22 @@ class storageOrders:
             self.__openOrders.setdefault(exName, {}).setdefault(taskName, {}).setdefault(coinId, []).append(record)
             self._requestSave()
             # log("~~~~oms_saveOrder~~~~",self.__openOrders)
+
+        # 下单失败: 删掉 _saveOrder 刚记的待匹配记录,否则它永远等不到WS回报变成孤儿
+        def _failOrder():
+            data = args[1] if len(args) > 1 else {}
+            if data.get('type') == kCancel:
+                return
+            clientOrderId = str(data.get('clientOrderId') or '')
+            if not clientOrderId:
+                return
+            coinInfo = data.get("coinInfo") or {}
+            coinId = coinInfo.get('id') or self._cleanSymbol(data.get('symbol', ''))
+            matched, _ = self._popTempOrderBy(
+                data.get('exName', ''), coinId,
+                lambda rec: str(rec.get('clientOrderId') or '') == clientOrderId)
+            if matched:
+                log(f"[storageOrders] 下单失败,移除待匹配记录: {coinId} clientOrderId={clientOrderId}")
 
         # 启动时用交易所真实持仓/挂单校验并矫正本地记录(依赖本地文件已在 __init__ 里加载完毕)
         def _verifyPositions():
@@ -167,7 +187,7 @@ class storageOrders:
             
 
         result = switchFn({eMarketId['order']: _saveOrder,
-                         # eMarketId['orderCache']: _saveOrder,
+                           eMarketId['orderFailed']: _failOrder,
                            eMarketId['wsOrder']: _wsUpdateOrder,
                            eMarketId['gPosit']: _gPosit,
                            eMarketId['positions']: _verifyPositions,

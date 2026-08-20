@@ -1,8 +1,10 @@
 import asyncio,ccxt,traceback
 import pandas as pd
 import ccxt.pro as ccxtpro
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from server.market import kSpot, kSwap, kFuture, kDelivery, kBuy, kSell, kShort, kLong, kMarket, kLimit, eMarketId,kCancel
-from server.utils import switch, switchFn, tryCatch, slit, str2ms, pdData, err, log, utc_now, timeFrame2Float, evtFireAsync, kEvt_Market
+from server.utils import switch, switchFn, tryCatch, slit, str2ms, pdData, err, log, timeFrame2Float, evtFireAsync, kEvt_Market
 kSymbol = 'coinInfo'
 kWsConnectTimeout = 30  # 单个ws连接建立超时(秒)
 
@@ -24,6 +26,18 @@ class baseExchange:
         self._balanceRefreshPending = False
         self._balanceRefreshDelay = 1.0
         self.wsReady = asyncio.Event()   # REST预热完成+WS订阅任务已创建(不等待首条推送,避免无限等待)
+        # 单worker: ccxt同步实例内部的requests.Session和nonce计数器非线程安全,
+        # 多线程并发调用会偶发签名错误/连接池竞态。单worker天然串行,顺带限制单交易所REST并发
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f'ccxt-{self.__class__.__name__}')
+
+    # 所有同步ccxt调用的统一入口,不阻塞事件循环
+    async def _call(self, fn, *args, **kwargs):
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self._executor, partial(fn, *args, **kwargs))
+
+    # 停机时由launcher调用(不能放run()的finally: 排空在途订单要早于关闭executor)
+    def shutdown(self) -> None:
+        self._executor.shutdown(wait=False)
 
     def get(self, key: str):
         return switch({
@@ -36,7 +50,6 @@ class baseExchange:
     def enroll(self, config: dict,title:str):
         self._create(config)
         self._title = title
-        self._utc = utc_now()
 
     def showApi(self):
         print("ccxt版本：", ccxt.__version__, "public/private + get/post + path, 驼峰编码")
@@ -55,22 +68,19 @@ class baseExchange:
         }
         return self._acc
 
-    def refreshBalance(self) -> dict:
-        bal = self.balance()
-        if bal:
-            evtFireAsync(kEvt_Market, eMarketId['balance'], self.get('id'), self.get('title'), bal)
-        return bal
-
     def requestBalanceRefresh(self) -> None:
         if self._balanceRefreshPending:
             return
         self._balanceRefreshPending = True
         asyncio.create_task(self._refreshBalanceLater())
 
+    # 取数在executor内跑,发事件回到事件循环线程: evtFireAsync要求在loop内调用
     async def _refreshBalanceLater(self) -> None:
         try:
             await asyncio.sleep(self._balanceRefreshDelay)
-            await asyncio.to_thread(self.refreshBalance)
+            bal = await self._call(self.balance)
+            if bal:
+                evtFireAsync(kEvt_Market, eMarketId['balance'], self.get('id'), self.get('title'), bal)
         except Exception as e:
             log(f"[{self.get('title')}] 余额刷新失败: {e}")
         finally:
@@ -122,34 +132,61 @@ class baseExchange:
         return category, info
 
     #symbol: 交易对,seTime: [开始时间, 结束时间],timeframe: K线周期,limit: 单次获取数量，0表示使用交易所最大值
-    def getKline(self, symbol: str, seTime: list, timeframe: str = '5m', limit: int = 0):
-        beginMs = str2ms(seTime[0], self._utc) if len(seTime) > 0 else None
-        endMs = str2ms(seTime[1], self._utc) if len(seTime) > 1 else None
+    def getKline(self, symbol: str, seTime: list, timeframe: str = '5m',
+                 limit: int = 0) -> pd.DataFrame | None:
+        def _utcMs(value: object) -> int:
+            # pdData.raw() 产生的Timestamp已是UTC0；字符串/now按公共时间入口转epoch。
+            if isinstance(value, pd.Timestamp):
+                timestamp = value
+                if timestamp.tzinfo is not None:
+                    timestamp = timestamp.tz_convert('UTC').tz_localize(None)
+                return int(timestamp.value // 1_000_000)
+            return str2ms(value)
+
+        def _sortAndClip(frame: pd.DataFrame) -> pd.DataFrame:
+            frame = frame.sort_values('candle_begin_time').reset_index(drop=True)
+            if beginMs is not None:
+                frame = frame[frame.candle_begin_time >= pd.to_datetime(beginMs, unit='ms')]
+            if endMs is not None:
+                frame = frame[frame.candle_begin_time <= pd.to_datetime(endMs, unit='ms')]
+            return frame.reset_index(drop=True)
+
+        beginMs = _utcMs(seTime[0]) if len(seTime) > 0 else None
+        endMs = _utcMs(seTime[1]) if len(seTime) > 1 else None
         dateFrame = self._marketKline(symbol, beginMs, endMs, timeframe, limit)
-        if dateFrame is None or dateFrame.empty or not endMs:
+        if dateFrame is None or dateFrame.empty:
+            return dateFrame
+        dateFrame = dateFrame.sort_values('candle_begin_time').reset_index(drop=True)
+        if not endMs:
             return dateFrame
         # 准备进行分页获取
         allData = [dateFrame]
         intervalMs = int(timeFrame2Float(timeframe) * 1000)
         log(f"开始从交易所分页获取K线: {symbol}")
+        pageBeginMs = beginMs
         while True:
             lastPdTime = dateFrame.iloc[-1].candle_begin_time
-            lastTimeMs = int((pd.Timestamp(lastPdTime) + pd.Timedelta(hours=self._utc)).timestamp() * 1000)
+            lastTimeMs = int(pd.Timestamp(lastPdTime).value // 1_000_000)
             nextBeginMs = lastTimeMs + intervalMs
-            log("循环退出:",nextBeginMs,'>',endMs)
             if nextBeginMs > endMs:
+                log("循环退出:",nextBeginMs,'>',endMs)
+                break
+            if pageBeginMs is not None and nextBeginMs <= pageBeginMs:
+                log("分页退出: 游标未前进", nextBeginMs, '<=', pageBeginMs)
                 break
             dateFrame = self._marketKline(symbol, nextBeginMs, endMs, timeframe, limit)
             # 如交易所因任何原因没有返回新数据，立刻跳出防止死循环
             if dateFrame is None or dateFrame.empty:
                 break
+            dateFrame = dateFrame.sort_values('candle_begin_time').reset_index(drop=True)
             allData.append(dateFrame)
+            pageBeginMs = nextBeginMs
         #合并
         if len(allData) == 1:
-            return allData[0]
+            return _sortAndClip(allData[0])
         allpd = pdData()
         allpd.format(allData, style='concat')
-        return allpd.get()
+        return _sortAndClip(allpd.raw())
 
     async def order(self, typeState: str, symbol: str, totelPrice, amount: float, price: float | None = None, isMarket=False, inForce='GTC', posSide: str | None = None, lv: int = 1, clientOrderId: str | None = None):
         category, symbolInfo = self.coinInfo(symbol)
@@ -200,7 +237,18 @@ class baseExchange:
         fn = dispatch.get(typeState)
         if not fn:
             return False
-        return await asyncio.to_thread(fn, **kwargs)
+        return await self._call(fn, **kwargs)
+
+    # ── 同步接口的异步包装,供事件循环内调用 ──
+    async def orderBookAsync(self, symbol: str, limit: int = 5):
+        return await self._call(self.orderBook, symbol, limit)
+
+    async def getKlineAsync(self, symbol: str, seTime: list, timeframe: str = '5m', limit: int = 0):
+        return await self._call(self.getKline, symbol, seTime, timeframe, limit)
+
+    async def balanceAsync(self, isSpot: bool = True):
+        return await self._call(self.balance, isSpot)
+
     #获取个人交易记录
     def trades(self, symbol: str, limit: int = 500) -> list[dict]:
         category, symbolInfo = self.coinInfo(symbol)

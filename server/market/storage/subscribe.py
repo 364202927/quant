@@ -1,8 +1,10 @@
 import asyncio
-from server.utils import evtConnect, kEvt_Market,kEvt_GetTime, pdData,switchFn,diff_Pdtime,timeFrame2Float,kEvt_Time,evtFire
+from server.utils import evtConnect, kEvt_Market,kEvt_GetTime, pdData,switchFn,diff_Pdtime,timeFrame2Float,kEvt_Time,evtFire,warn,log
 from server.market import eMarketId,baseExchange
 
+kFileType = '.parquet'
 
+# todo:这里要改
 class storageSubscribe:
     "k线/成交历史/深度数据,监听更新"
 
@@ -28,8 +30,11 @@ class storageSubscribe:
             self._exchanges[exName] = ex[1]
 
     def evtProcess(self, key, *args):
-        if key == 'evtGetTime' and args[1][0] == 'subscribe':
-            print("~~~~storageSubscribe 每5m自动更新数据~~~~~", self._markets)
+        # 5m定时: 异步预拉全部订阅K线到缓存,不阻塞事件循环
+        if key == kEvt_GetTime:
+            if 'subscribe' in (args[1] or []):
+                asyncio.create_task(self._refreshAll())
+            return
         #
         if key != kEvt_Market: return
         id = args[0]
@@ -42,42 +47,57 @@ class storageSubscribe:
                     if not self._buffer[exKey].get(symbol):
                         self._buffer[exKey][symbol] = {'kLine':None,'depth':None,'trades':None}
 
-        def _getCandles(): #返回k线数据
-            exName = args[1]
-            symbol = args[2]
-            if not self._exchanges.get(exName):return
-            pd = self._newestCandles(self._exchanges.get(exName),symbol)
-            self._buffer[exName][symbol]['kLine'] = pd
-            # print("~~~~save_buffer~~~~~~",self._buffer)
-            #todo:一并获取交易量/资金费率/深度
-            return pd
+        # 只读缓存,绝不发REST: 策略回调在事件循环内同步执行,拉K线会卡死整个loop
+        def _getCandles():
+            exName, symbol = args[1], args[2]
+            cached = self._buffer.get(exName, {}).get(symbol, {}).get('kLine')
+            if cached is None:
+                warn(f"[subscribe] K线尚未就绪,等待下次预拉: {exName}/{symbol}")
+                return None
+            # 返回副本: resample()会原地修改_pf,直接给出缓存对象会被策略污染并被下次预拉写进文件
+            return pdData(data=cached.raw(), style='copy')
 
         return switchFn({eMarketId['scKline']: _addscKlne,
-                        eMarketId['gcKline']: _getCandles,}, 
+                        eMarketId['gcKline']: _getCandles,},
                         key=id)
 
-    def _updateBuffer(self):
-        pass
-    
-    #返回最新的k线,自动更新到最新
-    def _newestCandles(self, ex:baseExchange, symbol: str, timeFrame: str = '5m'):
-        pd = self._buffer.get(ex.get('id')).get(symbol).get('kLine') #直接取出保存的数据
+    # 冷启动预拉: 策略init()注册symbol后调用一次,避免首个周期无数据
+    async def warmup(self) -> None:
+        await self._refreshAll()
+
+    async def _refreshAll(self) -> None:
+        for exName, symbols in list(self._buffer.items()):
+            ex = self._exchanges.get(exName)
+            if not ex:
+                continue
+            for symbol in list(symbols):
+                try:
+                    await self._newestCandles(ex, symbol)
+                except Exception as e:
+                    warn(f"[subscribe] K线更新失败 {exName}/{symbol}: {e}")
+
+    #更新最新的k线到缓存并落盘
+    async def _newestCandles(self, ex:baseExchange, symbol: str, timeFrame: str = '5m'):
+        slot = self._buffer.setdefault(ex.get('id'), {}).setdefault(
+            symbol, {'kLine':None,'depth':None,'trades':None})
+        fileName = ex.get('id')+'_'+ symbol
+        pd = slot.get('kLine')
         if not pd: #初始化
-            fileName = ex.get('id')+'_'+ symbol
-            pd = pdData(read = fileName)
+            pd = await asyncio.to_thread(pdData, read = fileName)
             if pd.empty(): #若没有保存的数据,则直接获取最新
-                pd.pfConcat(ex.getKline(symbol, [], timeFrame),False)
+                pd.pfConcat(await ex.getKlineAsync(symbol, [], timeFrame),False)
+                slot['kLine'] = pd
+                await asyncio.to_thread(pd.save2File, fileName + kFileType)
                 return pd
         # 判断数据是否最新
-        lastTime = pd.get(-1, 'candle_begin_time')
+        lastTime = pd.raw(-1, 'candle_begin_time')
         if diff_Pdtime(lastTime) < timeFrame2Float(timeFrame):
+            slot['kLine'] = pd
             return pd
-        # print("~~~~文件数据~~~~~~",pd.get(0, 'candle_begin_time'),'~',lastTime)
         #合拼最新数据
-        fillPd = ex.getKline(symbol, [lastTime,'now'], timeFrame)
+        fillPd = await ex.getKlineAsync(symbol, [lastTime,'now'], timeFrame)
         if fillPd is not None and not fillPd.empty:
             pd.pfConcat(fillPd)
+        slot['kLine'] = pd
+        await asyncio.to_thread(pd.save2File, fileName + kFileType)
         return pd
-
-    def save2File(self):
-        pass

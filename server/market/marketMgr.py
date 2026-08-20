@@ -3,6 +3,7 @@ from server.utils import g_config, require, log, evtConnect, evtFire, kEvt_Marke
 from server.market import eMarketId
 from server.market.baseExchange import baseExchange
 from server.market.gateway import gateway
+from server.market.oms import oms
 from server.market.risk.preTrade import preTrade
 from server.market.risk.circuitBreaker import circuitBreaker
 from server.utils.decoratorTool import extInterface
@@ -14,10 +15,16 @@ class marketMgr(extInterface):
         super().__init__()
         self.__exchangeMgr: dict = {}
         self.__gateways: dict = {}
-        self.__preTrade = preTrade(self.get)
+        self.__exTasks: list = []
+        self.__gwTasks: list = []
+        self.__preTrade = preTrade()
         self.__circuitBreaker = circuitBreaker()
         self.ready = asyncio.Event()   # 所有交易所 wsReady 后置位,供 launcher 延迟 task init 使用
         self.initExchange()
+        # oms 的本地余额快照来自 initExchange 里 fire 的 balance 事件,构造顺序不能颠倒
+        self.__oms = oms(self.get)
+        self.__gateways = {name: gateway(ex, name, self.__preTrade, self.__oms)
+                           for name, ex in self.__exchangeMgr.items()}
         evtConnect(kEvt_Market, self)
 
     # ── 交易所初始化 ──
@@ -29,13 +36,11 @@ class marketMgr(extInterface):
             return exchange
         #logic
         self.__exchangeMgr = {}
-        self.__gateways = {}
         for name, config in g_config.marketsApi().items():
             if config.get('enable') != True:
                 continue
             exchange = _newExchange(config, name)
             self.__exchangeMgr[name] = exchange
-            self.__gateways[name] = gateway(exchange, name)
             # 初始化账户数据
             bal = exchange.balance()
             evtFire(kEvt_Market, eMarketId['balance'], exchange.get('id'), name, bal)
@@ -55,7 +60,7 @@ class marketMgr(extInterface):
     # ── 事件处理 ──
     def evtProcess(self, key, *args):
         id_ = args[0]
-        def _order():
+        def _submit():
             data = args[1] if len(args) > 1 else {}
             exName = data.get('exName', '')
             gw = self.__gateways.get(exName)
@@ -64,15 +69,30 @@ class marketMgr(extInterface):
                 return
             gw.submit(data)
 
-        switchFn({eMarketId['order']: _order}, key=id_)
+        switchFn({eMarketId['submit']: _submit}, key=id_)
 
     # ── 运行 ──
     async def run(self) -> None:
         if not self.__exchangeMgr:
             self.ready.set()
             return
-        ex_tasks = [asyncio.create_task(ex.run()) for ex in self.__exchangeMgr.values()]
-        gw_tasks = [asyncio.create_task(gw.run()) for gw in self.__gateways.values()]
+        self.__exTasks = [asyncio.create_task(ex.run()) for ex in self.__exchangeMgr.values()]
+        self.__gwTasks = [asyncio.create_task(gw.run()) for gw in self.__gateways.values()]
         await asyncio.gather(*[ex.wsReady.wait() for ex in self.__exchangeMgr.values()])
         self.ready.set()
-        await asyncio.gather(*ex_tasks, *gw_tasks)
+        await asyncio.gather(*self.__exTasks, *self.__gwTasks)
+
+    # ── 停机: 先排空在途订单再关WS,顺序不能颠倒(否则未提交的订单直接丢失) ──
+    async def shutdown(self, timeout: float = 10.0) -> None:
+        if not self.__exchangeMgr:
+            return
+        for gw in self.__gateways.values():
+            gw.close()
+        await asyncio.gather(*(gw.drain(timeout) for gw in self.__gateways.values()), return_exceptions=True)
+        for t in self.__gwTasks:
+            t.cancel()
+        for t in self.__exTasks:
+            t.cancel()
+        await asyncio.gather(*self.__gwTasks, *self.__exTasks, return_exceptions=True)
+        for ex in self.__exchangeMgr.values():
+            ex.shutdown()

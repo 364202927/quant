@@ -1,4 +1,4 @@
-import pickle, json, os, requests, inspect, asyncio, gzip, webbrowser, sys, math
+import pickle, json, os, requests, inspect, asyncio, gzip, webbrowser, sys, math, traceback
 from importlib import import_module
 from pydispatch import dispatcher
 from server.utils import eTimeTs, kEvt_Web
@@ -38,38 +38,23 @@ def _evtTargetSignal(strEvt: object, targetName: str) -> tuple[object, str]:
 # 发送消息 - 同步版本
 def evtFire(strEvt, *args):
     responses = dispatcher.send(signal=strEvt, sender=strEvt, args=args)
-    return next((result for _, result in responses if result is not None), None)
+    # 排除False: receiver的switchFn未命中时返回False,不是有效结果
+    return next((r for _, r in responses if r is not None and r is not False), None)
 
 # 发送消息 - 指定监听类返回
 def evtReturn(strEvt: object, targetName: str, *args: object) -> Any:
     responses = dispatcher.send(signal=_evtTargetSignal(strEvt, targetName), sender=strEvt, args=args)
     return next((r for _, r in responses if r is not None and r is not False), None)
 
-# 发送消息 - 异步版本,没有返回值，自动判断事件循环
+# 发送消息 - 无返回值版本,单个receiver抛异常不影响其余receiver
+# 必须在事件循环线程内调用: 所有evtProcess都是纯内存操作,丢线程池会让storage状态被多线程读写并打乱事件顺序
 def evtFireAsync(strEvt, *args):
-    async def _impl():
-        receivers = dispatcher.getAllReceivers(sender=dispatcher.Any, signal=strEvt)
-        if not receivers:
-            return
-
-        kwargs = {"sender": strEvt, "args": args}
-        tasks = [
-            asyncio.create_task(receiver(**kwargs)) if inspect.iscoroutinefunction(receiver)
-            else asyncio.to_thread(receiver, **kwargs)
-            for receiver in receivers
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for receiver, res in zip(receivers, results):
-            if not isinstance(res, Exception):
-                continue
-            func_name = getattr(receiver, '__name__', str(receiver))
-            print(f"❌ [事件错误] 信号: {strEvt} -> 回调: {func_name} 执行失败: {res}")
-
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(_impl())
-    except RuntimeError:
-        asyncio.run(_impl())
+    for receiver in list(dispatcher.getAllReceivers(sender=dispatcher.Any, signal=strEvt)):
+        try:
+            receiver(sender=strEvt, args=args)
+        except Exception as e:
+            print(f"❌ [事件错误] 信号: {strEvt} -> 回调: {getattr(receiver, '__name__', receiver)} 执行失败: {e}")
+            traceback.print_exc()
 
 # 返回文件后缀
 def getFileExtension(fileName):
@@ -102,8 +87,13 @@ def reviseTime(strTime, sconds):
     return str2time(strTime) + timedelta(seconds=sconds)
 
 # 时间差
-def diff_Pdtime(pdBegin, endTime='now'):
-    endTs = pd.Timestamp.now() if endTime == 'now' else pd.to_datetime(endTime, format="%Y-%m-%d %H:%M:%S")
+def diff_Pdtime(pdBegin: pd.Timestamp, endTime: str | pd.Timestamp = 'now') -> float:
+    if endTime == 'now':
+        endTs = pd.Timestamp.now() - pd.Timedelta(hours=utc_now())
+    else:
+        endTs = pd.to_datetime(endTime, format="%Y-%m-%d %H:%M:%S")
+        if isinstance(endTime, str):
+            endTs -= pd.Timedelta(hours=utc_now())
     return (endTs - pdBegin).total_seconds()
 
 # str，替换
@@ -308,7 +298,7 @@ def debouncedSaver(delaySec: float, saveFn):
             saveFn()   # 同步启动阶段(事件循环还没起来),没有循环可以丢任务,直接同步保存
             return
         state['pending'] = True
-        asyncio.create_task(_later())
+        state['task'] = asyncio.create_task(_later())  # 持强引用,避免task被GC回收
     return request
 
 # 加载
@@ -357,7 +347,9 @@ def rtWeb(data: dict) -> dict[str, Any]:
         web_pf = pf.copy()
         if "candle_begin_time" in web_pf.columns:
             time_col = pd.to_datetime(web_pf["candle_begin_time"], errors="coerce")
-            web_pf["time"] = [int(t.timestamp()) if pd.notna(t) else None for t in time_col]
+            if time_col.dt.tz is None:
+                time_col -= pd.Timedelta(hours=utc_now())
+            web_pf["time"] = [int(t.value // 1_000_000_000) if pd.notna(t) else None for t in time_col]
             web_pf.drop(columns=["candle_begin_time"], inplace=True)
         if "vol" in web_pf.columns and "volume" not in web_pf.columns:
             web_pf.rename(columns={"vol": "volume"}, inplace=True)

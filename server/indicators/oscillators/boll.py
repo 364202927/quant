@@ -45,7 +45,7 @@ class boll(baseIndicators):
 
     def _bollTrack(self, sor_pd: pdData) -> any:
         pf = sor_pd.copy()
-        sor_pd = sor_pd.get()
+        sor_pd = sor_pd.raw()
         close = sor_pd['close']
         pf['median'] = close.rolling(window=self._maDay).mean()
         pf['std'] = close.rolling(window=self._maDay).std(ddof=0)
@@ -62,7 +62,7 @@ class boll(baseIndicators):
 
     def _taBoll(self, sor_pd: pdData) -> any:
         pf = sor_pd.copy()
-        sor_pd = sor_pd.get()
+        sor_pd = sor_pd.raw()
         close = sor_pd['close'].values
         upper, median, lower = talib.BBANDS(close, timeperiod=self._maDay, nbdevup=self._stDev, nbdevdn=self._stDev, matype=0)
         pf['median'] = median

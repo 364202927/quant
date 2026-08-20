@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 from functools import reduce
+from typing import Any
 from server.utils import eSampleTs
 from server.utils.logger import err, log
 from server.utils.fileConfig import g_config
@@ -74,7 +75,7 @@ class pdData:
         # self.kline.get().drop(['draw'], axis=1, inplace=True)
 
     # 初始格式化
-    def format(self, dataOrTab, style='candle', utc=0):
+    def format(self, dataOrTab: Any, style: str = 'candle') -> pd.DataFrame:
         def candle():  # 原始数据合并(数据类型一定是float)
             if not dataOrTab:
                 self._pf = pd.DataFrame(columns=self._head)
@@ -109,9 +110,6 @@ class pdData:
                   'xml': xml,
                   'copy': copy},
                  key=style)
-        # 转换为当前utc时间
-        if utc != 0:
-            self._pf[self._frist()] += pd.Timedelta(hours=utc)
         # self._pf.drop_duplicates(subset=[self._frist()], inplace=True) #去重
         # self._pf.dropna(subset=[self._head[1]], inplace=True)  # 去除一天都没有交易的周期
         # self._pf = self._pf[self.__pdata[self._head[5]] > 0]  # 去除成交量为0的交易周期
@@ -127,16 +125,36 @@ class pdData:
         self._pf.reset_index(inplace=True)
         if headFormat:
             self._pf = self._pf[self._head]
-    # 返回index的数据
-    def get(self, cols='', key=''):
+    # 内部计算使用: 返回可修改的UTC0原型
+    def raw(self, cols: str | int = '', key: str = '') -> Any:
         if cols == '' and key == '':
             return self._pf
-        if isinstance(cols, int):# and isinstance(key, int):
+        if isinstance(cols, int) and key != '':
             return self._pf.iloc[cols][key]
-        elif key != '':
+        if key != '':
             return self._pf[key]
         if isinstance(cols, int):
             return self._pf.iloc[cols]
+
+    # 对外出口: 始终返回副本，默认将UTC0时间偏移到当前时区
+    def get(self, cols: str | int = '', key: str = '', offsetUtc: bool = True) -> Any:
+        data = self.raw(cols, key)
+        result = data.copy() if hasattr(data, 'copy') else data
+        if not offsetUtc or result is None:
+            return result
+
+        timeKey = 'candle_begin_time'
+        offset = pd.Timedelta(hours=utc_now())
+        if isinstance(result, pd.DataFrame) and timeKey in result.columns:
+            result[timeKey] = pd.to_datetime(result[timeKey]) + offset
+        elif isinstance(result, pd.Series):
+            if result.name == timeKey:
+                result = pd.to_datetime(result) + offset
+            elif timeKey in result.index:
+                result[timeKey] = pd.to_datetime(result[timeKey]) + offset
+        elif key == timeKey:
+            result = pd.to_datetime(result) + offset
+        return result
 
     def copy(self):
         return self._pf.copy()
@@ -234,10 +252,17 @@ class pdData:
                         key=key)
 
     # 重采样k线数据
-    def resample(self, timeframe, seTime=[]):
+    def resample(self, timeframe: str, seTime: list | None = None) -> pd.DataFrame:
+        seTime = seTime or []
         if len(seTime) > 0:  # 时间段剪裁
-            self._pf = self._pf[(self._pf[self._frist()] >= seTime[0]) &
-                                (self._pf[self._frist()] <= seTime[1])]
+            startTime = pd.to_datetime(seTime[0])
+            endTime = pd.to_datetime(seTime[1])
+            if isinstance(seTime[0], str):
+                startTime -= pd.Timedelta(hours=utc_now())
+            if isinstance(seTime[1], str):
+                endTime -= pd.Timedelta(hours=utc_now())
+            self._pf = self._pf[(self._pf[self._frist()] >= startTime) &
+                                (self._pf[self._frist()] <= endTime)]
         if timeframe == '5m':
             return self._pf
         # 重采样
@@ -245,12 +270,19 @@ class pdData:
             # rule = "right"
             # if timeframe == "w" or timeframe == 'm':
             #     rule = "left"
-            self._pf = self._pf.resample(rule=eSampleTs[timeframe], on=self._frist()).agg({  # ,label=rule, closed=rule
+            samplePf = self._pf
+            useLocalBoundary = timeframe in ('1D', '1W', '1M')
+            if useLocalBoundary:
+                samplePf = self._pf.copy()
+                samplePf[self._frist()] += pd.Timedelta(hours=utc_now())
+            self._pf = samplePf.resample(rule=eSampleTs[timeframe], on=self._frist()).agg({  # ,label=rule, closed=rule
                                                                                 self._head[1]: 'first',
                                                                                 self._head[2]: 'max',
                                                                                 self._head[3]: 'min',
                                                                                 self._head[4]: 'last',
                                                                                 self._head[5]: 'sum'})
+            if useLocalBoundary:
+                self._pf.index -= pd.Timedelta(hours=utc_now())
         # self._pf = self._pf[self._pf['vol'] > 0]        # 去除成交量为0的交易周期
         self._pf.reset_index(inplace=True)
         return self._pf
@@ -263,7 +295,6 @@ class pdData:
         totalSaved = 0
         save_pf = self._pf.copy()
         path = g_config.fils('marketsPath')
-        save_pf[self._frist()] -= pd.Timedelta(hours=utc_now())
         # 保存时按年份切分保存文件
         for year, yearData in save_pf.groupby(save_pf[self._frist()].dt.year):
             yearPath = os.path.join(path, str(year))
@@ -297,20 +328,22 @@ class pdData:
                     allData.append(pf)
         if not allData:
             return False
-        self.format(allData, style='concat', utc=utc_now())
+        self.format(allData, style='concat')
         self.setHead(self._pf.columns.tolist())
         # log(f"读取完成: {fileName}, 共 {len(allData)} 个文件, 总数据: {len(self._pf)}")
         return True
     
     #清洗数据,range_time: [start, end]不为空检测时间范围内的缺失数据,否则检测全量异常数据  //todo不要
-    def detection(self, timeFrame: str = '5m',range_time: list[str] = [], adjUtc = True) -> list[tuple]:
+    def detection(self, timeFrame: str = '5m', range_time: list | None = None,
+                  adjUtc: bool = True) -> list[tuple]:
+        range_time = range_time or []
         def offsetUtc(timeList: list[tuple]) -> list[tuple]: #调整时间
             if not adjUtc:
                 return timeList
             adjusted = []
             for tabTime in timeList:
                 tb, te = tabTime
-                adjusted.append((tb - pd.Timedelta(hours=(utc_now()-1)), te - pd.Timedelta(hours=(utc_now()+1)))) #对于缺失时间段获取宽度各扩大1小时
+                adjusted.append((tb - pd.Timedelta(hours=1), te + pd.Timedelta(hours=1)))
             return adjusted
         # 计算时间序列的周期间隔（中位数）
         def calc_freq_delta(times: pd.Series) -> pd.Timedelta:
@@ -341,6 +374,10 @@ class pdData:
         time_col = self._frist()
         if len(range_time) == 2:
             t_start, t_end = pd.to_datetime(range_time[0]), pd.to_datetime(range_time[1])
+            if isinstance(range_time[0], str):
+                t_start -= pd.Timedelta(hours=utc_now())
+            if isinstance(range_time[1], str):
+                t_end -= pd.Timedelta(hours=utc_now())
             times = pd.to_datetime(self._pf[time_col]).sort_values().reset_index(drop=True)
             times = times[(times >= t_start) & (times <= t_end)]
             if times.empty:

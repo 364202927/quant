@@ -236,7 +236,8 @@ class bybit(baseExchange):
         """设置保证金模式 marginMode: 'REGULAR_MARGIN'(普通) / 'PORTFOLIO_MARGIN'(组合保证金)"""
         return tryCatch(lambda: self._ccxt.privatePostV5AccountSetMarginMode(params={'setMarginMode': marginMode}))
 
-    def _marketKline(self, symbol: str, beginTime: int | None, endTime: int | None, timeframe: str = '5m', limit: int = 0):
+    def _marketKline(self, symbol: str, beginTime: int | None, endTime: int | None,
+                     timeframe: str = '5m', limit: int = 0) -> pd.DataFrame | None:
         """获取 K 线数据"""
         category, newSymbol = self._getCategory(symbol)
         effectiveLimit = limit if limit > 0 else self._maxLimit
@@ -256,8 +257,8 @@ class bybit(baseExchange):
             return None
 
         pd = pdData()
-        pd.format(rt['result']['list'], style='candle', utc=self._utc)
-        return pd.get()
+        pd.format(rt['result']['list'], style='candle')
+        return pd.raw()
 
     def depth(self, symbol: str, limit: int):
         """深度数据"""

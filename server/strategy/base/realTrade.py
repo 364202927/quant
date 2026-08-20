@@ -60,11 +60,11 @@ class realTrade(baseTrade):
     # ── 现货 ──
     def buy(self, symbol: str, totelPrice: float | str, orderBook: int = 0,price: float | None = None, inForce: str = 'GTC', exName: list[str] | None = None) -> None:
         data = self._spotOrder(symbol, kBuy, totelPrice, orderBook, price, inForce)
-        self._dispatch(eMarketId['preTrade'], exName, data)
+        self._dispatch(eMarketId['submit'], exName, data)
 
     def sell(self, symbol: str, totelPrice: float | str = 'bet:100',orderBook: int = 0, price: float | None = None,inForce: str = 'GTC', exName: list[str] | None = None) -> None:
         data = self._spotOrder(symbol, kSell, totelPrice, orderBook, price, inForce)
-        self._dispatch(eMarketId['preTrade'], exName, data)
+        self._dispatch(eMarketId['submit'], exName, data)
 
     def cencel(self, symbol: str, orderID: str = '',exName: list[str] | None = None) -> None:
         data = {
@@ -73,17 +73,17 @@ class realTrade(baseTrade):
             'symbol': symbol,
             'orderID': orderID,
         }
-        self._dispatch(eMarketId['oms'], exName, data)
+        self._dispatch(eMarketId['submit'], exName, data)
 
     # ── 合约 ──
     def openLong(self, symbol: str, totelPrice: float | str, orderBook: int = 0, price: float | None = None,lv: int = 0, isMarket: bool = False, inForce: str = 'GTC', exName: list[str] | None = None) -> None:
         data = self._swapOrder(symbol, kBuy, kLong, totelPrice, orderBook, price, lv, isMarket, inForce)
-        self._dispatch(eMarketId['preTrade'], exName, data)
+        self._dispatch(eMarketId['submit'], exName, data)
 
     def openShort(self, symbol: str, totelPrice: float | str,orderBook: int = 0, price: float | None = None, lv: int = 0, isMarket: bool = False,inForce: str = 'GTC', exName: list[str] | None = None) -> None:
         data = self._swapOrder(symbol, kSell, kShort, totelPrice, orderBook, price, lv, isMarket, inForce)
-        self._dispatch(eMarketId['preTrade'], exName, data)
+        self._dispatch(eMarketId['submit'], exName, data)
 
     def closePos(self, symbol: str, dir: str, totelPrice: float | str = 'bet:100', orderBook: int = 0,price: float | None = None, lv: int = 0, isMarket: bool = False, inForce: str = 'GTC', exName: list[str] | None = None) -> None:
         data = self._swapOrder(symbol, kClose, dir, totelPrice, orderBook, price, lv, isMarket, inForce)
-        self._dispatch(eMarketId['preTrade'], exName, data)
+        self._dispatch(eMarketId['submit'], exName, data)

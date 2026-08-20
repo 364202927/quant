@@ -1,11 +1,11 @@
 import copy
 from decimal import Decimal, ROUND_DOWN
-from server.utils import evtConnect, evtFireAsync, kEvt_Market, log, switchFn, evtReturn, slit, division,inRange,warn,time2ID
+from server.utils import evtConnect, kEvt_Market, log, switchFn, evtReturn, slit, division,inRange,warn,time2ID
 from server.market import eMarketId, kSwap, kBuy, kSell,kPm,kClose,kCancel,kLong,kShort
 from server.market.baseExchange import baseExchange
 
 class oms:
-    "本地订单管理：拆分/合并/本地余额校验,全订单必须走这个类"
+    "本地订单管理：算价/算量/本地余额校验与扣减。由 gateway 流水线直接调用,只在总线上监听余额更新"
 
     def __init__(self, exFn=None):
         self._localFree = evtReturn(kEvt_Market, 'storageCenter', eMarketId['gBalance']) or {}  # 本地缓存的 center 数据
@@ -26,53 +26,62 @@ class oms:
                     self._mergeBalance(target, cleanData)
                     if id_ == eMarketId['balance']:
                         self._logLocalFree(exId, account, target)
-        def _oms():
-            data = args[1] if len(args) > 1 else {}
-            orderType = data.get('type', '')
-            direction = data.get('dir', '')
-            isPm = orderType == kSwap
-
-            # 1. 校验 + 准备参数 (价格/数量)
-            result = self._checkOrder(data, isPm)
-            if result is not True:
-                warn(f"[oms] 拦截: {result}")
-                return
-
-            if orderType == kCancel:
-                self._send(data)
-                return
-
-            # 2. 余额处理
-            isClose = direction == kClose or (direction == kSell and not isPm)
-            if isClose:
-                self._close(data)
-            else:
-                # 买入/开仓: 扣减 consumeCoin 余额
-                fixTotel = (data.get('price') or 0) * (data.get('amount') or 0) or data.get('totelPrice', 0)
-                if isPm:
-                    localData = self._localCoin(data.get('exName'), isPm)
-                    consumeCoin = 'free'
-                    money = localData.get(consumeCoin, 0) * 0.9
-                else:
-                    localData = self._localCoin(data.get('exName'), isPm, key='total')
-                    consumeCoin = data.get('consumeCoin', 'USDT')
-                    money = localData.get(consumeCoin, 0)
-                if money < fixTotel:
-                    warn(f"下单金额不足: {fixTotel}, 余额: {localData.get(consumeCoin, 0)}")
-                    return
-                localData[consumeCoin] -= fixTotel
-
-            # 3. 记录 + 发送
-            self._send(data)
-
-        switchFn({eMarketId['oms']: _oms,
-                  eMarketId['balance']: _balanceUpdate,
+        switchFn({eMarketId['balance']: _balanceUpdate,
                   eMarketId['wsBalance']: _balanceUpdate}, key=id_)
 
+    # ── gateway 流水线入口: 校验+算价算量+扣本地余额。通过返回True,拦截返回原因字符串 ──
+    async def prepare(self, data: dict):
+        orderType = data.get('type', '')
+        direction = data.get('dir', '')
+        isPm = orderType == kSwap
+
+        # 1. 校验 + 准备参数 (价格/数量)
+        result = await self._checkOrder(data, isPm)
+        if result is not True:
+            return result
+        if orderType == kCancel:
+            return True
+
+        # 2. 余额处理
+        if direction == kClose or (direction == kSell and not isPm):
+            self._close(data)
+        else:
+            # 买入/开仓: 扣减 consumeCoin 余额
+            fixTotel = (data.get('price') or 0) * (data.get('amount') or 0) or data.get('totelPrice', 0)
+            if isPm:
+                key, consumeCoin = kPm, 'free'
+                money = self._localCoin(data.get('exName'), isPm).get(consumeCoin, 0) * 0.9
+            else:
+                key, consumeCoin = 'total', data.get('consumeCoin', 'USDT')
+                money = self._localCoin(data.get('exName'), isPm, key=key).get(consumeCoin, 0)
+            if money < fixTotel:
+                return f"下单金额不足: {fixTotel}, 可用: {money}"
+            self._deduct(data, key, consumeCoin, fixTotel)
+
+        # 3. 生成幂等id,供WS回报匹配
+        if not data.get('clientOrderId'):
+            data['clientOrderId'] = self._genClientOrderId()
+        return True
+
+    # 扣减本地余额并记录,供下单失败时 rollback
+    def _deduct(self, data: dict, key: str, coin: str, amount: float) -> None:
+        localData = self._localCoin(data.get('exName'), False, key=key)
+        localData[coin] = localData.get(coin, 0) - amount
+        data['_deduct'] = {'key': key, 'coin': coin, 'amount': amount}
+
+    # 下单失败: 把 prepare 阶段的本地扣减加回去,避免本地余额单向漂移
+    def rollback(self, data: dict) -> None:
+        rec = data.pop('_deduct', None)
+        if not rec:
+            return
+        localData = self._localCoin(data.get('exName'), False, key=rec['key'])
+        localData[rec['coin']] = localData.get(rec['coin'], 0) + rec['amount']
+        log(f"[oms] 下单失败,回滚本地扣减: {rec['key']}/{rec['coin']} +{rec['amount']}")
+
     # ── 当前挂单最优价 ──
-    def _BBO(self, ex: baseExchange, symbol: str, dir: str, order: int,
-             aggressive: bool = False) -> float:
-        book = ex.orderBook(symbol, limit=max(10, order + 4))
+    async def _BBO(self, ex: baseExchange, symbol: str, dir: str, order: int,
+                   aggressive: bool = False) -> float:
+        book = await ex.orderBookAsync(symbol, limit=max(10, order + 4))
         isBuy = dir == kBuy
         if aggressive:
             target = book['asks'] if isBuy else book['bids']
@@ -130,7 +139,7 @@ class oms:
         return target.get(key, {}).get(coin, 0)
 
     # ── 校验订单 + 准备价格/数量 ──
-    def _checkOrder(self, data: dict, isPm: bool):
+    async def _checkOrder(self, data: dict, isPm: bool):
         exName = data.get('exName', '')
         symbol = data.get('symbol', '')
         direction = data.get('dir', '')
@@ -200,7 +209,7 @@ class oms:
                     return f"卖出数量低于最小下单量: 当前 {amount}, 最小 {amountMin}"
                 data['amount'] = amount
                 if orderPrice is None and orderBook >= 0 and ex:
-                    orderPrice = self._BBO(ex, symbol, direction, orderBook, not data.get('isMarket', False))
+                    orderPrice = await self._BBO(ex, symbol, direction, orderBook, not data.get('isMarket', False))
                     data['price'] = orderPrice
                 if orderPrice:
                     data['totelPrice'] = orderPrice * amount
@@ -210,8 +219,8 @@ class oms:
 
         # 获取 BBO 价格 (非卖出已处理的情况)
         if orderPrice is None and orderBook >= 0 and ex:
-            orderPrice = self._BBO(ex, symbol, data.get('_orderLookupDir', direction), orderBook,
-                                   not data.get('isMarket', False))
+            orderPrice = await self._BBO(ex, symbol, data.get('_orderLookupDir', direction), orderBook,
+                                         not data.get('isMarket', False))
             data['price'] = orderPrice
 
         # 计算数量
@@ -236,9 +245,8 @@ class oms:
         isPm = data.get('type', '') == kSwap
          # 卖现货: 扣减币余额
         if direction == kSell and not isPm:
-            localData = self._localCoin(data.get('exName'), False)
             consumeCoin = data.get('consumeCoin', '')
-            localData[consumeCoin] -= data.get('amount', 0)
+            self._deduct(data, 'free', consumeCoin, data.get('amount', 0))
             return
         # elif direction == kClose:
         # 平仓合约: 从持仓数据设置反向
@@ -268,28 +276,6 @@ class oms:
             if item.get('side') == target:
                 return item
         return {}
-
-    # ── 记录 + 发送 ──
-    def _send(self, data: dict):
-        # print('~~~send~~~~', data)
-        #  记录订单详情,用orders.py记录
-            # orderDetail = {
-            #     'time': time.time(),
-            #     'taskName': taskName,
-            #     'symbol': symbol,
-            #     'type': orderType,
-            #     'dir': direction,
-            #     'totelPrice': totelPrice,
-            #     'price': orderPrice,
-            #     'amount': amount,
-            #     'exName': data.get('exName', ''),
-            #     'status': 'pending',
-            # }
-            # self._taskOrders.setdefault(taskName, []).append(orderDetail)
-
-        if data.get('type') != kCancel and not data.get('clientOrderId'):
-            data['clientOrderId'] = self._genClientOrderId()
-        evtFireAsync(kEvt_Market, eMarketId['order'], data)
 
     def _genClientOrderId(self) -> str:
         self._clientOrderSeq += 1

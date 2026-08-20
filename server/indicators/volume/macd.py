@@ -46,7 +46,7 @@ class macd(baseIndicators):
 
     def _macdTrack(self, sor_pd: pdData) -> any:
         pf = sor_pd.copy()
-        sor_pd = sor_pd.get()
+        sor_pd = sor_pd.raw()
         close = sor_pd['close']
         # DIF = 快EMA - 慢EMA
         dif = close.ewm(span=self._fast, adjust=False).mean() - close.ewm(span=self._slow, adjust=False).mean()
@@ -58,7 +58,7 @@ class macd(baseIndicators):
 
     def _taMacd(self, sor_pd: pdData) -> any:
         pf = sor_pd.copy()
-        sor_pd = sor_pd.get()
+        sor_pd = sor_pd.raw()
         dif, dea, hist = talib.MACD(sor_pd['close'].values, fastperiod=self._fast, slowperiod=self._slow, signalperiod=self._signal)
         pf['dif'] = pd.Series(dif).round(2).values
         pf['dea'] = pd.Series(dea).round(2).values

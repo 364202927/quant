@@ -43,7 +43,7 @@ class rsi(baseIndicators):
 
     def _rsiTrack(self, sor_pd: pdData) -> any:
         pf = sor_pd.copy()
-        sor_pd = sor_pd.get()
+        sor_pd = sor_pd.raw()
         delta = sor_pd['close'].diff()
         # 向量化计算收益和损失
         gain = delta.clip(lower=0)
@@ -59,6 +59,6 @@ class rsi(baseIndicators):
 
     def _taRsi(self, sor_pd: pdData) -> any:
         pf = sor_pd.copy()
-        sor_pd = sor_pd.get()
+        sor_pd = sor_pd.raw()
         pf['rsi'] = talib.RSI(sor_pd['close'].values, timeperiod=self._period).round(2)
         return pf

@@ -66,17 +66,25 @@ class okx(baseExchange):
         return rt
 
     # spot现货，swap永续，future期权              symbol:BTC-USD-SWAP #BTC/USDT
-    def getKline(self, symbol, seTime, timeframe='5m', limit=0):
+    def _marketKline(self, symbol: str, beginTime: int | None, endTime: int | None,
+                     timeframe: str = '5m', limit: int = 0) -> pd.DataFrame | None:
         category, newSymbol = slit(symbol, '_')
-        params = {'instId': strReplace(newSymbol),
-                  # okx获取k线特别奇葩需要延后一天，可用其他币安k线替代
-                  'after': str2ms(seTime[0], 24),
+        params = {'instId': newSymbol,
                   'bar': timeframe,  # [1m/3m/5m/15m/30m/1H/2H/4H]
                   'limit': limit == 0 and self._maxLimit or limit}
+        if beginTime is not None:
+            params['before'] = str(max(beginTime - 1, 0))
+        if endTime is not None:
+            params['after'] = str(endTime)
         if category == 'spot':
             kLineData = self._ccxt.publicGetMarketHistoryIndexCandles(
                 params=params)
         elif category == "swap":
             kLineData = self._ccxt.publicGetMarketHistoryCandles(params=params)
-        self._pd.format(kLineData['data'], style='candle', utc=self._utc)
-        return self._pd.get()
+        else:
+            raise ValueError(f"未知的交易品种类型: {category!r} (symbol={symbol!r})")
+        if not kLineData or not kLineData.get('data'):
+            return None
+        pdata = pdData()
+        pdata.format(kLineData['data'], style='candle')
+        return pdata.raw()

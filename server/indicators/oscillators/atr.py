@@ -33,7 +33,7 @@ class atr(baseIndicators):
 
     def _atrTrack(self, sor_pd: pdData) -> any:
         pf = sor_pd.copy()
-        sor_pd = sor_pd.get()
+        sor_pd = sor_pd.raw()
         prev_close = sor_pd['close'].shift()
         # 计算真实波幅(TR): max(high-low, |high-prev_close|, |low-prev_close|)
         tr = np.maximum(
@@ -47,7 +47,7 @@ class atr(baseIndicators):
 
     def _taAtr(self, sor_pd: pdData) -> any:
         pf = sor_pd.copy()
-        sor_pd = sor_pd.get()
+        sor_pd = sor_pd.raw()
         high, low, close = sor_pd['high'].values, sor_pd['low'].values, sor_pd['close'].values
         pf['tr'] = talib.TRANGE(high, low, close)
         pf['atr'] = talib.ATR(high, low, close, timeperiod=self._period)

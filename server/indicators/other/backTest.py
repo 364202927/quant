@@ -378,7 +378,7 @@ class backTest(baseIndicators):
     
     # 回测计算
     def _testing(self, statistical: pdData) -> dict:
-        df = statistical.get().copy()
+        df = statistical.raw().copy()
         n_trades = len(df)
         if n_trades == 0:
             return {

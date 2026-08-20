@@ -18,7 +18,7 @@ class demoVwap(testCTA, testTrade):
         self.regIndicators({"vwap": "volume.vwap",
                             # 'ma':'trend.ma',
                             "backTest":"other.backTest"})
-        print("init demoVwap")
+        log("init demoVwap")
         # self.startStrategy()
         # exit()
 
@@ -37,7 +37,7 @@ class demoVwap(testCTA, testTrade):
     #     self.backTest.calculate(self._kLine, self.getTransaction())
 
     def _signal(self, sorPf) -> list:
-        pf = sorPf.get().copy()
+        pf = sorPf.get()
         pf["typical_price"] = (pf["high"] + pf["low"] + pf["close"]) / 3
 
         trade_day = pf["candle_begin_time"].dt.date

@@ -82,26 +82,15 @@ class engine:
     #     self.__stop_event.set()
 
     async def run(self):
-        recoverable_errors = (# 崩溃可恢复类型
-            SyntaxError, TypeError, AttributeError, NameError,
-            ImportError, ValueError, KeyError, IndexError
-        )
-        #logic todo先不忽略错误
-        # try:
-        #     while True:
-        #         await self.__timeMgr.run()
-        # except recoverable_errors as e:
-        #     log(f"[崩溃]: {type(e).__name__}: {e}")
-        #     # if attempt == max_retries:
-        #     #     raise
-        #     log("[恢复] 尝试重启...")
-        #     await asyncio.sleep(1)
-        #     self.__stop_event.clear()
-        # except Exception as e:
-        #     log(f"[异常] {type(e).__name__}: {e}")
-        #     raise
+        # 单次迭代异常隔离: 策略回调抛异常不能让整个定时器静默死亡
+        # (否则表现为"定时器停摆,web/cli照常响应,外部完全看不出来")
         while True:
-            await self.__timeMgr.run()
+            try:
+                await self.__timeMgr.run()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                log(f"[engine] 定时器迭代异常: {e}")
 
     # def run(self, count=True):
     #     """兼容旧版本的同步运行接口"""

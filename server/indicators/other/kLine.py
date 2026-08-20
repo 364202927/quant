@@ -1,6 +1,6 @@
 import time
 from server.indicators.baseIndicators import *
-from server.utils import diff_Pdtime, reviseTime, log, err,timeFrame2Float,utc_now,kEvt_Market,evtFire,evtReturn
+from server.utils import diff_Pdtime, reviseTime, log, err,timeFrame2Float,kEvt_Market,evtFire,evtReturn
 from server.market import eMarketId
 kFileType = '.parquet'
 
@@ -36,7 +36,7 @@ class kLine(baseIndicators):
         # return pdResults
         # pass
         if not self._pd: return
-        pdResults = self._pd.get()
+        pdResults = self._pd.raw()
         for indicator in args:
             pdResults = indicator.calculateTa(pdResults)
         return pdResults
@@ -44,11 +44,11 @@ class kLine(baseIndicators):
     def calculateTa(self,*args: baseIndicators) -> pdData:
         return self.calculate(args)
     
-    # 返回最新的100条k线
-    def getCandles(self,symbol: str, seTime: list, timeFrame: str = '5m', cover:bool = True,save2File = True):
+    # 返回最新的100条k线;pd为None表示subscribe尚未预拉完成,由策略自行处理数据未就绪
+    def getCandles(self,symbol: str, seTime: list, timeFrame: str = '5m', cover:bool = True):
         pd = evtReturn(kEvt_Market, 'storageSubscribe', eMarketId['gcKline'], self._exName, symbol)
-        if timeFrame == '5m' and save2File:
-            pd.save2File(self._exName+'_'+ symbol + kFileType)
+        if pd is None:
+            return None
         if timeFrame != '5m':
             pd.resample(timeFrame,seTime)
         if cover:
@@ -67,26 +67,26 @@ class kLine(baseIndicators):
         if timeFrame != '5m':
            return pdData(data=self._ex.getKline(symbol, seTime, timeFrame), style='copy')
         #获取历史数据并剪裁
-        fileName = self._ex.name()+'_'+ symbol + kFileType
+        fileName = self._ex.get('id')+'_'+ symbol
         fullPd = pdData()
         fullPd.readFile(fileName,True)
-        fullPd.resample(seTime) 
-        timeRange = fullPd.detection(seTime)
+        fullPd.resample(timeFrame, seTime)
+        timeRange = fullPd.detection(timeFrame, seTime)
         # print("~~~~检查缺失数据~~~~~",len(timeRange),timeRange)
         if len(timeRange) == 0:
             return rtData(fullPd)
         #缺失的值再次从交易所获取
-        allData = [fullPd.get()]
+        allData = [fullPd.raw()]
         for tr in timeRange:
             # print("~~~~~缺失数据时间范围~~~~~",tr[0], tr[1])
             fixPd = pdData()#从交易所获取时间是原始时区
-            kLine = self._ex.getKline(symbol, [tr[0].strftime("%Y-%m-%d %H:%M:%S"), tr[1].strftime("%Y-%m-%d %H:%M:%S")])
-            fixPd.format(kLine, style ='copy', utc = utc_now()) #对齐到当前国家时区
+            kLine = self._ex.getKline(symbol, [tr[0], tr[1]])
+            fixPd.format(kLine, style ='copy')
             # print("~~~~~补全数据~~~~~",fixPd.get())
-            allData.append(fixPd.get())
+            allData.append(fixPd.raw())
         history = pdData(style='concat',data=allData)
         # print("~~~~再次检查缺失~~~~~",len(history.detection(timeFrame,seTime)),history.detection(timeFrame,seTime))
-        history.save2File(self._ex.name()+'_'+ symbol + kFileType)
+        history.save2File(fileName + kFileType)
         return rtData(history)
 
     # 返回最新的k线cover是否覆盖self._symbols  todo:转移到sub..这里可不要

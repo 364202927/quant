@@ -22,7 +22,7 @@ class ma(baseIndicators):
         return self._pd
 
     def _computeMaTa(self, pd: pdData) -> None:
-        pf = self._pd.get()
+        pf = self._pd.raw()
         close = pd['close'].values
         _ma_map = {'sma': talib.SMA,
             'ema': talib.EMA,
@@ -36,7 +36,7 @@ class ma(baseIndicators):
                         continue
                     pf[col_name] = pd.Series(fn(close, timeperiod=period)).round(2)
     def _computeMa(self, pd: pdData) -> None:
-        pf = self._pd.get()
+        pf = self._pd.raw()
         close = pd['close']
         for ma_item in self.ma:
             for col_name, spec in ma_item.items():

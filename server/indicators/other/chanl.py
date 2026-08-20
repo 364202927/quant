@@ -13,7 +13,7 @@ class chanl(baseIndicators):
         pass
         
     def calculate(self, pd: pdData):
-        return self.trend_chan(pd.get())
+        return self.trend_chan(pd.raw())
     def calculateTa(self, pd):
         # print("~~~~~calculateTa~~~~~~~",pd)
         return self.trend_chan(pd)
