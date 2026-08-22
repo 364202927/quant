@@ -7,15 +7,21 @@ kMarket, kLimit = 'MARKET', 'LIMIT'
 kFuture, kDelivery = 'future', 'delivery' #todo:不要了
 kLong, kShort = 'LONG', 'SHORT'
 
+# ccxt 统一后的订单失败终态。交易所原始状态会被 ccxt 转换成这些值之一。
+kOrderFailedStatuses: tuple[str, ...] = (
+    'cancel', 'canceled', 'cancelled', 'rejected', 'expired', 'failed'
+)
+
 
 # kEvt_Market 子消息 ID
 eMarketId = {
     # 缓存
     'balance':      1000,       # 初始化账号数据
     'positions':    1001,       # 初始化仓位数据
-    'preTrade':     1002,       # 事前风险
-    'oms':          1003,       # 下单数据 (需关键字type列出类型:kSpot/kSwap/kCancel)
-    'order':        1004,       # 下单
+    'submit':       1002,       # 策略下单意图入队 (需关键字type列出类型:kSpot/kSwap/kCancel)
+    'order':        1004,       # 下单已提交,记录待匹配
+    'orderFailed':  1005,       # 下单失败,回滚待匹配记录
+    'orderAccepted':1006,       # REST已返回交易所orderID,回填待匹配记录
 
     #ws
     'wsBalance':    1100,       #ws 个人数据更新
@@ -43,6 +49,7 @@ __all__ = [
     'kPm', 'kSpot', 'kSwap', 'kFuture', 'kDelivery',
     'kBuy', 'kSell', 'kFind', 'kMarket', 'kLimit',
     'kLong', 'kShort',
+    'kOrderFailedStatuses',
     # market event ids
     'eMarketId',
     'kPriority_ForceClose', 'kPriority_Cancel', 'kPriority_Normal',

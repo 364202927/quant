@@ -3,7 +3,9 @@ import pandas as pd
 import ccxt.pro as ccxtpro
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
-from server.market import kSpot, kSwap, kFuture, kDelivery, kBuy, kSell, kShort, kLong, kMarket, kLimit, eMarketId,kCancel
+from server.market import (kSpot, kSwap, kFuture, kDelivery, kBuy, kSell,
+                           kShort, kLong, kMarket, kLimit, eMarketId, kCancel,
+                           kOrderFailedStatuses)
 from server.utils import switch, switchFn, tryCatch, slit, str2ms, pdData, err, log, timeFrame2Float, evtFireAsync, kEvt_Market
 kSymbol = 'coinInfo'
 kWsConnectTimeout = 30  # 单个ws连接建立超时(秒)
@@ -350,7 +352,8 @@ class baseExchange:
             orders = await exchange.watch_orders(symbol)
             for order in orders:
                 log(f"[{market_type}] ws订单更新: {order['status']} : {order}")
-                if order['status'] not in ('closed', 'canceled'):
+                status = str(order.get('status') or '').lower()
+                if status != 'closed' and status not in kOrderFailedStatuses:
                     continue
                 evtFireAsync(kEvt_Market, eMarketId['wsOrder'], self.get('title'), order)
                 if market_type != 'SPOT':

@@ -58,7 +58,7 @@ class testTrade(contractCTA, realTrade):
         #合约
         if self._testStep == 0:
             # self.openLong(swapU('DOGE/USDT'), totelPrice = 5,price = 0.07,lv=2)
-            self.openLong(swapU('DOGE/USDT'), totelPrice = 5)
+            self.openLong(swapU('DOGE/USDT'), totelPrice = 5,isMarket= True)
         elif self._testStep == 1:
             # self.openShort(swapU('DOGE/USDT'), totelPrice = 5,price = 0.1)
             self.openShort(swapU('DOGE/USDT'), totelPrice = 5,isMarket= True)

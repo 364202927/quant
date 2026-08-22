@@ -1,7 +1,8 @@
 import asyncio
 from itertools import count
 from server.utils import log, warn, err, evtFireAsync, kEvt_Market
-from server.market import eMarketId, kCancel, kPriority_Normal, kPriority_Cancel
+from server.market import (eMarketId, kCancel, kPriority_Normal,
+                           kPriority_Cancel, kOrderFailedStatuses)
 from server.market.baseExchange import baseExchange
 
 class gateway:
@@ -99,5 +100,25 @@ class gateway:
             posSide=item.get('posSide'),
             lv=item.get('lv', 1),
             clientOrderId=item.get('clientOrderId'))
-        if result is None:
-            self._ex.requestBalanceRefresh()
+        if not result:
+            raise RuntimeError("交易所未返回订单数据")
+        status = str(result.get('status') or '').lower() if isinstance(result, dict) else ''
+        if status in kOrderFailedStatuses:
+            raise RuntimeError(f"交易所返回失败状态: {status}")
+        orderID = self._orderId(result)
+        if not orderID:
+            raise RuntimeError("交易所返回数据缺少订单ID")
+        item['orderID'] = orderID
+        evtFireAsync(kEvt_Market, eMarketId['orderAccepted'], item)
+
+    def _orderId(self, result: object) -> str:
+        if not isinstance(result, dict):
+            return ''
+        orderID = result.get('id') or result.get('orderId') or result.get('orderID')
+        info = result.get('info') or {}
+        if not orderID and isinstance(info, dict):
+            orderID = info.get('orderId') or info.get('ordId') or info.get('i')
+        data = result.get('data') or []
+        if not orderID and isinstance(data, list) and data and isinstance(data[0], dict):
+            orderID = data[0].get('orderId') or data[0].get('ordId')
+        return str(orderID or '')

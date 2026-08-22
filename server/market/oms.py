@@ -174,7 +174,8 @@ class oms:
             positions = data.get('_positions')
             if positions is None:
                 querySymbol = symbolInfo.get('id') if symbolInfo else symbol
-                positions = evtReturn(kEvt_Market, 'storageOrders', eMarketId['gPosit'], 'ex', querySymbol, exName)
+                positions = evtReturn(kEvt_Market, 'storageOrders', eMarketId['gPosit'],
+                                      'ex', querySymbol, exName, data.get('taskName', ''))
                 if not positions or exName not in positions:
                     return f"未找到持仓: {symbol} @ {exName}"
                 positions = positions[exName]
@@ -266,6 +267,7 @@ class oms:
                 data['posSide'] = kShort
                 data['orderDir'] = kBuy
             data['amount'] = float(pos.get('amount', data.get('amount', 0)))
+            data['_positionOrderIDs'] = pos.get('orderIDs') or [pos.get('orderID', '')]
 
     def _targetPosition(self, positions: list[dict], target: str | None) -> dict:
         if not positions:
