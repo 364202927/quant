@@ -24,7 +24,7 @@ class kLine(baseIndicators):
         # self.__subscription[exName] = symbols
         self._exName = exName
         # self._symbol = symbols
-        evtFire(kEvt_Market, eMarketId['scKline'], {exName:symbols})
+        evtFire(kEvt_Market, eMarketId['scKline'], {exName:symbols})  #订阅k线数据
 
     def calculate(self, *args: baseIndicators) -> pdData:
         # pdResults = {}

@@ -1,9 +1,10 @@
 import asyncio
-from server.utils import evtConnect, kEvt_Market,kEvt_GetTime, pdData,switchFn,diff_Pdtime,timeFrame2Float,kEvt_Time,evtFire,warn,log
-from server.market import eMarketId,baseExchange
+from server.utils import evtConnect, evtFireAsync, kEvt_Market, kEvt_GetTime, pdData, diff_Pdtime, timeFrame2Float, kEvt_Time, evtFire, warn,switchFn
+from server.market import eMarketId
+from server.market.baseExchange import baseExchange
 
 kFileType = '.parquet'
-
+kCheckOrderTime = '10s'
 # todo:这里要改
 class storageSubscribe:
     "k线/成交历史/深度数据,监听更新"
@@ -18,7 +19,7 @@ class storageSubscribe:
         self._exchanges = {}    #对应交易所,用于获取数据()
         evtConnect(kEvt_Market, self)
         evtConnect(kEvt_GetTime, self)
-        evtFire(kEvt_Time, 'subscribe', ['5m'])
+        evtFire(kEvt_Time, 'subscribe', [kCheckOrderTime, '5m','1h'])
 
     #全交易所初始化
     def setMarket(self, markets):
@@ -26,16 +27,21 @@ class storageSubscribe:
         self._exMarkets = markets
         self._exchanges = {}
         for ex in self._exMarkets.items():
-            exName = ex[1].get('id')
-            self._exchanges[exName] = ex[1]
+            exName, exchange = ex
+            self._exchanges[exName] = exchange
+            self._exchanges[exchange.get('id')] = exchange
 
     def evtProcess(self, key, *args):
-        # 5m定时: 异步预拉全部订阅K线到缓存,不阻塞事件循环
         if key == kEvt_GetTime:
-            if 'subscribe' in (args[1] or []):
-                asyncio.create_task(self._refreshAll())
+            keyTime = args[0]
+            if keyTime == kCheckOrderTime: #订单追踪
+                evtFireAsync(kEvt_Market, eMarketId['checkOrders'])
+            elif keyTime == '5m':       #k线订阅
+                pass
+            elif keyTime == '1h':       #保存k线数据
+                pass
             return
-        #
+
         if key != kEvt_Market: return
         id = args[0]
         def _addscKlne(): #更新订阅数据
@@ -60,6 +66,7 @@ class storageSubscribe:
         return switchFn({eMarketId['scKline']: _addscKlne,
                         eMarketId['gcKline']: _getCandles,},
                         key=id)
+
 
     # 冷启动预拉: 策略init()注册symbol后调用一次,避免首个周期无数据
     async def warmup(self) -> None:

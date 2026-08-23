@@ -1,10 +1,10 @@
+import copy
 import os
 from datetime import datetime, timezone
 from typing import Callable, Iterable
 from server.utils import evtConnect, kEvt_Market, switchFn, recordBuffer,log, warn, readFile, writeFile, debouncedSaver
 from server.utils.fileConfig import kOtherPath
-from server.market import (eMarketId, kSpot, kSwap, kBuy, kSell, kClose,
-                            kLong, kShort, kCancel, kOrderFailedStatuses)
+from server.market import (eMarketId, kSpot, kSwap, kBuy, kSell, kClose,kLong, kShort, kCancel, kOrderFailedStatuses)
 
 kOrdersStateFile = kOtherPath + 'orders.json'
 kHistoryDir = kOtherPath + 'history/'
@@ -58,6 +58,36 @@ class storageOrders:
             result = self._taskExchangePositions(symbol, account, taskName)
             return result or None
 
+        def _gOpenOrders():
+            result = []
+            for currentEx, tasks in self.__openOrders.items():
+                for currentTask, coins in tasks.items():
+                    for records in coins.values():
+                        for record in records:
+                            item = copy.deepcopy(record)
+                            item['exName'] = currentEx
+                            item['taskName'] = currentTask
+                            result.append(item)
+            return result or None
+
+        def _uOpenOrder():
+            data = args[1] if len(args) > 1 else {}
+            orderID = str(data.get('orderID') or '')
+            if not orderID:
+                return
+            exName = data.get('exName', '')
+            taskName = self._taskName(data.get('taskName'))
+            taskOrders = self.__openOrders.get(exName, {}).get(taskName, {})
+            for records in taskOrders.values():
+                for record in records:
+                    if str(record.get('orderID') or '') != orderID:
+                        continue
+                    for key in ('price', 'amount', 'retry'):
+                        if key in data:
+                            record[key] = data[key]
+                    self._requestSave()
+                    return
+
         # 记录oms通过的订单
         def _saveOrder():
             data = args[1] if len(args) > 1 else {}
@@ -78,11 +108,16 @@ class storageOrders:
                 'dir': direction,
                 'type': orderType,
                 'posSide': data.get('posSide'),
+                'orderDir': data.get('orderDir'),
                 'price': data.get('price'),
                 'amount': data.get('amount'),
                 'totelPrice': data.get('totelPrice', 0),
+                'isMarket': data.get('isMarket', False),
+                'inForce': data.get('inForce', 'GTC'),
+                'lv': data.get('lv', 1),
                 'taskName': taskName,
                 'positionOrderIDs': data.get('_positionOrderIDs', []),
+                'retry': data.get('retry', 0),
                 'time': self._orderTime(None),
             }
             self._warnDuplicateOpen(exName, taskName, coinId, record)
@@ -179,13 +214,15 @@ class storageOrders:
             self._requestSave()
             log("~~~~__taskHistory~~~~~",self.__taskHistory.buffer())
             
-
+        #消息处理
         result = switchFn({eMarketId['order']: _saveOrder,
                            eMarketId['orderFailed']: _failOrder,
                            eMarketId['orderAccepted']: _acceptOrder,
                            eMarketId['wsOrder']: _wsUpdateOrder,
                            eMarketId['gPosit']: _gPosit,
                            eMarketId['positions']: _verifyPositions,
+                           eMarketId['gOpenOrders']: _gOpenOrders,
+                           eMarketId['uOpenOrder']: _uOpenOrder,
                          }, key=marketId)
         return None if result is False else result
 

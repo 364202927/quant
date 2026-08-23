@@ -84,24 +84,33 @@ class binance(baseExchange):
             return self._acc[kPm].get('free') #联合账号可用金额
         return super().accFree(coin)
 
+    def _orderParams(self, category: str) -> dict:
+        if category in (kSwap, kFuture, kDelivery):
+            return {'portfolioMargin': True}
+        return {}
+
 	# 订单查询
-    def findOrder(self, symbol: str, orderId: int = -1, isOpen=False, isPos=True):
+    def findOrder(self, symbol: str, orderId: str | int = '', isPos=True, isOpen=False):
         id, category = '', ''
         if symbol:
             category, symbolInfo = self.coinInfo(symbol)
             id = symbolInfo.get('id')
+        targetId = str(orderId) if str(orderId) not in ('', '-1') else ''
         # 现货挂单
         if category == kSpot:
             open_orders = self._ccxt.fetch_open_orders(id)
-            if orderId >= 0:
-                open_orders = [o.get('info') for o in open_orders
-                               if o.get('info')['symbol'] == id or o.get('info')['orderId'] == orderId]
+            if targetId:
+                open_orders = [o for o in open_orders
+                               if str(o.get('id') or o.get('info', {}).get('orderId') or '') == targetId]
             return open_orders
         open_orders, pos_orders = [], []
         if isOpen:
             open_orders = self._ccxt.papi_get_um_openorders()
             if id:
                 open_orders = [o for o in open_orders if o['symbol'] == id]
+            if targetId:
+                open_orders = [o for o in open_orders
+                               if str(o.get('orderId') or o.get('id') or '') == targetId]
         if isPos:
             pos_orders = [{'symbol': o['symbol'],
                            'dir': (kBuy if float(o['positionAmt']) > 0 else kSell) + '_' + o['positionSide'],
@@ -114,6 +123,8 @@ class binance(baseExchange):
                           if float(o['positionAmt']) != 0]
             if id:
                 pos_orders = [p for p in pos_orders if p['symbol'] == id]
+        if not isPos:
+            return open_orders
         return open_orders, pos_orders
     # ── 合约下单 ──
     def _contractOrder(self, state: str, symbol: dict, amount: float, isMarket: bool, inForce: str, price: float | None = None, lv: int = 1, posSide: str | None = None, clientOrderId: str | None = None):

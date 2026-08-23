@@ -1,6 +1,7 @@
+import asyncio
 import copy
 from decimal import Decimal, ROUND_DOWN
-from server.utils import evtConnect, kEvt_Market, log, switchFn, evtReturn, slit, division,inRange,warn,time2ID
+from server.utils import evtConnect, evtFireAsync, kEvt_Market, log, switchFn, evtReturn, slit, division,inRange,warn,time2ID
 from server.market import eMarketId, kSwap, kBuy, kSell,kPm,kClose,kCancel,kLong,kShort
 from server.market.baseExchange import baseExchange
 
@@ -11,6 +12,7 @@ class oms:
         self._localFree = evtReturn(kEvt_Market, 'storageCenter', eMarketId['gBalance']) or {}  # 本地缓存的 center 数据
         self._getEx = exFn            # exName → baseExchange
         self._clientOrderSeq = 0      # 自增序号,配合 time2ID 保证并发下单时 clientOrderId 不撞车
+        self._checkingOrders = False  # 防止上次定时检查未结束时重复处理同一批挂单
         evtConnect(kEvt_Market, self)
 
     def evtProcess(self, key, *args):
@@ -26,8 +28,134 @@ class oms:
                     self._mergeBalance(target, cleanData)
                     if id_ == eMarketId['balance']:
                         self._logLocalFree(exId, account, target)
+
+        def _checkOrders():
+            if self._checkingOrders:
+                return
+            self._checkingOrders = True
+            asyncio.create_task(self._checkOrders())
+
         switchFn({eMarketId['balance']: _balanceUpdate,
-                  eMarketId['wsBalance']: _balanceUpdate}, key=id_)
+                  eMarketId['wsBalance']: _balanceUpdate,
+                  eMarketId['checkOrders']: _checkOrders}, key=id_)
+
+    async def _checkOrders(self) -> None:
+        try:
+            records = evtReturn(kEvt_Market, 'storageOrders', eMarketId['gOpenOrders']) or []
+            if not records:
+                return
+            for record in records:
+                try:
+                    await self._checkOpenOrder(record)
+                except Exception as e:
+                    warn(f"[oms] 订单追踪失败 {record.get('symbol', '')}/"
+                         f"{record.get('orderID', '')}: {e}")
+        finally:
+            self._checkingOrders = False
+
+    async def _checkOpenOrder(self, record: dict) -> None:
+        orderID = str(record.get('orderID') or '')
+        exName = record.get('exName', '')
+        symbol = record.get('symbol', '')
+        ex = self._getEx(exName) if self._getEx else None
+        if not ex or not orderID or not symbol:
+            return
+
+        orders = await ex.findOrderAsync(symbol, orderID, isPos=False, isOpen=True)
+        order = self._findOpenOrder(orders, orderID)
+        if not order:
+            return
+
+        retry = int(record.get('retry') or 0) + 1
+        update = {'exName': exName, 'taskName': record.get('taskName'),
+                  'orderID': orderID, 'retry': retry}
+        evtFireAsync(kEvt_Market, eMarketId['uOpenOrder'], update)
+        if retry > 3:
+            await self._replaceOpenOrder(ex, record)
+            return
+
+        book = await ex.orderBookAsync(symbol, limit=5) or {}
+        direction = record.get('dir')
+        side = book.get('asks' if direction == kBuy else 'bids', [])
+        if not side:
+            return
+        newPrice = float(side[0][0])
+        remaining = self._orderRemaining(order, record)
+        amount = self._orderAmount(record, newPrice, remaining, ex)
+        if amount <= 0:
+            return
+        result = await ex.editOrderAsync(orderID, symbol, direction, amount, newPrice)
+        if not result:
+            raise RuntimeError('改单未返回订单数据')
+        update.update(price=newPrice, amount=amount)
+        evtFireAsync(kEvt_Market, eMarketId['uOpenOrder'], update)
+        log(f"[oms] 修改挂单成功: {exName} {symbol} orderID={orderID} "
+            f"price={newPrice} amount={amount} total={record.get('totelPrice')} "
+            f"retry={retry}")
+
+    async def _replaceOpenOrder(self, ex: baseExchange, record: dict) -> None:
+        orderID = str(record.get('orderID') or '')
+        symbol = record.get('symbol', '')
+        cancelResult = await ex.order(kCancel, symbol, orderID, 0)
+        if not cancelResult:
+            raise RuntimeError(f'撤销原挂单失败: {orderID}')
+        remaining = self._orderRemaining(cancelResult, record)
+        if remaining <= 0:
+            ex.requestBalanceRefresh()
+            return
+
+        replacement = copy.deepcopy(record)
+        replacement.update(orderID='', clientOrderId='', amount=remaining,
+                           retry=0, isMarket=True, price=None, orderBook=-1,
+                           _replaceOrder=True)
+        if replacement.get('dir') == kClose and not replacement.get('orderDir'):
+            replacement['orderDir'] = (
+                kSell if replacement.get('posSide') == kLong else kBuy)
+        evtFireAsync(kEvt_Market, eMarketId['submit'], replacement)
+        log(f"[oms] 挂单超过3次未成交,已撤单并提交市价替换: {symbol} "
+            f"oldOrderID={orderID} amount={remaining}")
+
+    def _findOpenOrder(self, orders: object, orderID: str) -> dict | None:
+        if isinstance(orders, tuple):
+            orders = orders[0]
+        if isinstance(orders, dict):
+            orders = [orders]
+        if not isinstance(orders, list):
+            return None
+        for order in orders:
+            info = order.get('info') or {}
+            currentID = order.get('id') or order.get('orderId') or info.get('orderId')
+            if str(currentID or '') == orderID:
+                return order
+        return None
+
+    def _orderRemaining(self, order: dict, record: dict) -> float:
+        remaining = order.get('remaining')
+        try:
+            if remaining is not None:
+                return max(float(remaining), 0.0)
+        except (TypeError, ValueError):
+            pass
+        info = order.get('info') or order
+        try:
+            amount = float(order.get('amount') or info.get('origQty') or info.get('q') or 0)
+            filled = float(order.get('filled') or info.get('executedQty') or info.get('z') or 0)
+            if amount > 0:
+                return max(amount - filled, 0.0)
+        except (TypeError, ValueError):
+            pass
+        return float(record.get('amount') or 0.0)
+
+    def _orderAmount(self, record: dict, price: float, remaining: float,
+                     ex: baseExchange) -> float:
+        total = float(record.get('totelPrice') or 0.0)
+        oldPrice = float(record.get('price') or 0.0)
+        target = total / price if total > 0 else remaining
+        if oldPrice > 0 and remaining < float(record.get('amount') or remaining):
+            target = remaining * oldPrice / price
+        _, info = ex.coinInfo(record.get('symbol', ''))
+        step = info.get('step') if info else None
+        return self._floorAmount(target, step)
 
     # ── gateway 流水线入口: 校验+算价算量+扣本地余额。通过返回True,拦截返回原因字符串 ──
     async def prepare(self, data: dict):
@@ -40,6 +168,11 @@ class oms:
         if result is not True:
             return result
         if orderType == kCancel:
+            return True
+
+        if data.get('_replaceOrder'):
+            if not data.get('clientOrderId'):
+                data['clientOrderId'] = self._genClientOrderId()
             return True
 
         # 2. 余额处理
@@ -79,8 +212,7 @@ class oms:
         log(f"[oms] 下单失败,回滚本地扣减: {rec['key']}/{rec['coin']} +{rec['amount']}")
 
     # ── 当前挂单最优价 ──
-    async def _BBO(self, ex: baseExchange, symbol: str, dir: str, order: int,
-                   aggressive: bool = False) -> float:
+    async def _BBO(self, ex: baseExchange, symbol: str, dir: str, order: int,aggressive: bool = False) -> float:
         book = await ex.orderBookAsync(symbol, limit=max(10, order + 4))
         isBuy = dir == kBuy
         if aggressive:
@@ -244,7 +376,7 @@ class oms:
     def _close(self, data: dict):
         direction = data.get('dir', '')
         isPm = data.get('type', '') == kSwap
-         # 卖现货: 扣减币余额
+        # 卖现货: 扣减币余额
         if direction == kSell and not isPm:
             consumeCoin = data.get('consumeCoin', '')
             self._deduct(data, 'free', consumeCoin, data.get('amount', 0))

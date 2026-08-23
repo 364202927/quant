@@ -54,9 +54,9 @@ class baseExchange:
         self._title = title
 
     def showApi(self):
-        print("ccxt版本：", ccxt.__version__, "public/private + get/post + path, 驼峰编码")
-        print("~~~~ccxt私有~~~~~\n", dir(self._ccxt))
-        print('\n~~~~支持信息~~~~~~\n', self._ccxt.has)
+        log("ccxt版本：", ccxt.__version__, "public/private + get/post + path, 驼峰编码")
+        log("~~~~ccxt私有~~~~~\n", dir(self._ccxt))
+        log('\n~~~~支持信息~~~~~~\n', self._ccxt.has)
 
     #账户信息
     def balance(self,isSpot = True):
@@ -245,6 +245,14 @@ class baseExchange:
     async def orderBookAsync(self, symbol: str, limit: int = 5):
         return await self._call(self.orderBook, symbol, limit)
 
+    async def findOrderAsync(self, symbol: str, orderID: str = '',
+                             isPos: bool = True, isOpen: bool = False):
+        return await self._call(self.findOrder, symbol, orderID, isPos, isOpen)
+
+    async def editOrderAsync(self, orderID: str, symbol: str, side: str,
+                             amount: float, price: float):
+        return await self._call(self.editOrder, orderID, symbol, side, amount, price)
+
     async def getKlineAsync(self, symbol: str, seTime: list, timeframe: str = '5m', limit: int = 0):
         return await self._call(self.getKline, symbol, seTime, timeframe, limit)
 
@@ -265,6 +273,20 @@ class baseExchange:
             err("batchOrders: 订单数量需在1-5之间")
             return []
         return self._batchOrders(category, orders)
+
+    def editOrder(self, orderID: str, symbol: str, side: str,
+                  amount: float, price: float) -> dict | None:
+        category, symbolInfo = self.coinInfo(symbol)
+        if not symbolInfo or not orderID:
+            return None
+        params = self._orderParams(category)
+        return self._ccxt.edit_order(
+            str(orderID), symbolInfo.get('symbol') or symbolInfo.get('id'),
+            'limit', side, amount, price, params)
+
+    def _orderParams(self, category: str) -> dict:
+        """交易所/账户类型相关的 fetch/edit 参数。"""
+        return {}
     
     # WebSocket 入口
     async def run(self) -> None:

@@ -347,7 +347,12 @@ def rtWeb(data: dict) -> dict[str, Any]:
         web_pf = pf.copy()
         if "candle_begin_time" in web_pf.columns:
             time_col = pd.to_datetime(web_pf["candle_begin_time"], errors="coerce")
-            if time_col.dt.tz is None:
+            if isinstance(time_col.dtype, pd.DatetimeTZDtype):
+                # get() may return timezone-aware local timestamps; epoch is always UTC.
+                time_col = time_col.dt.tz_convert('UTC')
+            elif web_pf.attrs.get('pdData_time_basis') == 'local':
+                # A legacy/naive local copy needs the local offset removed before
+                # serializing the instant as a UTC epoch.
                 time_col -= pd.Timedelta(hours=utc_now())
             web_pf["time"] = [int(t.value // 1_000_000_000) if pd.notna(t) else None for t in time_col]
             web_pf.drop(columns=["candle_begin_time"], inplace=True)

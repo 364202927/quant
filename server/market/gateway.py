@@ -67,11 +67,15 @@ class gateway:
         reason = self._preTrade.check(data, self._ex)
         if isinstance(reason, str):
             warn(f"[preTrade] 拦截: {reason}")
+            if data.get('_replaceOrder'):
+                self._ex.requestBalanceRefresh()
             return
 
         reason = await self._oms.prepare(data)
         if reason is not True:
             warn(f"[oms] 拦截: {reason}")
+            if data.get('_replaceOrder'):
+                self._ex.requestBalanceRefresh()
             return
 
         # 先记录后发单: WS回报可能早于下单REST响应返回,顺序颠倒会导致回报匹配不到记录
