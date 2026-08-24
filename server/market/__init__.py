@@ -33,6 +33,9 @@ eMarketId = {
     'gcKline':      1300,       #获取k线
     'gBalance':     1301,       #获得center balance数据
     'gPosit' :      1302,       #检测交易所是否存在持仓
+    'gOpenOrders':  1303,       #获取本地待成交订单
+    'uOpenOrder':   1304,       #更新本地待成交订单追踪信息
+    'checkOrders':  1305,       #检查待成交订单
 }
 
 # oms下单优先度
