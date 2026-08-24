@@ -7,16 +7,18 @@ kMaxLimit = 100  # 最大k线数据
 class okx(baseExchange):
     _name = "okx"
 
-    def __init__(self, description):
+    def __init__(self, description: str):
         super().__init__(description, kMaxLimit)
 
-    def create(self, config):
-        self._ccxt = ccxt.okx()
-        self._ccxt.apiKey = config['apiKey']
-        self._ccxt.secret = config['secret']
-        self._ccxt.password = config['passphrase']
-        self._ccxt.timeout = 3000
-        self._ccxt.enableRateLimit = True
+    def _create(self, config: dict) -> None:
+        super()._create(config)
+        self._ccxt = ccxt.okx({
+            'apiKey': config['apiKey'],
+            'secret': config['secret'],
+            'password': config['passphrase'],
+            'timeout': 3000,
+            'enableRateLimit': True,
+        })
 
     # def showApi(self):
     #     print("~~~~私有~~~~~",*list(dir(ccxt.okx())), sep='\n')

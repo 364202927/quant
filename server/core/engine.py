@@ -105,21 +105,27 @@ class engine:
     #         log("用户中断，正在退出...")
 
     # 创建一个任务
-    def _newTask(self, tabStrategy):
-        for strategyName in tabStrategy:
+    async def _newTask(self, tabStrategy: list[str]) -> None:
+        async def _bind(strategyName: str) -> None:
             objTask = task()
-            if not objTask.bind(strategyName):
-                continue
-            self.__taskMgr[objTask.get("className")] = objTask
+            try:
+                if await objTask.bind(strategyName):
+                    self.__taskMgr[objTask.get("className")] = objTask
+            except asyncio.CancelledError:
+                raise
+            except Exception as exception:
+                log(f"策略初始化失败 {strategyName}: {exception}")
+
+        await asyncio.gather(*(_bind(strategyName) for strategyName in tabStrategy))
 
     # 加载strategy文件下全部策略
-    def loadTask(self, projectName):
+    async def loadTask(self, projectName: str) -> None:
         fileList = path2File(kStrategyFile2 + projectName, '.py')
         taskList = [projectName + '.' + file.split('.')[0] for file in fileList]
-        self._newTask(taskList)
+        await self._newTask(taskList)
 
     # 根据策略文件加载
-    def loadTaskList(self, file=kStartFile):
+    async def loadTaskList(self, file: str = kStartFile) -> None:
         taskList = []
         config = readFile(file) #todo:修改
         for fileName in config:
@@ -128,4 +134,4 @@ class engine:
                 className = classTab[i]
                 taskList.append(fileName + '.' + className)
         log("加载文件：", taskList)
-        self._newTask(taskList)
+        await self._newTask(taskList)

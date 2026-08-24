@@ -2,11 +2,10 @@ import asyncio,ccxt,traceback
 import pandas as pd
 import ccxt.pro as ccxtpro
 from concurrent.futures import ThreadPoolExecutor
-from functools import partial
 from server.market import (kSpot, kSwap, kFuture, kDelivery, kBuy, kSell,
                            kShort, kLong, kMarket, kLimit, eMarketId, kCancel,
                            kOrderFailedStatuses)
-from server.utils import switch, switchFn, tryCatch, slit, str2ms, pdData, err, log, timeFrame2Float, evtFireAsync, kEvt_Market
+from server.utils import switch, switchFn, tryCatch, slit, str2ms, pdData, err, log, timeFrame2Float, evtFireAsync, kEvt_Market, threadCall
 kSymbol = 'coinInfo'
 kWsConnectTimeout = 30  # 单个ws连接建立超时(秒)
 
@@ -27,19 +26,21 @@ class baseExchange:
         self._info = { kSymbol: {}, 'api': {}} #coin币种信息,api交易所api信息
         self._balanceRefreshPending = False
         self._balanceRefreshDelay = 1.0
+        self._klineWs: dict[str, ccxtpro.Exchange] = {}
         self.wsReady = asyncio.Event()   # REST预热完成+WS订阅任务已创建(不等待首条推送,避免无限等待)
         # 单worker: ccxt同步实例内部的requests.Session和nonce计数器非线程安全,
         # 多线程并发调用会偶发签名错误/连接池竞态。单worker天然串行,顺带限制单交易所REST并发
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f'ccxt-{self.__class__.__name__}')
 
-    # 所有同步ccxt调用的统一入口,不阻塞事件循环
-    async def _call(self, fn, *args, **kwargs):
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._executor, partial(fn, *args, **kwargs))
-
     # 停机时由launcher调用(不能放run()的finally: 排空在途订单要早于关闭executor)
     def shutdown(self) -> None:
         self._executor.shutdown(wait=False)
+
+    async def closeKlineWs(self) -> None:
+        clients = list({id(client): client for client in self._klineWs.values()}.values())
+        self._klineWs.clear()
+        if clients:
+            await asyncio.gather(*(client.close() for client in clients), return_exceptions=True)
 
     def get(self, key: str):
         return switch({
@@ -80,7 +81,7 @@ class baseExchange:
     async def _refreshBalanceLater(self) -> None:
         try:
             await asyncio.sleep(self._balanceRefreshDelay)
-            bal = await self._call(self.balance)
+            bal = await threadCall(self, self.balance)
             if bal:
                 evtFireAsync(kEvt_Market, eMarketId['balance'], self.get('id'), self.get('title'), bal)
         except Exception as e:
@@ -113,6 +114,13 @@ class baseExchange:
 
     def coinInfo(self, symbol: str) -> tuple:
         category, newSymbol = slit(symbol, '_')
+        def _direct() -> dict | None:
+            categoryData = market.get(category, {})
+            direct = categoryData.get(newSymbol)
+            if direct is not None:
+                return direct
+            return next((item for item in categoryData.values()
+                         if item.get('id') == newSymbol), None)
         def _find():
             res = slit(newSymbol, '-')
             futureSymbol = newSymbol if res == False else res[0]
@@ -129,7 +137,7 @@ class baseExchange:
         market = self.get("coinInfo")
         info = switchFn({kDelivery: _find,
                         kFuture: _find,
-                        'default': lambda: market.get(category, {}).get(newSymbol)
+                        'default': _direct
                         }, key=category)
         return category, info
 
@@ -239,25 +247,42 @@ class baseExchange:
         fn = dispatch.get(typeState)
         if not fn:
             return False
-        return await self._call(fn, **kwargs)
+        return await threadCall(self, fn, **kwargs)
 
-    # ── 同步接口的异步包装,供事件循环内调用 ──
-    async def orderBookAsync(self, symbol: str, limit: int = 5):
-        return await self._call(self.orderBook, symbol, limit)
+    def _klineWsClient(self, category: str) -> ccxtpro.Exchange:
+        client = self._klineWs.get(category)
+        if client is not None:
+            return client
+        exchangeClass = getattr(ccxtpro, self.__class__.__name__)
+        defaultType = 'spot' if category == kSpot else 'swap'
+        client = exchangeClass({
+            'enableRateLimit': True,
+            'options': {'defaultType': defaultType},
+        })
+        self._klineWs[category] = client
+        return client
 
-    async def findOrderAsync(self, symbol: str, orderID: str = '',
-                             isPos: bool = True, isOpen: bool = False):
-        return await self._call(self.findOrder, symbol, orderID, isPos, isOpen)
-
-    async def editOrderAsync(self, orderID: str, symbol: str, side: str,
-                             amount: float, price: float):
-        return await self._call(self.editOrder, orderID, symbol, side, amount, price)
-
-    async def getKlineAsync(self, symbol: str, seTime: list, timeframe: str = '5m', limit: int = 0):
-        return await self._call(self.getKline, symbol, seTime, timeframe, limit)
-
-    async def balanceAsync(self, isSpot: bool = True):
-        return await self._call(self.balance, isSpot)
+    async def watchKlines(self, category: str, symbols: list[str],
+                          timeframe: str = '5m') -> dict[str, list]:
+        symbolMap: dict[str, str] = {}
+        subscriptions: list[list[str]] = []
+        for symbol in symbols:
+            symbolCategory, symbolInfo = self.coinInfo(symbol)
+            if symbolCategory != category or symbolInfo is None:
+                raise ValueError(f"K线订阅交易对不存在: {self.get('id')}/{symbol}")
+            unified = symbolInfo['symbol']
+            symbolMap[unified] = symbol
+            subscriptions.append([unified, timeframe])
+        if not subscriptions:
+            return {}
+        result = await self._klineWsClient(category).watch_ohlcv_for_symbols(
+            subscriptions, limit=1)
+        latest: dict[str, list] = {}
+        for unified, timeframes in result.items():
+            candles = timeframes.get(timeframe, []) if isinstance(timeframes, dict) else []
+            if candles and unified in symbolMap:
+                latest[symbolMap[unified]] = candles[-1]
+        return latest
 
     #获取个人交易记录
     def trades(self, symbol: str, limit: int = 500) -> list[dict]:

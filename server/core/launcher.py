@@ -113,6 +113,11 @@ class launcher:
     # 停机序列: 先排空在途订单再关WS,最后强制落盘,顺序不能颠倒
     async def _shutdown(self) -> None:
         self.__stopping.set()
+        if self.__subscribe:
+            try:
+                await self.__subscribe.shutdown()
+            except Exception as e:
+                log(f"[launcher] K线订阅停机异常: {e}")
         if self.__marketMgr:
             try:
                 await self.__marketMgr.shutdown(kShutdownTimeout)
@@ -129,7 +134,7 @@ class launcher:
             self.__center.flush()
         log("[launcher] 已停机")
 
-    # 等交易所WS全部连接就绪(marketMgr.ready)后再加载任务(触发task.init());没有交易所模块时立即加载
+    # 等交易所WS全部连接就绪(marketMgr.ready)后再加载任务(触发task.load/init());没有交易所模块时立即加载
     async def _loadTasksWhenReady(self) -> None:
         if self.__marketMgr:
             try:
@@ -137,12 +142,9 @@ class launcher:
             except asyncio.TimeoutError:
                 log(f"[launcher] 等待交易所WS就绪超时({kWsReadyTimeout}s),跳过等待直接加载任务")
         if self.__pendingProject:
-            self.__engine.loadTask(self.__pendingProject)
+            await self.__engine.loadTask(self.__pendingProject)
         elif self.__pendingStartFile:
-            self.__engine.loadTaskList()
-        # 策略init()已注册好symbol,冷启动预拉一次K线,避免首个周期无数据
-        if self.__subscribe:
-            asyncio.create_task(self.__subscribe.warmup())
+            await self.__engine.loadTaskList()
 
     # 通常用于测试任务
     def addProject(self, projectName: str) -> None:

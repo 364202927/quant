@@ -35,59 +35,47 @@ class kLine(baseIndicators):
         #         pdResults[symbol] = indicator.calculateTa(pdResults[symbol])
         # return pdResults
         # pass
-        if not self._pd: return
-        pdResults = self._pd.raw()
+        if self._pd is None or self._pd.raw() is None:
+            return None
+        pdResults: pdData | pd.DataFrame = self._pd.raw()
         for indicator in args:
             pdResults = indicator.calculateTa(pdResults)
-        return pdResults
+        # Indicators in this project accept/return a mix of DataFrame and
+        # pdData.  Normalize only the public result, preserving the wrapper
+        # between indicators that require it.
+        return pdResults if isinstance(pdResults, pdData) else pdData(
+            data=pdResults, style='copy')
 
     def calculateTa(self,*args: baseIndicators) -> pdData:
-        return self.calculate(args)
+        return self.calculate(*args)
     
-    # 返回最新的100条k线;pd为None表示subscribe尚未预拉完成,由策略自行处理数据未就绪
-    def getCandles(self,symbol: str, seTime: list, timeFrame: str = '5m', cover:bool = True):
-        pd = evtReturn(kEvt_Market, 'storageSubscribe', eMarketId['gcKline'], self._exName, symbol)
-        if pd is None:
-            return None
+    # 等待首次缓存完成后返回副本；后续调用直接读取已就绪缓存
+    async def getCandles(self, symbol: str, seTime: list,
+                         timeFrame: str = '5m', cover: bool = True) -> pdData:
+        request = evtReturn(
+            kEvt_Market, 'storageSubscribe', eMarketId['gcKline'],
+            self._exName, symbol)
+        if request is None:
+            raise RuntimeError('K线缓存服务未启动')
+        candles = await request
         if timeFrame != '5m':
-            pd.resample(timeFrame,seTime)
+            candles.resample(timeFrame, seTime)
         if cover:
-            self._pd = pd
-        return pd
+            self._pd = candles
+        return candles
 
-    #返回历史数据
-    def historyCandles(self, symbol: str, seTime: list, timeFrame: str = '5m', cover: bool = False) -> pd.DataFrame:
-        def rtData(pdata: pdData):
-            if cover:
-                self._symbols[symbol] = pdata
-            if timeFrame != '5m':
-                pdata.resample(timeFrame,seTime)
-            return pdData(data=pdata, style='copy')
-        #默认只保存5分钟周期,超过5分钟从交易所取
-        if timeFrame != '5m':
-           return pdData(data=self._ex.getKline(symbol, seTime, timeFrame), style='copy')
-        #获取历史数据并剪裁
+    # 返回历史数据,只读取本地文件
+    def historyCandles(self, symbol: str, seTime: list,timeFrame: str = '5m', cover: bool = False) -> pdData:
         fileName = self._ex.get('id')+'_'+ symbol
         fullPd = pdData()
-        fullPd.readFile(fileName,True)
-        fullPd.resample(timeFrame, seTime)
-        timeRange = fullPd.detection(timeFrame, seTime)
-        # print("~~~~检查缺失数据~~~~~",len(timeRange),timeRange)
-        if len(timeRange) == 0:
-            return rtData(fullPd)
-        #缺失的值再次从交易所获取
-        allData = [fullPd.raw()]
-        for tr in timeRange:
-            # print("~~~~~缺失数据时间范围~~~~~",tr[0], tr[1])
-            fixPd = pdData()#从交易所获取时间是原始时区
-            kLine = self._ex.getKline(symbol, [tr[0], tr[1]])
-            fixPd.format(kLine, style ='copy')
-            # print("~~~~~补全数据~~~~~",fixPd.get())
-            allData.append(fixPd.raw())
-        history = pdData(style='concat',data=allData)
-        # print("~~~~再次检查缺失~~~~~",len(history.detection(timeFrame,seTime)),history.detection(timeFrame,seTime))
-        history.save2File(fileName + kFileType)
-        return rtData(history)
+        if not fullPd.readFile(fileName, True):
+            return fullPd
+        if seTime or timeFrame != '5m':
+            fullPd.resample(timeFrame, seTime)
+        result = pdData(data=fullPd, style='copy')
+        if cover:
+            self._pd = result
+        return result
 
     # 返回最新的k线cover是否覆盖self._symbols  todo:转移到sub..这里可不要
     # def newest_kLine(self, symbol: str, cover: bool = True) -> pd.DataFrame:

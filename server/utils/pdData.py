@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 import numpy as np
+from datetime import timedelta, timezone
 from functools import reduce
 from typing import Any
 from server.utils import eSampleTs
@@ -23,6 +24,7 @@ pd.set_option('display.float_format', '{:.3f}'.format)  # 全局设定3位小数
 
 class pdData:
     "pd时间类型数据处理和格式化"
+    _timeBasisAttr = 'pdData_time_basis'
 
     def __init__(self,head=["candle_begin_time", "open", "high", "low", "close", 'vol'], read='', style ='',data=None):#read='',xmlData=None):
         self._pf = None  # DataFrame
@@ -90,18 +92,22 @@ class pdData:
 
         def xml():  # 用作数据，可为任何类型
             self._pf = pd.DataFrame(dataOrTab, columns=self._head)
+            if self._frist() in self._pf.columns:
+                self._pf[self._frist()] = self._normalizeTime(self._pf[self._frist()])
 
         def concat():  # pf数据合并
-            self._pf = pd.concat(dataOrTab, ignore_index=True)
+            frames = [self._normalizeFrame(frame) for frame in dataOrTab]
+            self._pf = pd.concat(frames, ignore_index=True)
             # print("~~~~concat~~~~~", self._pf.iloc[0].candle_begin_time,type(self._pf.iloc[0].candle_begin_time))
             # self._pf[self._frist()] = pd.to_datetime(self._pf[self._frist()], unit='ms')
-            if type(self._pf.iloc[0].candle_begin_time) == str:
-                self._pf[self._frist()] = pd.to_datetime(self._pf[self._frist()], format="%Y-%m-%d %H:%M:%S")
+            if not self._pf.empty:
+                self._pf[self._frist()] = self._normalizeTime(self._pf[self._frist()])
             self._resetFormat()
             self._pf = self._pf[self._head]
 
         def copy():  # 复制,并重置head
-            self._pf = dataOrTab.copy()
+            source = dataOrTab.raw() if isinstance(dataOrTab, pdData) else dataOrTab
+            self._pf = self._normalizeFrame(source)
             self.setHead(self._pf.columns.tolist())
 
         # 格式化数据
@@ -110,10 +116,59 @@ class pdData:
                   'xml': xml,
                   'copy': copy},
                  key=style)
+        if isinstance(self._pf, pd.DataFrame) and self._frist() in self._pf.columns:
+            self._pf.attrs[self._timeBasisAttr] = 'utc'
         # self._pf.drop_duplicates(subset=[self._frist()], inplace=True) #去重
         # self._pf.dropna(subset=[self._head[1]], inplace=True)  # 去除一天都没有交易的周期
         # self._pf = self._pf[self.__pdata[self._head[5]] > 0]  # 去除成交量为0的交易周期
         return self._pf
+
+    @staticmethod
+    def _localTimezone() -> timezone:
+        """Return the current local fixed offset without hard-coding a region."""
+        return timezone(timedelta(hours=utc_now()))
+
+    @classmethod
+    def _normalizeTime(cls, values: Any) -> Any:
+        """Normalize time values to the internal, timezone-naive UTC0 representation."""
+        if isinstance(values, (int, float, np.integer, np.floating)):
+            converted = pd.to_datetime(values, unit='ms', errors='coerce')
+        elif isinstance(values, pd.Series) and pd.api.types.is_numeric_dtype(values):
+            converted = pd.to_datetime(values, unit='ms', errors='coerce')
+        else:
+            converted = pd.to_datetime(values, errors='coerce')
+        if isinstance(converted, pd.Timestamp):
+            if converted.tzinfo is not None:
+                return converted.tz_convert('UTC').tz_localize(None)
+            return converted
+        if isinstance(converted, pd.Series):
+            if isinstance(converted.dtype, pd.DatetimeTZDtype):
+                return converted.dt.tz_convert('UTC').dt.tz_localize(None)
+            return converted
+        if isinstance(converted, pd.DatetimeIndex) and converted.tz is not None:
+            return converted.tz_convert('UTC').tz_localize(None)
+        return converted
+
+    @classmethod
+    def _normalizeFrame(cls, frame: Any) -> pd.DataFrame:
+        """Copy a frame and normalize its candle timestamp to UTC0."""
+        result = frame.copy()
+        timeKey = 'candle_begin_time'
+        if isinstance(result, pd.DataFrame) and timeKey in result.columns:
+            result[timeKey] = cls._normalizeTime(result[timeKey])
+            result.attrs[cls._timeBasisAttr] = 'utc'
+        return result
+
+    @classmethod
+    def _toLocalTime(cls, values: Any) -> Any:
+        """Convert internal UTC0 values to timezone-aware local timestamps."""
+        converted = cls._normalizeTime(values)
+        localTz = cls._localTimezone()
+        if isinstance(converted, pd.Timestamp):
+            return converted.tz_localize('UTC').tz_convert(localTz)
+        if isinstance(converted, pd.Series):
+            return converted.dt.tz_localize('UTC').dt.tz_convert(localTz)
+        return converted
 
     def _frist(self):
         return self._strHead[0]
@@ -144,16 +199,18 @@ class pdData:
             return result
 
         timeKey = 'candle_begin_time'
-        offset = pd.Timedelta(hours=utc_now())
         if isinstance(result, pd.DataFrame) and timeKey in result.columns:
-            result[timeKey] = pd.to_datetime(result[timeKey]) + offset
+            result[timeKey] = self._toLocalTime(result[timeKey])
+            result.attrs[self._timeBasisAttr] = 'local'
         elif isinstance(result, pd.Series):
             if result.name == timeKey:
-                result = pd.to_datetime(result) + offset
+                result = self._toLocalTime(result)
+                result.attrs[self._timeBasisAttr] = 'local'
             elif timeKey in result.index:
-                result[timeKey] = pd.to_datetime(result[timeKey]) + offset
+                result[timeKey] = self._toLocalTime(result[timeKey])
+                result.attrs[self._timeBasisAttr] = 'local'
         elif key == timeKey:
-            result = pd.to_datetime(result) + offset
+            result = self._toLocalTime(result)
         return result
 
     def copy(self):
@@ -212,13 +269,19 @@ class pdData:
 
     # 从数据后面加一段数据，默认排序和去掉重复
     def pfConcat(self, pfData, reset=True):
-        self._pf = pd.concat([self._pf, pfData], ignore_index=reset)
+        source = pfData.raw() if isinstance(pfData, pdData) else pfData
+        frames = [frame for frame in (self._pf, source) if frame is not None]
+        frames = [self._normalizeFrame(frame) for frame in frames]
+        self._pf = pd.concat(frames, ignore_index=reset)
         if reset:
             self._resetFormat(True)
 
     # 添加一份原始数据
     def dataConcat(self, dic):
-        pf = pd.DataFrame([dic])
+        data = dict(dic)
+        if 'candle_begin_time' in data:
+            data['candle_begin_time'] = self._normalizeTime(data['candle_begin_time'])
+        pf = pd.DataFrame([data])
         if self._pf is None:
             self._pf = pd.DataFrame(columns=self._head)
         # self._pf = pd.concat([self._pf, pf], ignore_index=True)
@@ -227,10 +290,14 @@ class pdData:
         to_concat = [df for df in [self._pf, pf] if not df.empty and not df.isna().all().all()]
         if to_concat:
             self._pf = pd.concat(to_concat, ignore_index=True)
+            if 'candle_begin_time' in self._pf.columns:
+                self._pf.attrs[self._timeBasisAttr] = 'utc'
 
     # 左右合并
     def pfMerge(self, dataTab, key="merage"):
-        pf_l, pf_r = dataTab[0].copy(), dataTab[1].copy()
+        frames = [self._normalizeFrame(item.raw() if isinstance(item, pdData) else item)
+                  for item in dataTab]
+        pf_l, pf_r = frames[0], frames[1]
         def compared():  # 左==右
             pf = pd.merge(pf_l, pf_r,
                           left_on=pf_l.columns[0],
@@ -241,8 +308,8 @@ class pdData:
 
         def merage():  # 根据candle_begin_time合并数据
             self._pf = reduce(lambda left,
-                            right: pd.merge( left,right,on='candle_begin_time', how='inner'),
-                            dataTab)
+                            right: pd.merge(left, right, on='candle_begin_time', how='inner'),
+                            frames)
             self._pf.set_index(self._frist(), inplace=True)
             self._pf.reset_index(inplace=True)
             self.setHead(self._pf.columns.tolist())
@@ -293,7 +360,7 @@ class pdData:
             # err("保存失败：", fileName, "数据为空")
             return
         totalSaved = 0
-        save_pf = self._pf.copy()
+        save_pf = self._normalizeFrame(self._pf)
         path = g_config.fils('marketsPath')
         # 保存时按年份切分保存文件
         for year, yearData in save_pf.groupby(save_pf[self._frist()].dt.year):

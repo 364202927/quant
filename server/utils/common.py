@@ -1,5 +1,6 @@
 import pickle, json, os, requests, inspect, asyncio, gzip, webbrowser, sys, math, traceback
 from importlib import import_module
+from functools import partial
 from pydispatch import dispatcher
 from server.utils import eTimeTs, kEvt_Web
 from datetime import datetime, date, timedelta
@@ -55,6 +56,11 @@ def evtFireAsync(strEvt, *args):
         except Exception as e:
             print(f"❌ [事件错误] 信号: {strEvt} -> 回调: {getattr(receiver, '__name__', receiver)} 执行失败: {e}")
             traceback.print_exc()
+
+# 同步函数丢线程池执行,不阻塞事件循环: obj须持有 _executor(ThreadPoolExecutor)
+async def threadCall(obj, fn, *args, **kwargs):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(obj._executor, partial(fn, *args, **kwargs))
 
 # 返回文件后缀
 def getFileExtension(fileName):

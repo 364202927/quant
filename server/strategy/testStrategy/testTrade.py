@@ -14,7 +14,7 @@ class testTrade(contractCTA, realTrade):
     def info(self):
         return "demo+k线数据,交易所成交"
 
-    def init(self):
+    async def load(self) -> None:
         self.regTime('01:1d', "10s")    #注册时间 1.每天1点 2.每分钟
         self.settingTrade('binanceMain') #默认下单设置
         # 初始化指标
@@ -25,9 +25,9 @@ class testTrade(contractCTA, realTrade):
         # self.pause()                     #不激活策略,定时器和回测 会忽略该策略
         # 指标获取and合并
         self.candles.delimit(exName = 'binance', symbols = ['spot_BTCUSDT','swap_BTCUSDT'])
-        candles = self.candles.getCandles('spot_BTCUSDT',[])
+        candles = await self.candles.getCandles('spot_BTCUSDT', [])
         candles = self.candles.calculate(self.vwap, self.boll)
-        print("~~~spot_BTCUSDT~~~~~\n",candles.get())
+        log("~~~spot_BTCUSDT~~~~~\n",candles.get())
         # print("~~~swap_BTCUSDT~~~~~\n",candles['swap_BTCUSDT'].get())
         # 获取历史数据
         # kLine = self.candles.historyCandles(symbol = 'spot_BTCUSDT', seTime = ['2020-1-01 00:00:00','2020-05-01 00:00:00'], timeFrame = '15m')
@@ -39,7 +39,8 @@ class testTrade(contractCTA, realTrade):
 
 
     def update_10s(self, id, timeKey):
-        if self.bInit: return
+        if not self.bInit: 
+            return
         if self._testStep == 0:
             log("~~~~~~test初始化完成~~~~~~~~")
         #现货
@@ -58,10 +59,10 @@ class testTrade(contractCTA, realTrade):
         #合约
         if self._testStep == 0:
             # self.openLong(swapU('DOGE/USDT'), totelPrice = 5,price = 0.07,lv=2)
-            self.openLong(swapU('DOGE/USDT'), totelPrice = 5,isMarket= True)
+            self.openLong(swapU('DOGE/USDT'), totelPrice = 5, orderBook=-1)
         elif self._testStep == 1:
             # self.openShort(swapU('DOGE/USDT'), totelPrice = 5,price = 0.1)
-            self.openShort(swapU('DOGE/USDT'), totelPrice = 5,isMarket= True)
+            self.openShort(swapU('DOGE/USDT'), totelPrice = 5, orderBook=-1)
             # pass
         elif self._testStep == 2:
             # self.openShort(futureU('ETH/USDT', timeIndex = 1), totelPrice = 1)
@@ -70,8 +71,8 @@ class testTrade(contractCTA, realTrade):
             self.cencel(swapU('DOGE/USDT'))                                      #取消挂单
             # self.cencel(futureU('ETH/USDT', timeIndex = 1))                       #取消季单
         elif self._testStep == 4:
-            self.closePos(swapU('DOGE/USDT'),dir=kLong,isMarket=True)
-            self.closePos(swapU('DOGE/USDT'),dir=kShort,isMarket=True)
+            self.closePos(swapU('DOGE/USDT'),dir=kLong, orderBook=-1)
+            self.closePos(swapU('DOGE/USDT'),dir=kShort, orderBook=-1)
             # self.closePos(futureU('ETH/USDT', timeIndex = 1),dir=kShort)
             self.bInit = True
         

@@ -1,7 +1,7 @@
 import asyncio
 import copy
 from decimal import Decimal, ROUND_DOWN
-from server.utils import evtConnect, evtFireAsync, kEvt_Market, log, switchFn, evtReturn, slit, division,inRange,warn,time2ID
+from server.utils import evtConnect, evtFireAsync, kEvt_Market, log, switchFn, evtReturn, slit, division,inRange,warn,time2ID,threadCall
 from server.market import eMarketId, kSwap, kBuy, kSell,kPm,kClose,kCancel,kLong,kShort
 from server.market.baseExchange import baseExchange
 
@@ -61,7 +61,7 @@ class oms:
         if not ex or not orderID or not symbol:
             return
 
-        orders = await ex.findOrderAsync(symbol, orderID, isPos=False, isOpen=True)
+        orders = await threadCall(ex, ex.findOrder, symbol, orderID, isPos=False, isOpen=True)
         order = self._findOpenOrder(orders, orderID)
         if not order:
             return
@@ -74,7 +74,7 @@ class oms:
             await self._replaceOpenOrder(ex, record)
             return
 
-        book = await ex.orderBookAsync(symbol, limit=5) or {}
+        book = await threadCall(ex, ex.orderBook, symbol, limit=5) or {}
         direction = record.get('dir')
         side = book.get('asks' if direction == kBuy else 'bids', [])
         if not side:
@@ -84,7 +84,7 @@ class oms:
         amount = self._orderAmount(record, newPrice, remaining, ex)
         if amount <= 0:
             return
-        result = await ex.editOrderAsync(orderID, symbol, direction, amount, newPrice)
+        result = await threadCall(ex, ex.editOrder, orderID, symbol, direction, amount, newPrice)
         if not result:
             raise RuntimeError('改单未返回订单数据')
         update.update(price=newPrice, amount=amount)
@@ -213,7 +213,7 @@ class oms:
 
     # ── 当前挂单最优价 ──
     async def _BBO(self, ex: baseExchange, symbol: str, dir: str, order: int,aggressive: bool = False) -> float:
-        book = await ex.orderBookAsync(symbol, limit=max(10, order + 4))
+        book = await threadCall(ex, ex.orderBook, symbol, limit=max(10, order + 4))
         isBuy = dir == kBuy
         if aggressive:
             target = book['asks'] if isBuy else book['bids']

@@ -61,6 +61,13 @@ class binance(baseExchange):
         # ws
         self._ccxtSpot = _wsCreate(ccxtpro.binance, defaultType='spot')
         self._ccxtUm = _wsCreate(BinancePAPI, defaultType='papi', portfolioMargin=True)
+        self._klineSpot = _wsCreate(ccxtpro.binance, defaultType='spot')
+        self._klineUm = _wsCreate(ccxtpro.binance, defaultType='future')
+
+    def _klineWsClient(self, category: str) -> ccxtpro.Exchange:
+        client = self._klineSpot if category == kSpot else self._klineUm
+        self._klineWs[category] = client
+        return client
 
     #http取账号数据
     def balance(self, isSpot = True) -> dict:

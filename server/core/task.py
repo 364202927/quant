@@ -1,4 +1,8 @@
-import abc, traceback
+import abc
+import asyncio
+import inspect
+import traceback
+from typing import Any
 from server.utils import warn,switch, evtConnect, evtFire, kEvt_GetTime, kEvt_Time, time2ID, require,eTimeTs,timeFrame2Float
 kStrategyFile = 'server.strategy.'
 
@@ -27,6 +31,7 @@ class task:
         self.__handle = None
         self.isActive = True
         self.isFirst = False
+        self.__eventTask: asyncio.Task | None = None
         evtConnect(kEvt_GetTime, self)
 
     def info(self, strInfo):
@@ -41,12 +46,19 @@ class task:
                        'active':self.isActive},
                       key=key)
 
-    def bind(self, className: str):
+    async def bind(self, className: str) -> bool:
         self.__handle = require(kStrategyFile + className)()
         if not isinstance(self.__handle, taskHandle):
             return False
         self.__handle.pause,self.__handle.resume = self.pause, self.resume
-        self.__handle.init() #task初始化
+        loadFn = getattr(self.__handle, 'load', None)
+        if not callable(loadFn):
+            loadFn = getattr(self.__handle, 'init', None)
+        if not callable(loadFn):
+            return False
+        result = loadFn()
+        if inspect.isawaitable(result):
+            await result
         if not self.get('tacticsTime'):
             return False
         # 第一次激活向定时器注册任务
@@ -91,17 +103,44 @@ class task:
             if hasattr(self.__handle, "stopProcess"):
                 self.__handle.stopProcess()
             return True
-        #全时间回调接收，如返回ture不在触发其余时间绑定
-        if hasattr(self.__handle, "process"):
-            if self.__handle.process(tabId, timeKey):
-                return True
-        # 绑定时间事件
+        processFn = getattr(self.__handle, 'process', None)
         time = timeFrame2Float(timeKey)
         timeName = time < 1 and '1sLess' or timeKey
         fnName = 'update_' + timeName
-        if hasattr(self.__handle, fnName):
-            fnEvt = getattr(self.__handle, fnName)
-            fnEvt(tabId, timeKey)
+        updateFn = getattr(self.__handle, fnName, None)
+        if inspect.iscoroutinefunction(processFn) or inspect.iscoroutinefunction(updateFn):
+            if self.__eventTask is not None and not self.__eventTask.done():
+                warn(f"[task:{self.get('className')}] 上一次异步回调尚未完成,跳过: {timeKey}")
+                return True
+            self.__eventTask = asyncio.create_task(
+                self._runAsyncEvent(processFn, updateFn, tabId, timeKey))
+            return True
+        #全时间回调接收，如返回true不再触发其余时间绑定
+        if callable(processFn) and processFn(tabId, timeKey):
+            return True
+        if callable(updateFn):
+            updateFn(tabId, timeKey)
             return True
         warn('当前时间事件未接收:', fnName)
         # self.__handle.evtTime(timeKey)
+
+    async def _runAsyncEvent(self, processFn: Any, updateFn: Any,
+                             tabId: object, timeKey: str) -> None:
+        try:
+            if callable(processFn):
+                result = processFn(tabId, timeKey)
+                if inspect.isawaitable(result):
+                    result = await result
+                if result:
+                    return
+            if callable(updateFn):
+                result = updateFn(tabId, timeKey)
+                if inspect.isawaitable(result):
+                    await result
+                return
+            warn('当前时间事件未接收:', 'update_' + timeKey)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exception:
+            warn(f"[task:{self.get('className')}] 异步回调异常: {exception}")
+            traceback.print_exc()

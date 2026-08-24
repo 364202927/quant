@@ -16,6 +16,15 @@ class bybit(baseExchange):
     def __init__(self, description: str):
         super().__init__(description, kMaxLimit)
 
+    def _create(self, config: dict) -> None:
+        super()._create(config)
+        self._ccxt = ccxt.bybit({
+            'apiKey': config['apiKey'],
+            'secret': config['secret'],
+            'enableRateLimit': True,
+            'options': {'defaultType': kSpot},
+        })
+
     def _getCategory(self, symbol: str) -> tuple[str, str]:
         """从 symbol 解析 (category, newSymbol)"""
         type_, newSymbol = slit(symbol, '_')

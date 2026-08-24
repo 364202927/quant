@@ -1,4 +1,3 @@
-import abc
 from server.utils import pdData, require, err, warn, info, log, spot, swapU, swapC, futureU, futureC, getRootName, slit, str2time,openWeb
 from server.market import kLong, kShort, kSwap, kFuture, kDelivery, kSpot, kBuy, kSell
 from server.core.task import taskHandle
@@ -93,7 +92,6 @@ class baseCTA(taskHandle):
         #     self.checkPos(name)
     
     # 初始化
-    @abc.abstractmethod
     def init(self): pass
 
     # 接收时间回调
