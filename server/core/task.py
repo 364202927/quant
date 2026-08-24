@@ -3,7 +3,7 @@ import asyncio
 import inspect
 import traceback
 from typing import Any
-from server.utils import warn,switch, evtConnect, evtFire, kEvt_GetTime, kEvt_Time, time2ID, require,eTimeTs,timeFrame2Float
+from server.utils import warn,switch, evtConnect, evtFire, kEvt_GetTime, kEvt_Time, time2ID, require,eTimeTs,timeFrame2Float,spawnTask
 kStrategyFile = 'server.strategy.'
 
 class taskHandle(metaclass=abc.ABCMeta):
@@ -32,7 +32,6 @@ class task:
         self.isActive = True
         self.isFirst = False
         self.__eventTask: asyncio.Task | None = None
-        evtConnect(kEvt_GetTime, self)
 
     def info(self, strInfo):
         self.info = strInfo
@@ -61,8 +60,9 @@ class task:
             await result
         if not self.get('tacticsTime'):
             return False
-        # 第一次激活向定时器注册任务
+        # 第一次激活向定时器注册任务: bind成功后才监听,避免bind失败的僵尸task永久挂在事件总线上
         if not self.isFirst:
+            evtConnect(kEvt_GetTime, self)
             self._register()
         return True
     # 是否激活任务
@@ -112,8 +112,9 @@ class task:
             if self.__eventTask is not None and not self.__eventTask.done():
                 warn(f"[task:{self.get('className')}] 上一次异步回调尚未完成,跳过: {timeKey}")
                 return True
-            self.__eventTask = asyncio.create_task(
-                self._runAsyncEvent(processFn, updateFn, tabId, timeKey))
+            self.__eventTask = spawnTask(
+                self._runAsyncEvent(processFn, updateFn, tabId, timeKey),
+                name=f"strategy:{self.get('className')}:{timeKey}")
             return True
         #全时间回调接收，如返回true不再触发其余时间绑定
         if callable(processFn) and processFn(tabId, timeKey):

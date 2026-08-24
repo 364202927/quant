@@ -7,7 +7,7 @@ from server.market import eMarketId
 from server.market.baseExchange import baseExchange
 from server.utils import (diff_Pdtime, evtConnect, evtFire, evtFireAsync,
                           kEvt_GetTime, kEvt_Market, kEvt_Time, pdData,
-                          switchFn, timeFrame2Float, warn, threadCall)
+                          switchFn, timeFrame2Float, warn, threadCall, spawnTask)
 
 kFileType = '.parquet'
 kCheckOrderTime = '10s'
@@ -64,17 +64,7 @@ class storageSubscribe:
                         key=eventId)
 
     def _startTask(self, coroutine: Coroutine[Any, Any, Any], label: str) -> asyncio.Task:
-        task = asyncio.create_task(coroutine)
-
-        def _done(doneTask: asyncio.Task) -> None:
-            if doneTask.cancelled():
-                return
-            exception = doneTask.exception()
-            if exception is not None:
-                warn(f"[subscribe] {label}失败: {exception}")
-
-        task.add_done_callback(_done)
-        return task
+        return spawnTask(coroutine, name=f"subscribe:{label}")
 
     def _canonicalExchange(self, exName: str) -> tuple[str, baseExchange]:
         exchange = self._exchanges.get(exName)

@@ -57,11 +57,6 @@ def evtFireAsync(strEvt, *args):
             print(f"❌ [事件错误] 信号: {strEvt} -> 回调: {getattr(receiver, '__name__', receiver)} 执行失败: {e}")
             traceback.print_exc()
 
-# 同步函数丢线程池执行,不阻塞事件循环: obj须持有 _executor(ThreadPoolExecutor)
-async def threadCall(obj, fn, *args, **kwargs):
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(obj._executor, partial(fn, *args, **kwargs))
-
 # 返回文件后缀
 def getFileExtension(fileName):
     name, extension = os.path.splitext(fileName)
@@ -374,3 +369,48 @@ def rtWeb(data: dict) -> dict[str, Any]:
 # def pool(fnCall, valueList, count = 2):
 #     with Pool(processes=count) as pool:
 #         return pool.map(fnCall, valueList)
+
+# 协程/线程监控开关: fasle零额外开销
+kMonitorEnable = True
+kMonitorSlowSec = 5.0
+
+# 协程任务监控: 开关关闭时完全退化为原生create_task,零额外开销
+def spawnTask(coro, name: str):
+    if not kMonitorEnable:
+        return asyncio.create_task(coro)
+    from server.utils.logger import err, warn
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    task = asyncio.create_task(coro, name=name)
+    def _onDone(t: asyncio.Task):
+        if t.cancelled():
+            return
+        exc = t.exception()
+        elapsed = loop.time() - start
+        if exc is not None:
+            err(f"[monitor] 协程崩溃 task={name} 耗时={elapsed:.2f}s: {exc}\n"
+                + ''.join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+        elif elapsed > kMonitorSlowSec:
+            warn(f"[monitor] 协程耗时过长 task={name} 耗时={elapsed:.2f}s")
+    task.add_done_callback(_onDone)
+    return task
+
+# 同步函数丢线程池执行,不阻塞事件循环: obj须持有 _executor(ThreadPoolExecutor)
+async def threadCall(obj, fn, *args, **kwargs):
+    if not obj._executor :
+        return
+    loop = asyncio.get_running_loop()
+    if not kMonitorEnable:
+        return await loop.run_in_executor(obj._executor, partial(fn, *args, **kwargs))
+    from server.utils.logger import err, warn
+    start = loop.time()
+    try:
+        return await loop.run_in_executor(obj._executor, partial(fn, *args, **kwargs))
+    except Exception as e:
+        err(f"[monitor] 线程调用异常 fn={fn.__qualname__} obj={type(obj).__name__} "
+            f"耗时={loop.time()-start:.2f}s: {e}")
+        raise
+    finally:
+        elapsed = loop.time() - start
+        if elapsed > kMonitorSlowSec:
+            warn(f"[monitor] 线程调用耗时过长 fn={fn.__qualname__} obj={type(obj).__name__} 耗时={elapsed:.2f}s")

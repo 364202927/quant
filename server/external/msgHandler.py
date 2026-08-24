@@ -1,6 +1,6 @@
 import asyncio
 from server.core.engine import engine
-from server.utils import switchFn,evtConnect, rtWeb,evtFire,kEvt_Web,kEvt_Engine,log
+from server.utils import switchFn,evtConnect, rtWeb,evtFire,kEvt_Web,kEvt_Engine,log,spawnTask
 from server.utils.fileConfig import g_config
 
 eMsgId = {
@@ -62,7 +62,7 @@ class msgHandler:
             checkId = msg[0][0].get('id')
             taskName = msg[0][0].get('selectedTask')
             if checkId == 1:
-                asyncio.create_task(self._runBackTest(taskName))
+                spawnTask(self._runBackTest(taskName), name=f"backtest:{taskName}")
                 return {'status': 'started'}
             return {}
         return switchFn({eMsgId['eWebInit']: initWeb,

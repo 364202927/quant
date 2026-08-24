@@ -1,7 +1,7 @@
 import asyncio
 import copy
 from decimal import Decimal, ROUND_DOWN
-from server.utils import evtConnect, evtFireAsync, kEvt_Market, log, switchFn, evtReturn, slit, division,inRange,warn,time2ID,threadCall
+from server.utils import evtConnect, evtFireAsync, kEvt_Market, log, switchFn, evtReturn, slit, division,inRange,warn,time2ID,threadCall,spawnTask
 from server.market import eMarketId, kSwap, kBuy, kSell,kPm,kClose,kCancel,kLong,kShort
 from server.market.baseExchange import baseExchange
 
@@ -33,7 +33,7 @@ class oms:
             if self._checkingOrders:
                 return
             self._checkingOrders = True
-            asyncio.create_task(self._checkOrders())
+            spawnTask(self._checkOrders(), name="oms:checkOrders")
 
         switchFn({eMarketId['balance']: _balanceUpdate,
                   eMarketId['wsBalance']: _balanceUpdate,

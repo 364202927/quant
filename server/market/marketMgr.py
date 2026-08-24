@@ -1,5 +1,5 @@
 import asyncio
-from server.utils import g_config, require, log, evtConnect, evtFire, kEvt_Market, switchFn
+from server.utils import g_config, require, log, evtConnect, evtFire, kEvt_Market, switchFn, spawnTask
 from server.market import eMarketId
 from server.market.baseExchange import baseExchange
 from server.market.gateway import gateway
@@ -76,8 +76,8 @@ class marketMgr(extInterface):
         if not self.__exchangeMgr:
             self.ready.set()
             return
-        self.__exTasks = [asyncio.create_task(ex.run()) for ex in self.__exchangeMgr.values()]
-        self.__gwTasks = [asyncio.create_task(gw.run()) for gw in self.__gateways.values()]
+        self.__exTasks = [spawnTask(ex.run(), name=f"exchange:{name}") for name, ex in self.__exchangeMgr.items()]
+        self.__gwTasks = [spawnTask(gw.run(), name=f"gateway:{name}") for name, gw in self.__gateways.items()]
         await asyncio.gather(*[ex.wsReady.wait() for ex in self.__exchangeMgr.values()])
         self.ready.set()
         await asyncio.gather(*self.__exTasks, *self.__gwTasks)

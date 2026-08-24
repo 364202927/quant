@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from server.market import (kSpot, kSwap, kFuture, kDelivery, kBuy, kSell,
                            kShort, kLong, kMarket, kLimit, eMarketId, kCancel,
                            kOrderFailedStatuses)
-from server.utils import switch, switchFn, tryCatch, slit, str2ms, pdData, err, log, timeFrame2Float, evtFireAsync, kEvt_Market, threadCall
+from server.utils import switch, switchFn, tryCatch, slit, str2ms, pdData, err, log, timeFrame2Float, evtFireAsync, kEvt_Market, threadCall, spawnTask
 kSymbol = 'coinInfo'
 kWsConnectTimeout = 30  # 单个ws连接建立超时(秒)
 
@@ -75,7 +75,7 @@ class baseExchange:
         if self._balanceRefreshPending:
             return
         self._balanceRefreshPending = True
-        asyncio.create_task(self._refreshBalanceLater())
+        spawnTask(self._refreshBalanceLater(), name=f"balanceRefresh:{self.get('title')}")
 
     # 取数在executor内跑,发事件回到事件循环线程: evtFireAsync要求在loop内调用
     async def _refreshBalanceLater(self) -> None:
@@ -336,10 +336,10 @@ class baseExchange:
             err(f"[{self.get('title')}] 全部WS连接失败,本次运行该交易所没有任何实时推送")
 
         tasks = [
-            asyncio.create_task(coro)
+            spawnTask(coro, name=f"ws:{label}:{market_type}:{self.get('title')}")
             for exchange, market_type in connected
-            for coro in (self._listen_balance(exchange, market_type),
-                        self._listen_orders(exchange, market_type))]
+            for label, coro in (('balance', self._listen_balance(exchange, market_type)),
+                                ('orders', self._listen_orders(exchange, market_type)))]
         self.wsReady.set()
         log(f"~~~~ws 开始监听~~~")
         try:

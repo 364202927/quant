@@ -1,6 +1,6 @@
 import asyncio, signal
 from server.core.engine import engine
-from server.utils import g_config,log,kOpenMarket
+from server.utils import g_config,log,kOpenMarket,spawnTask
 from server.external import web, cli, msgHandler#, telegram, feishu
 from server.market import marketMgr
 from server.market.storage.center import storageCenter
@@ -69,8 +69,8 @@ class launcher:
     async def _async_run(self) -> None:
         loop = asyncio.get_running_loop()
         self._installSignalHandlers(loop)
-        self.__moduleTasks = [asyncio.create_task(self._supervise(m)) for m in self.__modules]
-        warmupTask = asyncio.create_task(self._loadTasksWhenReady())
+        self.__moduleTasks = [spawnTask(self._supervise(m), name=f"module:{m.__class__.__name__}") for m in self.__modules]
+        warmupTask = spawnTask(self._loadTasksWhenReady(), name="loadTasksWhenReady")
         try:
             await asyncio.gather(*self.__moduleTasks, warmupTask, return_exceptions=True)
         except (KeyboardInterrupt, asyncio.CancelledError):
