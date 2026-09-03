@@ -9,6 +9,11 @@ import pandas as pd
 from typing import Any
 import numpy as np
 
+# 协程/线程监控开关: fasle零额外开销
+kMonitorEnable = True
+kMonitorSlowSec = 5.0
+isTry = False #全局tryCatch,方便使用捕抓崩溃
+
 def publicIp():
     response = requests.get('https://api.ipify.org?format=json')
     public_ip = response.json()['ip']
@@ -132,8 +137,6 @@ def trySwitchFn(diceFn, key, **kwargs):
 def switchV(dice, key1, key2):
     return dice.get(key1) or dice.get(key2)
 
-#全局tryCatch,方便使用捕抓崩溃
-isTry = False
 def tryCatch(fn):
     if not isTry:
         return fn()
@@ -369,10 +372,6 @@ def rtWeb(data: dict) -> dict[str, Any]:
 # def pool(fnCall, valueList, count = 2):
 #     with Pool(processes=count) as pool:
 #         return pool.map(fnCall, valueList)
-
-# 协程/线程监控开关: fasle零额外开销
-kMonitorEnable = True
-kMonitorSlowSec = 5.0
 
 # 协程任务监控: 开关关闭时完全退化为原生create_task,零额外开销
 def spawnTask(coro, name: str):
