@@ -1,7 +1,6 @@
-import copy
-import os
+import copy,os
 from datetime import datetime, timezone
-from typing import Callable, Iterable
+from typing import Any, Callable, Iterable
 from server.utils import evtConnect, kEvt_Market, switchFn, recordBuffer,log, warn, readFile, writeFile, debouncedSaver
 from server.utils.fileConfig import kOtherPath
 from server.market import (eMarketId, kSpot, kSwap, kBuy, kSell, kClose,kLong, kShort, kCancel, kOrderFailedStatuses)
@@ -12,13 +11,13 @@ kHistoryDir = kOtherPath + 'history/'
 class storageOrders:
     "订单/状态事件监听 数据保存整理 "
 
-    def __init__(self):
-        state = readFile(kOrdersStateFile) or {}
+    def __init__(self) -> None:
+        state: dict = readFile(kOrdersStateFile) or {}
         self.__taskOrders: dict[str, list[dict]] = state.get('taskOrders', {})  # task正持有的订单
-        self.__openOrders = state.get('openOrders', {})                        #task开仓记录
-        self.__taskHistory = recordBuffer(kHistoryDir, max_size=1024)          # 任务历史订单
-        self.__historyLoaded = False                                           # 读取时才全量加载
-        self._requestSave = debouncedSaver(2.0, self._saveState)
+        self.__openOrders: dict[str, dict[str, dict[str, list[dict]]]] = state.get('openOrders', {})  # {exName: {taskName: {coinId: [record,...]}}} task开仓记录
+        self.__taskHistory: recordBuffer = recordBuffer(kHistoryDir, max_size=1024)  # 任务历史订单
+        self.__historyLoaded: bool = False                                     # 读取时才全量加载
+        self._requestSave: Callable[[], None] = debouncedSaver(2.0, self._saveState)
         evtConnect(kEvt_Market, self)
 
     # 停机时调用: 跳过防抖,强制落盘一次
@@ -40,69 +39,77 @@ class storageOrders:
             self.__historyLoaded = True
         return self.__taskHistory.buffer()
 
-    def evtProcess(self, key, *args):
+    @staticmethod
+    def _arg(args: tuple, index: int, default: Any = None) -> Any:
+        "安全地按下标取 args,取不到时返回 default,evtProcess 的各事件分支共用"
+        return args[index] if len(args) > index else default
+
+    def evtProcess(self, key: object, *args: Any) -> Any:
         # len(args) > 2 而非 > 1: 用来区分"只带一个 payload"的事件(如 order/gPosit, args[1] 是 dict/查询参数)
         # 和"携带 exName"的事件(wsOrder, args 至少有 marketId+exName+其它)
-        marketId, exName = args[0], args[1] if len(args) > 2 else None
-        #返回持仓
-        def _gPosit():
-            queryType = args[1] if len(args) > 1 else ''
-            symbol = args[2] if len(args) > 2 else ''
-            account = args[3] if len(args) > 3 else ''
-            taskName = args[4] if len(args) > 4 else ''
-            # queryType: 'task'从运行任务中找 / 'ex'从交易所中寻找
-            if queryType == 'task':
-                result = self._taskPositions(symbol, account)
-                return result or None
-            # 'ex': OMS 需要按交易所账号返回, 但仓位来源使用 task 当前持仓.
-            result = self._taskExchangePositions(symbol, account, taskName)
-            return result or None
+        marketId = args[0]
+        exName = args[1] if len(args) > 2 else None
+        #消息处理: 各事件的实际逻辑都拆成了同名的私有方法(见下方),这里只负责按事件类型取参数分发
+        result = switchFn({
+                eMarketId['order']: lambda: self._saveOrder(self._arg(args, 1, {})),
+                eMarketId['orderFailed']: lambda: self._failOrder(self._arg(args, 1, {})),
+                eMarketId['orderAccepted']: lambda: self._acceptOrder(self._arg(args, 1, {})),
+                eMarketId['wsOrder']: lambda: self._wsUpdateOrder(exName, self._arg(args, 2, {})),
+                eMarketId['gPosit']: lambda: self._gPosit(self._arg(args, 1, ''), self._arg(args, 2, ''), self._arg(args, 3, ''), self._arg(args, 4, '')),
+                eMarketId['positions']: lambda: self._verifyPositions(exName, self._arg(args, 3, {})),
+                eMarketId['gOpenOrders']: self._gOpenOrders,
+                eMarketId['uOpenOrder']: lambda: self._uOpenOrder(self._arg(args, 1, {})),
+            }, key=marketId)
+        return None if result is False else result
 
-        def _gOpenOrders():
-            result = []
-            for currentEx, tasks in self.__openOrders.items():
-                for currentTask, coins in tasks.items():
-                    for records in coins.values():
-                        for record in records:
-                            item = copy.deepcopy(record)
-                            item['exName'] = currentEx
-                            item['taskName'] = currentTask
-                            result.append(item)
-            return result or None
+    #返回持仓; queryType: 'task'从运行任务中找 / 'ex'从交易所中寻找(仓位来源仍是 task 当前持仓, 但按交易所账号返回)
+    def _gPosit(self, queryType: str, symbol: str, account: str, taskName: str) -> dict | None:
+        if queryType == 'task':
+            return self._taskPositions(symbol, account) or None
+        return self._taskExchangePositions(symbol, account, taskName) or None
 
-        def _uOpenOrder():
-            data = args[1] if len(args) > 1 else {}
-            orderID = str(data.get('orderID') or '')
-            if not orderID:
+    def _gOpenOrders(self) -> list[dict] | None:
+        result = []
+        for currentEx, tasks in self.__openOrders.items():
+            for currentTask, coins in tasks.items():
+                for records in coins.values():
+                    for record in records:
+                        item = copy.deepcopy(record)
+                        item['exName'] = currentEx
+                        item['taskName'] = currentTask
+                        result.append(item)
+        return result or None
+
+    def _uOpenOrder(self, data: dict) -> None:
+        orderID = str(data.get('orderID') or '')
+        if not orderID:
+            return
+        exName = data.get('exName', '')
+        taskName = self._taskName(data.get('taskName'))
+        taskOrders = self.__openOrders.get(exName, {}).get(taskName, {})
+        for records in taskOrders.values():
+            for record in records:
+                if str(record.get('orderID') or '') != orderID:
+                    continue
+                for key in ('price', 'amount', 'retry'):
+                    if key in data:
+                        record[key] = data[key]
+                self._requestSave()
                 return
-            exName = data.get('exName', '')
-            taskName = self._taskName(data.get('taskName'))
-            taskOrders = self.__openOrders.get(exName, {}).get(taskName, {})
-            for records in taskOrders.values():
-                for record in records:
-                    if str(record.get('orderID') or '') != orderID:
-                        continue
-                    for key in ('price', 'amount', 'retry'):
-                        if key in data:
-                            record[key] = data[key]
-                    self._requestSave()
-                    return
 
-        # 记录oms通过的订单
-        def _saveOrder():
-            data = args[1] if len(args) > 1 else {}
-            orderType = data.get('type', '')
-            if orderType == kCancel:
-                log(f"[storageOrders] 撤单发送: {data.get('exName', '')} {data.get('symbol', '')} {data.get('orderID', '')}")
-                return
-            symbol = data.get('symbol', '')
-            direction = data.get('dir', '')
-            taskName = self._taskName(data.get('taskName'))
-            coinInfo = data.get("coinInfo") or {}
-            coinId = coinInfo.get('id') or self._cleanSymbol(symbol)
-            exName = data.get('exName', '')
-            record = {
-                'symbol': symbol,
+    # 记录oms通过的订单
+    def _saveOrder(self, data: dict) -> None:
+        orderType = data.get('type', '')
+        if orderType == kCancel:
+            log(f"[storageOrders] 撤单发送: {data.get('exName', '')} {data.get('symbol', '')} {data.get('orderID', '')}")
+            return
+        symbol = data.get('symbol', '')
+        direction = data.get('dir', '')
+        taskName = self._taskName(data.get('taskName'))
+        coinInfo = data.get("coinInfo") or {}
+        coinId = coinInfo.get('id') or self._cleanSymbol(symbol)
+        exName = data.get('exName', '')
+        record = {'symbol': symbol,
                 'orderID': data.get('orderID', ''),
                 'clientOrderId': data.get('clientOrderId', ''),
                 'dir': direction,
@@ -120,111 +127,93 @@ class storageOrders:
                 'retry': data.get('retry', 0),
                 'time': self._orderTime(None),
             }
-            self._warnDuplicateOpen(exName, taskName, coinId, record)
-            self.__openOrders.setdefault(exName, {}).setdefault(taskName, {}).setdefault(coinId, []).append(record)
-            self._requestSave()
+        self._warnDuplicateOpen(exName, taskName, coinId, record)
+        self.__openOrders.setdefault(exName, {}).setdefault(taskName, {}).setdefault(coinId, []).append(record)
+        self._requestSave()
 
-        # 下单失败: 删掉 _saveOrder 刚记的待匹配记录,否则它永远等不到WS回报变成孤儿
-        def _failOrder():
-            data = args[1] if len(args) > 1 else {}
-            if data.get('type') == kCancel:
-                return
-            orderID = str(data.get('orderID') or '')
-            clientOrderId = str(data.get('clientOrderId') or '')
-            if not orderID and not clientOrderId:
-                return
-            coinInfo = data.get("coinInfo") or {}
-            coinId = coinInfo.get('id') or self._cleanSymbol(data.get('symbol', ''))
-            matched, _ = self._popTempOrderBy(
-                data.get('exName', ''),
-                lambda rec: self._sameOrderId(rec, orderID, clientOrderId))
-            if matched:
-                log(f"[storageOrders] 下单失败,移除待匹配记录: {coinId} clientOrderId={clientOrderId}")
+    # 下单失败: 删掉 _saveOrder 刚记的待匹配记录,否则它永远等不到WS回报变成孤儿
+    def _failOrder(self, data: dict) -> None:
+        if data.get('type') == kCancel:
+            return
+        orderID = str(data.get('orderID') or '')
+        clientOrderId = str(data.get('clientOrderId') or '')
+        if not orderID and not clientOrderId:
+            return
+        coinInfo = data.get("coinInfo") or {}
+        coinId = coinInfo.get('id') or self._cleanSymbol(data.get('symbol', ''))
+        matched, _ = self._popTempOrderBy(
+            data.get('exName', ''),
+            lambda rec: self._sameOrderId(rec, orderID, clientOrderId))
+        if matched:
+            log(f"[storageOrders] 下单失败,移除待匹配记录: {coinId} clientOrderId={clientOrderId}")
 
-        def _acceptOrder():
-            data = args[1] if len(args) > 1 else {}
-            self._bindOrderId(data)
+    def _acceptOrder(self, data: dict) -> None:
+        self._bindOrderId(data)
 
-        # 启动时用交易所真实持仓/挂单校验并矫正本地记录(依赖本地文件已在 __init__ 里加载完毕)
-        def _verifyPositions():
-            data = args[3] if len(args) > 3 else {}
-            self._reconcilePositions(exName, data.get('pos') or [])
-            self._reconcileOpenOrders(exName, data.get('open') or [])
+    # 启动时用交易所真实持仓/挂单校验并矫正本地记录(依赖本地文件已在 __init__ 里加载完毕)
+    def _verifyPositions(self, exName: str | None, data: dict) -> None:
+        self._reconcilePositions(exName, data.get('pos') or [])
+        self._reconcileOpenOrders(exName, data.get('open') or [])
 
-        # ws订单数据更新
-        def _wsUpdateOrder():
-            order = args[2] if len(args) > 2 else {}
-            info = order.get('info', {})
-            if not info:
-                return
-            status = str(order.get('status') or '').lower()
-            coinId = info.get('s', '')
-            wsPs = info.get('ps', None)           # 持仓方向: LONG/SHORT/None(现货)
-            wsSide = order.get('side', '')        # 'buy' / 'sell'
-            isReduce = order.get('reduceOnly', False) or self._bool(info.get('R')) or self._bool(info.get('reduceOnly'))
-            
-            # 确定 WS 对应的 dir (kBuy/kSell/kClose)
-            if isReduce and wsPs is not None:
-                wsDir = kClose
-            else:
-                wsDir = kBuy if wsSide == 'buy' else kSell
-            matched, matchedTask = self._popTempOrder(exName, order)
+    # ws订单数据更新
+    def _wsUpdateOrder(self, exName: str | None, order: dict) -> None:
+        info = order.get('info', {})
+        if not info:
+            return
+        status = str(order.get('status') or '').lower()
+        coinId = info.get('s', '')
+        wsPs = info.get('ps', None)           # 持仓方向: LONG/SHORT/None(现货)
+        wsSide = order.get('side', '')        # 'buy' / 'sell'
+        isReduce = order.get('reduceOnly', False) or self._bool(info.get('R')) or self._bool(info.get('reduceOnly'))
 
-            if status in kOrderFailedStatuses:
-                if matched is None:
-                    log(f"[storageOrders] 失败订单未找到待匹配记录: {coinId} "
-                        f"orderID={order.get('id', '')} clientOrderId={order.get('clientOrderId', '')}")
-                if self._float(order.get('filled')) <= 0:
-                    return
-                warn(f"[storageOrders] 订单以{status}结束但已有部分成交: "
-                     f"orderID={order.get('id', '')} filled={order.get('filled', 0)}")
+        # 确定 WS 对应的 dir (kBuy/kSell/kClose)
+        wsDir = kBuy if wsSide == 'buy' else kSell
+        if isReduce and wsPs is not None:
+            wsDir = kClose            
+        matched, matchedTask = self._popTempOrder(exName, order)
+
+        if status in kOrderFailedStatuses:
             if matched is None:
-                matched = self._wsRecord(order, wsDir)
-                matchedTask = matched['taskName']
-
-            # 订单时间: 使用 WS 返回的 timestamp, 格式与 str2time('strNow') 一致
-            wsTs = order.get('timestamp', 0)
-            orderTime = self._orderTime(wsTs)
-
-            # 合并 WS 数据
-            fullRecord = {
-                'time': orderTime,
-                'tags': [exName, matchedTask, coinId],
-                'symbol': matched.get('symbol'),
-                'orderID': order.get('id', ''),
-                'dir': self._recordDir(order),
-                'price': order.get('average'),                  # 成交均价 (=开仓价 或 平仓价)
-                'total': order.get('cost', 0),                  # 总金额
-                'amt': order.get('filled', 0),                  # 已成交数量
-                'fee': self._fee(order),                        # 手续费 (币种:数量)
-                'profit': self._profit(info),                   # 已实现盈亏
-                'positionOrderIDs': matched.get('positionOrderIDs', []),
-            }
-
-            if matched['type'] == kSpot:
-                self.__taskHistory.push(**fullRecord)
-                self._requestSave()
-                log("~~~~__taskHistory~~~~~",self.__taskHistory.buffer())
+                log(f"[storageOrders] 失败订单未找到待匹配记录: {coinId} "
+                    f"orderID={order.get('id', '')} clientOrderId={order.get('clientOrderId', '')}")
+            if self._float(order.get('filled')) <= 0:
                 return
-            # else:
-            if matched.get('dir') == kClose:
-                fullRecord['dir'] = kClose
-            self._updateTaskOrders(matchedTask, matched, fullRecord, status)
+            warn(f"[storageOrders] 订单以{status}结束但已有部分成交: "
+                 f"orderID={order.get('id', '')} filled={order.get('filled', 0)}")
+        if matched is None:
+            matched = self._wsRecord(order, wsDir)
+            matchedTask = matched['taskName']
+
+        # 订单时间: 使用 WS 返回的 timestamp, 格式与 str2time('strNow') 一致
+        wsTs = order.get('timestamp', 0)
+        orderTime = self._orderTime(wsTs)
+
+        # 合并 WS 数据
+        fullRecord = {'time': orderTime,
+                    'tags': [exName, matchedTask, coinId],
+                    'symbol': matched.get('symbol'),
+                    'orderID': order.get('id', ''),
+                    'dir': self._recordDir(order),
+                    'price': order.get('average'),                  # 成交均价 (=开仓价 或 平仓价)
+                    'total': order.get('cost', 0),                  # 总金额
+                    'amt': order.get('filled', 0),                  # 已成交数量
+                    'fee': self._fee(order),                        # 手续费 (币种:数量)
+                    'profit': self._profit(info),                   # 已实现盈亏
+                    'positionOrderIDs': matched.get('positionOrderIDs', []),
+                }
+
+        if matched['type'] == kSpot:
             self.__taskHistory.push(**fullRecord)
             self._requestSave()
-            log("~~~~__taskHistory~~~~~",self.__taskHistory.buffer())
-            
-        #消息处理
-        result = switchFn({eMarketId['order']: _saveOrder,
-                           eMarketId['orderFailed']: _failOrder,
-                           eMarketId['orderAccepted']: _acceptOrder,
-                           eMarketId['wsOrder']: _wsUpdateOrder,
-                           eMarketId['gPosit']: _gPosit,
-                           eMarketId['positions']: _verifyPositions,
-                           eMarketId['gOpenOrders']: _gOpenOrders,
-                           eMarketId['uOpenOrder']: _uOpenOrder,
-                         }, key=marketId)
-        return None if result is False else result
+            # log("~~~~__taskHistory~~~~~", self.__taskHistory.buffer())  # 调试用,数据量大时建议保持关闭
+            return
+        # else:
+        if matched.get('dir') == kClose:
+            fullRecord['dir'] = kClose
+        self._updateTaskOrders(matchedTask, matched, fullRecord, status)
+        self.__taskHistory.push(**fullRecord)
+        self._requestSave()
+        # log("~~~~__taskHistory~~~~~", self.__taskHistory.buffer())  # 调试用,数据量大时建议保持关闭
 
     def _cleanSymbol(self, symbol: str) -> str:
         if not symbol:
@@ -233,8 +222,8 @@ class storageOrders:
         clean = clean.split(':')[0]
         return clean.replace('/', '').replace('-', '')
 
-    def _taskPositions(self, symbol: str, taskName: str = '') -> dict:
-        result = {}
+    def _taskPositions(self, symbol: str, taskName: str = '') -> dict[str, list[dict]]:
+        result: dict[str, list[dict]] = {}
         querySymbol = self._cleanSymbol(symbol)
         for task, orders in self.__taskOrders.items():
             if taskName and task != taskName:
@@ -266,7 +255,7 @@ class storageOrders:
                 key = (orderSymbol, side)
                 position = grouped.setdefault(key, {
                     'symbol': orderSymbol,
-                    'dir': f"{side == kLong and kBuy or kSell}_{side}",
+                    'dir': f"{kBuy if side == kLong else kSell}_{side}",
                     'side': side,
                     'open': order.get('price'),
                     'unRealized': 0,
@@ -362,7 +351,7 @@ class storageOrders:
             warn(f"[storageOrders] 成交订单缺少orderID,不写入taskOrders: task={taskName}")
             return
         for index, item in enumerate(orders):
-            if orderID and str(item.get('orderID') or '') == orderID:
+            if str(item.get('orderID') or '') == orderID:
                 orders[index] = order
                 self._requestSave()
                 return
@@ -386,7 +375,7 @@ class storageOrders:
         self._requestSave()
 
     # 用交易所返回的真实持仓(pos)矫正本地 __taskOrders: 以交易所数据为准
-    def _reconcilePositions(self, exName: str, exPositions: list) -> None:
+    def _reconcilePositions(self, exName: str, exPositions: list[dict]) -> None:
         live = {(self._cleanSymbol(p.get('symbol', '')), (p.get('side') or '').lower()) for p in exPositions}
         for taskName, orders in list(self.__taskOrders.items()):
             keep = []
@@ -411,7 +400,7 @@ class storageOrders:
             log(f"[storageOrders] 持仓矫正: 交易所持仓 {exName}/{symbol}/{direction} 本地无任何task记录,无法自动归属,请人工核实")
 
     # 用交易所返回的当前挂单(open)清理本地 __openOrders 里已失效的待匹配记录
-    def _reconcileOpenOrders(self, exName: str, exOpenOrders: list) -> None:
+    def _reconcileOpenOrders(self, exName: str, exOpenOrders: list[dict]) -> None:
         exOrders = self.__openOrders.get(exName)
         if not exOrders:
             return
@@ -518,14 +507,9 @@ class storageOrders:
         except (TypeError, ValueError):
             return 0.0
 
+    # info['rp'] 为 None 时按 0 处理,其余走 _float 统一的转换+异常兜底(_float(None) 本身也是 0.0,逻辑等价,这里只是更直白)
     def _profit(self, info: dict) -> float:
-        profit = info.get('rp')
-        if profit is None:
-            return 0.0
-        try:
-            return float(profit)
-        except (TypeError, ValueError):
-            return 0.0
+        return self._float(info.get('rp'))
 
     def _popTempOrder(self, exName: str, order: dict) -> tuple[dict | None, str]:
         orderId = str(order.get('id') or '')
@@ -560,31 +544,23 @@ class storageOrders:
             return True
         return bool(clientOrderId and recClientOrderId == clientOrderId)
 
-    def _fee(self, order: dict) -> dict:
+    def _fee(self, order: dict) -> dict[str, Any]:
+        def _sumFees(fees: Iterable[dict]) -> dict[str, float]:
+                result: dict[str, float] = {}
+                for item in fees:
+                    currency = item.get('currency') if isinstance(item, dict) else None
+                    if not currency:
+                        continue
+                    result[currency] = result.get(currency, 0.0) + self._float(item.get('cost'))
+
         trades = order.get('trades') or []
-        result = self._sumFees(
-            fee
-            for trade in trades
-            for fee in ((trade.get('fees') or []) or [trade.get('fee') or {}])
-        )
-        if result:
-            return result
-        result = self._sumFees(order.get('fees') or [])
-        if result:
-            return result
-        result = self._sumFees([order.get('fee') or {}])
+        # 三种手续费来源按优先级依次尝试,or 链短路取第一个非空结果(和 switchV 的 dice.get(k1) or dice.get(k2) 是同一种写法)
+        result = (_sumFees(fee for trade in trades for fee in ((trade.get('fees') or []) or [trade.get('fee') or {}]))
+                            or _sumFees(order.get('fees') or [])
+                            or _sumFees([order.get('fee') or {}]))
         if result:
             return result
         info = order.get('info', {})
         if info.get('N'):
             return {info.get('N'): info.get('n')}
         return {}
-
-    def _sumFees(self, fees: Iterable[dict]) -> dict:
-        result: dict[str, float] = {}
-        for item in fees:
-            currency = item.get('currency') if isinstance(item, dict) else None
-            if not currency:
-                continue
-            result[currency] = result.get(currency, 0.0) + self._float(item.get('cost'))
-        return result

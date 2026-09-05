@@ -298,19 +298,15 @@ class baseExchange:
             err("batchOrders: 订单数量需在1-5之间")
             return []
         return self._batchOrders(category, orders)
-
-    def editOrder(self, orderID: str, symbol: str, side: str,
-                  amount: float, price: float) -> dict | None:
+    # 修改订单
+    def editOrder(self, orderID: str, symbol: str, side: str,amount: float, price: float) -> dict | None:
         category, symbolInfo = self.coinInfo(symbol)
         if not symbolInfo or not orderID:
             return None
         params = self._orderParams(category)
-        return self._ccxt.edit_order(
-            str(orderID), symbolInfo.get('symbol') or symbolInfo.get('id'),
-            'limit', side, amount, price, params)
-
+        return self._ccxt.edit_order(str(orderID), symbolInfo.get('symbol') or symbolInfo.get('id'),'limit', side, amount, price, params)
+    #交易所/账户类型相关的 fetch/edit 参数
     def _orderParams(self, category: str) -> dict:
-        """交易所/账户类型相关的 fetch/edit 参数。"""
         return {}
     
     # WebSocket 入口

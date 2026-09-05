@@ -1,35 +1,37 @@
-import asyncio
 import copy
 from decimal import Decimal, ROUND_DOWN
-from server.utils import evtConnect, evtFireAsync, kEvt_Market, log, switchFn, evtReturn, slit, division,inRange,warn,time2ID,threadCall,spawnTask
+from typing import Any, Callable
+from server.utils import evtConnect, evtFireAsync, kEvt_Market, log, switchFn, evtReturn, slit, division,inRange,warn,generateId,threadCall,spawnTask
 from server.market import eMarketId, kSwap, kBuy, kSell,kPm,kClose,kCancel,kLong,kShort
 from server.market.baseExchange import baseExchange
 
 class oms:
     "本地订单管理：算价/算量/本地余额校验与扣减。由 gateway 流水线直接调用,只在总线上监听余额更新"
 
-    def __init__(self, exFn=None):
-        self._localFree = evtReturn(kEvt_Market, 'storageCenter', eMarketId['gBalance']) or {}  # 本地缓存的 center 数据
-        self._getEx = exFn            # exName → baseExchange
-        self._clientOrderSeq = 0      # 自增序号,配合 time2ID 保证并发下单时 clientOrderId 不撞车
-        self._checkingOrders = False  # 防止上次定时检查未结束时重复处理同一批挂单
+    def __init__(self, exFn: Callable[[str], baseExchange | None] | None = None):
+        self._localFree: dict[str, dict[str, dict]] = evtReturn(kEvt_Market, 'storageCenter', eMarketId['gBalance']) or {}  # 本地缓存的 center 数据: {exId: {account: {...}}}
+        self._getEx = exFn                  # exName → baseExchange
+        # self._clientOrderSeq: int = 0       # 自增序号,配合 time2ID 保证并发下单时 clientOrderId 不撞车
+        self._checkingOrders: bool = False  # 防止上次定时检查未结束时重复处理同一批挂单
         evtConnect(kEvt_Market, self)
 
-    def evtProcess(self, key, *args):
+    def evtProcess(self, key: object, *args: Any) -> None:
         id_ = args[0]
-        def _balanceUpdate():
+        def _balanceUpdate() -> None:
             exId = args[1] if len(args) > 1 else ''
             account = args[2] if len(args) > 2 else ''
             data = args[3] if len(args) > 3 else {}
-            if exId and account and isinstance(data, dict):
-                target = self._localFree.setdefault(exId, {}).setdefault(account, {})
-                cleanData = self._cleanBalanceData(data)
-                if cleanData:
-                    self._mergeBalance(target, cleanData)
-                    if id_ == eMarketId['balance']:
-                        self._logLocalFree(exId, account, target)
+            if not (exId and account and isinstance(data, dict)):
+                return
+            target = self._localFree.setdefault(exId, {}).setdefault(account, {})
+            cleanData = self._cleanBalanceData(data)
+            if not cleanData:
+                return
+            self._mergeBalance(target, cleanData)
+            if id_ == eMarketId['balance']:
+                self._logLocalFree(exId, account, target)
 
-        def _checkOrders():
+        def _kickOffCheckOrders() -> None:
             if self._checkingOrders:
                 return
             self._checkingOrders = True
@@ -37,11 +39,12 @@ class oms:
 
         switchFn({eMarketId['balance']: _balanceUpdate,
                   eMarketId['wsBalance']: _balanceUpdate,
-                  eMarketId['checkOrders']: _checkOrders}, key=id_)
+                  eMarketId['checkOrders']: _kickOffCheckOrders}, key=id_)
 
+    #订单检查(是否成交)
     async def _checkOrders(self) -> None:
         try:
-            records = evtReturn(kEvt_Market, 'storageOrders', eMarketId['gOpenOrders']) or []
+            records: list[dict] = evtReturn(kEvt_Market, 'storageOrders', eMarketId['gOpenOrders']) or []
             if not records:
                 return
             for record in records:
@@ -52,11 +55,10 @@ class oms:
                          f"{record.get('orderID', '')}: {e}")
         finally:
             self._checkingOrders = False
-
     async def _checkOpenOrder(self, record: dict) -> None:
-        orderID = str(record.get('orderID') or '')
-        exName = record.get('exName', '')
-        symbol = record.get('symbol', '')
+        orderID: str = str(record.get('orderID') or '')
+        exName: str = record.get('exName', '')
+        symbol: str = record.get('symbol', '')
         ex = self._getEx(exName) if self._getEx else None
         if not ex or not orderID or not symbol:
             return
@@ -92,10 +94,10 @@ class oms:
         log(f"[oms] 修改挂单成功: {exName} {symbol} orderID={orderID} "
             f"price={newPrice} amount={amount} total={record.get('totelPrice')} "
             f"retry={retry}")
-
+        
     async def _replaceOpenOrder(self, ex: baseExchange, record: dict) -> None:
-        orderID = str(record.get('orderID') or '')
-        symbol = record.get('symbol', '')
+        orderID: str = str(record.get('orderID') or '')
+        symbol: str = record.get('symbol', '')
         cancelResult = await ex.order(kCancel, symbol, orderID, 0)
         if not cancelResult:
             raise RuntimeError(f'撤销原挂单失败: {orderID}')
@@ -112,10 +114,10 @@ class oms:
             replacement['orderDir'] = (
                 kSell if replacement.get('posSide') == kLong else kBuy)
         evtFireAsync(kEvt_Market, eMarketId['submit'], replacement)
-        log(f"[oms] 挂单超过3次未成交,已撤单并提交市价替换: {symbol} "
-            f"oldOrderID={orderID} amount={remaining}")
+        log(f"[oms] 挂单超过3次未成交,已撤单并提交市价替换: {symbol} " f"oldOrderID={orderID} amount={remaining}")
 
-    def _findOpenOrder(self, orders: object, orderID: str) -> dict | None:
+    def _findOpenOrder(self, orders: list | tuple | dict | None, orderID: str) -> dict | None:
+        # exchange.findOrder() 现货返回 list,合约返回 (open_orders, pos_orders) 元组,这里统一拍平成 list 处理
         if isinstance(orders, tuple):
             orders = orders[0]
         if isinstance(orders, dict):
@@ -146,8 +148,7 @@ class oms:
             pass
         return float(record.get('amount') or 0.0)
 
-    def _orderAmount(self, record: dict, price: float, remaining: float,
-                     ex: baseExchange) -> float:
+    def _orderAmount(self, record: dict, price: float, remaining: float, ex: baseExchange) -> float:
         total = float(record.get('totelPrice') or 0.0)
         oldPrice = float(record.get('price') or 0.0)
         target = total / price if total > 0 else remaining
@@ -158,7 +159,7 @@ class oms:
         return self._floorAmount(target, step)
 
     # ── gateway 流水线入口: 校验+算价算量+扣本地余额。通过返回True,拦截返回原因字符串 ──
-    async def prepare(self, data: dict):
+    async def prepare(self, data: dict) -> bool | str:
         orderType = data.get('type', '')
         direction = data.get('dir', '')
         isPm = orderType == kSwap
@@ -171,8 +172,7 @@ class oms:
             return True
 
         if data.get('_replaceOrder'):
-            if not data.get('clientOrderId'):
-                data['clientOrderId'] = self._genClientOrderId()
+            self._ensureClientOrderId(data)
             return True
 
         # 2. 余额处理
@@ -192,9 +192,13 @@ class oms:
             self._deduct(data, key, consumeCoin, fixTotel)
 
         # 3. 生成幂等id,供WS回报匹配
-        if not data.get('clientOrderId'):
-            data['clientOrderId'] = self._genClientOrderId()
+        self._ensureClientOrderId(data)
         return True
+
+    # 幂等id缺失时补一个,prepare() 内两处会用到
+    def _ensureClientOrderId(self, data: dict) -> None:
+        if not data.get('clientOrderId'):
+            data['clientOrderId'] = generateId()#self._genClientOrderId()
 
     # 扣减本地余额并记录,供下单失败时 rollback
     def _deduct(self, data: dict, key: str, coin: str, amount: float) -> None:
@@ -212,26 +216,22 @@ class oms:
         log(f"[oms] 下单失败,回滚本地扣减: {rec['key']}/{rec['coin']} +{rec['amount']}")
 
     # ── 当前挂单最优价 ──
-    async def _BBO(self, ex: baseExchange, symbol: str, dir: str, order: int,aggressive: bool = False) -> float:
+    async def _BBO(self, ex: baseExchange, symbol: str, direction: str, order: int, aggressive: bool = False) -> float:
         book = await threadCall(ex, ex.orderBook, symbol, limit=max(10, order + 4))
-        isBuy = dir == kBuy
-        if aggressive:
-            target = book['asks'] if isBuy else book['bids']
-        else:
-            target = book['bids'] if isBuy else book['asks']
+        isBuy = direction == kBuy
+        target = (book['asks'] if isBuy else book['bids']) if aggressive else (book['bids'] if isBuy else book['asks'])
         order = min(max(order, 0), len(target) - 1)
         return target[order][0]
 
     # 在 {exId: {account: {...}}} 快照里按 account 名找出对应字典
     def _findAccount(self, snapshot: dict, exName: str) -> dict:
         for accounts in snapshot.values():
-            for accountName, data in accounts.items():
-                if accountName == exName:
-                    return data
+            if exName in accounts:
+                return accounts[exName]
         return {}
 
-    # 更新本地数据
-    def _localCoin(self, exName:str, isPm:bool, coin:str = '', key: str | None = None) -> float | dict:
+    # 更新本地数据; key 显式传入时会覆盖 isPm 推导出的默认桶('pm'/'free'),此时 isPm 本身不再生效
+    def _localCoin(self, exName: str, isPm: bool, coin: str = '', key: str | None = None) -> float | dict:
         trageEx = self._findAccount(self._localFree, exName)
         key = key or (kPm if isPm else 'free')
         if coin == '':
@@ -271,7 +271,7 @@ class oms:
         return target.get(key, {}).get(coin, 0)
 
     # ── 校验订单 + 准备价格/数量 ──
-    async def _checkOrder(self, data: dict, isPm: bool):
+    async def _checkOrder(self, data: dict, isPm: bool) -> bool | str:
         exName = data.get('exName', '')
         symbol = data.get('symbol', '')
         direction = data.get('dir', '')
@@ -373,7 +373,7 @@ class oms:
         return True
 
     # ── 平仓/卖出 ──
-    def _close(self, data: dict):
+    def _close(self, data: dict) -> None:
         direction = data.get('dir', '')
         isPm = data.get('type', '') == kSwap
         # 卖现货: 扣减币余额
@@ -411,9 +411,9 @@ class oms:
                 return item
         return {}
 
-    def _genClientOrderId(self) -> str:
-        self._clientOrderSeq += 1
-        return f"{time2ID()}{self._clientOrderSeq}"
+    # def _genClientOrderId(self) -> str:
+        # self._clientOrderSeq += 1
+        # return f"{time2Id()}{self._clientOrderSeq}"
 
     def _floorAmount(self, amount: float, step: float | int | None) -> float:
         if not step:

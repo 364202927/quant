@@ -19,24 +19,24 @@ class gateway:
 
     # 供 marketMgr 的事件处理调用,同步入队(事件总线在事件循环内分发,无跨线程问题)
     def submit(self, data: dict) -> None:
+        def _hasDupCancel(symbol: str) -> bool:
+            for _, _, item in list(self._queue._queue):
+                if item.get('type') == kCancel and item.get('symbol') == symbol:
+                    return True
+            return False
+        #
         if self._closed:
             warn(f"[gateway:{self._exName}] 已停止接单,丢弃: {data.get('symbol', '')}")
             return
         orderType = data.get('type', '')
         if orderType == kCancel:
-            if self._hasDupCancel(data.get('symbol', '')):
+            if _hasDupCancel(data.get('symbol', '')):
                 log(f"[gateway:{self._exName}] 撤单重复，跳过: {data.get('symbol', '')}")
                 return
             priority = kPriority_Cancel
         else:
             priority = kPriority_Normal
         self._queue.put_nowait((priority, next(self._seq), data))
-
-    def _hasDupCancel(self, symbol: str) -> bool:
-        for _, _, item in list(self._queue._queue):
-            if item.get('type') == kCancel and item.get('symbol') == symbol:
-                return True
-        return False
 
     def close(self) -> None:
         self._closed = True
@@ -89,40 +89,41 @@ class gateway:
             self._ex.requestBalanceRefresh()
 
     async def _send(self, item: dict) -> None:
-        if item.get('type') == kCancel:
+        def _orderId(result: object) -> str:
+                if not isinstance(result, dict):
+                    return ''
+                orderID = result.get('id') or result.get('orderId') or result.get('orderID')
+                info = result.get('info') or {}
+                if not orderID and isinstance(info, dict):
+                    orderID = info.get('orderId') or info.get('ordId') or info.get('i')
+                data = result.get('data') or []
+                if not orderID and isinstance(data, list) and data and isinstance(data[0], dict):
+                    orderID = data[0].get('orderId') or data[0].get('ordId')
+                return str(orderID or '')
+        
+        if item.get('type') == kCancel: #取消订单
             await self._ex.order('cancel', item.get('symbol', ''), item.get('orderID', ''), 0)
             self._ex.requestBalanceRefresh()
             return
+        #正常订单
         result = await self._ex.order(
-            typeState=item.get('orderDir', item.get('dir', '')),
-            symbol=item.get('symbol', ''),
-            totelPrice=item.get('totelPrice', 0),
-            amount=item.get('amount'),
-            price=item.get('price'),
-            isMarket=item.get('isMarket', False),
-            inForce=item.get('inForce', 'GTC'),
-            posSide=item.get('posSide'),
-            lv=item.get('lv', 1),
-            clientOrderId=item.get('clientOrderId'))
+                    typeState=item.get('orderDir', item.get('dir', '')),
+                    symbol=item.get('symbol', ''),
+                    totelPrice=item.get('totelPrice', 0),
+                    amount=item.get('amount'),
+                    price=item.get('price'),
+                    isMarket=item.get('isMarket', False),
+                    inForce=item.get('inForce', 'GTC'),
+                    posSide=item.get('posSide'),
+                    lv=item.get('lv', 1),
+                    clientOrderId=item.get('clientOrderId'))
         if not result:
             raise RuntimeError("交易所未返回订单数据")
         status = str(result.get('status') or '').lower() if isinstance(result, dict) else ''
         if status in kOrderFailedStatuses:
             raise RuntimeError(f"交易所返回失败状态: {status}")
-        orderID = self._orderId(result)
+        orderID = _orderId(result)
         if not orderID:
             raise RuntimeError("交易所返回数据缺少订单ID")
         item['orderID'] = orderID
         evtFireAsync(kEvt_Market, eMarketId['orderAccepted'], item)
-
-    def _orderId(self, result: object) -> str:
-        if not isinstance(result, dict):
-            return ''
-        orderID = result.get('id') or result.get('orderId') or result.get('orderID')
-        info = result.get('info') or {}
-        if not orderID and isinstance(info, dict):
-            orderID = info.get('orderId') or info.get('ordId') or info.get('i')
-        data = result.get('data') or []
-        if not orderID and isinstance(data, list) and data and isinstance(data[0], dict):
-            orderID = data[0].get('orderId') or data[0].get('ordId')
-        return str(orderID or '')

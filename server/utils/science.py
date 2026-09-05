@@ -22,7 +22,9 @@ def inRange(range, num):
 
 # 根据当前时间返回id
 def time2ID():
-    return f"{int(time.time())}{random.randint(1, 10000)}"
+    timestamp = int(time.time() * 1000000)
+    rand_num = random.randint(0, 999999)
+    return f"{timestamp}{rand_num:06d}"# 使用格式化字符串强制随机数占满 6 位
 
 # 返回币安用的时间
 def binanceTimestamp():

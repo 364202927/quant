@@ -1,4 +1,4 @@
-import asyncio, signal
+import asyncio, signal,traceback
 from server.core.engine import engine
 from server.utils import g_config,log,kOpenMarket,spawnTask
 from server.external import web, cli, msgHandler#, telegram, feishu
@@ -7,7 +7,6 @@ from server.market.storage.center import storageCenter
 from server.market.storage.orders import storageOrders
 from server.market.storage.subscribe import storageSubscribe
 from server.utils.watchdog import watchdog
-import traceback
 
 # 模块类型映射表
 _MODULE_FACTORY: dict[str, type] = {

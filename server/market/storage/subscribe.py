@@ -1,13 +1,9 @@
 import asyncio
 from typing import Any, Coroutine
-
 import pandas as pd
-
 from server.market import eMarketId
 from server.market.baseExchange import baseExchange
-from server.utils import (diff_Pdtime, evtConnect, evtFire, evtFireAsync,
-                          kEvt_GetTime, kEvt_Market, kEvt_Time, pdData,
-                          switchFn, timeFrame2Float, warn, threadCall, spawnTask)
+from server.utils import (diff_Pdtime, evtConnect, evtFire, evtFireAsync,kEvt_GetTime, kEvt_Market, kEvt_Time, pdData,switchFn, timeFrame2Float, warn, threadCall, spawnTask)
 
 kFileType = '.parquet'
 kCheckOrderTime = '10s'
@@ -19,11 +15,11 @@ class storageSubscribe:
     """K线订阅、内存缓存和定时持久化。"""
 
     def __init__(self) -> None:
-        self._buffer: dict[str, dict[str, dict[str, Any]]] = {}
-        self._markets: dict[str, baseExchange] = {}
-        self._exchanges: dict[str, baseExchange] = {}
-        self._latest: dict[tuple[str, str], pd.DataFrame] = {}
-        self._watchSymbols: dict[tuple[str, str], set[str]] = {}
+        self._exchanges: dict[str, baseExchange] = {}               #使用id和交易所名字能取出交易所
+        self._buffer: dict[str, dict[str, dict[str, Any]]] = {}     #{canonical(交易所id): {symbol(交易对): {'kLine': pdData|None, 'ready': asyncio.Event}}}
+
+        self._latest: dict[tuple[str, str], pd.DataFrame] = {}      #ws推过来的k线更新
+        self._watchSymbols: dict[tuple[str, str], set[str]] = {}    
         self._watchTasks: dict[tuple[str, str], asyncio.Task] = {}
         self._refreshTasks: dict[tuple[str, str], asyncio.Task] = {}
         self._saveTask: asyncio.Task | None = None
@@ -32,15 +28,16 @@ class storageSubscribe:
         evtFire(kEvt_Time, 'subscribe', [kCheckOrderTime, kKlineTimeframe, kSaveTimeframe])
 
     def setMarket(self, markets: dict[str, baseExchange]) -> None:
-        self._markets = markets
         self._exchanges = {}
         for exName, exchange in markets.items():
             self._exchanges[exName] = exchange
             self._exchanges[exchange.get('id')] = exchange
+        print("~~~~~storageSubscribe 交易所~~~~", self._exchanges)
 
     def evtProcess(self, key: object, *args: Any) -> Any:
+        id = args[0]
         if key == kEvt_GetTime:
-            keyTime = args[0]
+            keyTime = id
             if keyTime == kCheckOrderTime:
                 evtFireAsync(kEvt_Market, eMarketId['checkOrders'])
             elif keyTime == kKlineTimeframe:
@@ -51,17 +48,13 @@ class storageSubscribe:
 
         if key != kEvt_Market:
             return None
-        eventId = args[0]
-
         def _addKlines() -> None:
             self._subscribe(args[1])
-
         async def _getCandles() -> pdData:
             return await self._waitCandles(args[1], args[2])
-
         return switchFn({eMarketId['scKline']: _addKlines,
                          eMarketId['gcKline']: _getCandles},
-                        key=eventId)
+                        key=id)
 
     def _startTask(self, coroutine: Coroutine[Any, Any, Any], label: str) -> asyncio.Task:
         return spawnTask(coroutine, name=f"subscribe:{label}")
@@ -87,9 +80,9 @@ class storageSubscribe:
             slot = self._buffer.setdefault(canonical, {}).setdefault(
                 symbol, {'kLine': None, 'ready': asyncio.Event()})
             group = (canonical, category)
-            symbols = self._watchSymbols.setdefault(group, set())
-            if symbol not in symbols:
-                symbols.add(symbol)
+            watchedSymbols = self._watchSymbols.setdefault(group, set())
+            if symbol not in watchedSymbols:
+                watchedSymbols.add(symbol)
                 changedGroups.add(group)
             if not slot['ready'].is_set():
                 self._scheduleRefresh(canonical, exchange, symbol, initial=True)
@@ -108,8 +101,7 @@ class storageSubscribe:
             self._watchLoop(canonical, exchange, category, symbols),
             f"K线WS监听 {canonical}/{category}")
 
-    async def _watchLoop(self, canonical: str, exchange: baseExchange,
-                         category: str, symbols: list[str]) -> None:
+    async def _watchLoop(self, canonical: str, exchange: baseExchange,category: str, symbols: list[str]) -> None:
         delay = 5.0
         while True:
             try:
@@ -129,8 +121,7 @@ class storageSubscribe:
                 await asyncio.sleep(delay)
                 delay = min(delay * 1.5, 60.0)
 
-    def _scheduleRefresh(self, canonical: str, exchange: baseExchange,
-                         symbol: str, initial: bool) -> None:
+    def _scheduleRefresh(self, canonical: str, exchange: baseExchange, symbol: str, initial: bool) -> None:
         key = (canonical, symbol)
         current = self._refreshTasks.get(key)
         if current is not None and not current.done():
@@ -146,8 +137,14 @@ class storageSubscribe:
 
         task.add_done_callback(_clear)
 
-    async def _initialize(self, canonical: str, exchange: baseExchange,
-                          symbol: str) -> None:
+    # 拉取一段K线,拉不到(None/空)则统一抛错,供 _initialize/_fallback 共用
+    async def _fetchKline(self, exchange: baseExchange, symbol: str,seTime: list, limit: int, errorMsg: str) -> pd.DataFrame:
+        frame = await threadCall(exchange, exchange.getKline, symbol, seTime, kKlineTimeframe, limit)
+        if frame is None or frame.empty:
+            raise RuntimeError(errorMsg)
+        return frame
+
+    async def _initialize(self, canonical: str, exchange: baseExchange,symbol: str) -> None:
         slot = self._buffer[canonical][symbol]
         cache: pdData | None = slot.get('kLine')
         fileName = canonical + '_' + symbol
@@ -157,29 +154,21 @@ class storageSubscribe:
                 slot['kLine'] = cache
 
         if cache is None or cache.empty():
-            frame = await threadCall(exchange, exchange.getKline, symbol, [], kKlineTimeframe, 0)
-            if frame is None or frame.empty:
-                raise RuntimeError('交易所未返回首次K线')
+            frame = await self._fetchKline(exchange, symbol, [], 0, '交易所未返回首次K线')
             cache = pdData(data=frame, style='copy')
             slot['kLine'] = cache
         else:
             lastTime = cache.raw(-1, 'candle_begin_time')
             if diff_Pdtime(lastTime) >= timeFrame2Float(kKlineTimeframe):
-                frame = await threadCall(
-                    exchange, exchange.getKline, symbol, [lastTime, 'now'], kKlineTimeframe, 0)
-                if frame is None or frame.empty:
-                    raise RuntimeError('交易所未返回增量K线')
+                frame = await self._fetchKline(exchange, symbol, [lastTime, 'now'], 0, '交易所未返回增量K线')
                 cache.pfConcat(frame)
         slot['ready'].set()
 
-    async def _fallback(self, canonical: str, exchange: baseExchange,
-                        symbol: str) -> None:
-        frame = await threadCall(exchange, exchange.getKline, symbol, [], kKlineTimeframe, 1)
-        if frame is None or frame.empty:
-            raise RuntimeError('交易所未返回最新K线')
+    async def _fallback(self, canonical: str, exchange: baseExchange,symbol: str) -> None:
+        frame = await self._fetchKline(exchange, symbol, [], 1, '交易所未返回最新K线')
         cache: pdData = self._buffer[canonical][symbol]['kLine']
         cache.pfConcat(frame)
-
+    # 更新全部k线
     async def _updateAll(self) -> None:
         for canonical, symbols in list(self._buffer.items()):
             exchange = self._exchanges.get(canonical)
@@ -192,7 +181,9 @@ class storageSubscribe:
                     continue
                 latest = self._latest.pop(key, None)
                 if latest is not None and slot['kLine'] is not None:
+                    print("~~~k线更新~~~", symbol,latest)# 调试用,确认更新节奏时再打开
                     slot['kLine'].pfConcat(latest)
+                    print()
                     continue
                 self._scheduleRefresh(canonical, exchange, symbol, initial=False)
 
@@ -222,7 +213,7 @@ class storageSubscribe:
             for snapshot, fileName in snapshots))
 
     async def shutdown(self) -> None:
-        tasks = [*self._watchTasks.values(), *self._refreshTasks.values()]
+        tasks: list[asyncio.Task] = [*self._watchTasks.values(), *self._refreshTasks.values()]
         if self._saveTask is not None:
             tasks.append(self._saveTask)
         for task in tasks:
@@ -230,6 +221,6 @@ class storageSubscribe:
                 task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        exchanges = list({id(ex): ex for ex in self._exchanges.values()}.values())
+        exchanges: list[baseExchange] = list({id(ex): ex for ex in self._exchanges.values()}.values())
         await asyncio.gather(*(exchange.closeKlineWs() for exchange in exchanges),
                              return_exceptions=True)

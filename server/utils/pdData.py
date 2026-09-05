@@ -401,8 +401,7 @@ class pdData:
         return True
     
     #清洗数据,range_time: [start, end]不为空检测时间范围内的缺失数据,否则检测全量异常数据  //todo不要
-    def detection(self, timeFrame: str = '5m', range_time: list | None = None,
-                  adjUtc: bool = True) -> list[tuple]:
+    def detection(self, timeFrame: str = '5m', range_time: list | None = None,adjUtc: bool = True) -> list[tuple]:
         range_time = range_time or []
         def offsetUtc(timeList: list[tuple]) -> list[tuple]: #调整时间
             if not adjUtc:

@@ -3,7 +3,7 @@ import asyncio
 import inspect
 import traceback
 from typing import Any
-from server.utils import warn,switch, evtConnect, evtFire, kEvt_GetTime, kEvt_Time, time2ID, require,eTimeTs,timeFrame2Float,spawnTask
+from server.utils import warn,switch, evtConnect, evtFire, kEvt_GetTime, kEvt_Time, generateId, require,eTimeTs,timeFrame2Float,spawnTask
 kStrategyFile = 'server.strategy.'
 
 class taskHandle(metaclass=abc.ABCMeta):
@@ -27,7 +27,7 @@ class taskHandle(metaclass=abc.ABCMeta):
 class task:
     def __init__(self):
         self.info = ''
-        self.__id = time2ID()                   # 任务id
+        self.__id = generateId()                   # 任务id
         self.__handle = None
         self.isActive = True
         self.isFirst = False

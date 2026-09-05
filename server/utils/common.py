@@ -1,4 +1,4 @@
-import pickle, json, os, requests, inspect, asyncio, gzip, webbrowser, sys, math, traceback
+import pickle, json, os, requests, inspect, asyncio, gzip, webbrowser, sys, math, traceback,uuid
 from importlib import import_module
 from functools import partial
 from pydispatch import dispatcher
@@ -30,6 +30,10 @@ def futureU(symbol: str, timeIndex = 0):#交割合约,币种结算时间排序,0
 def futureC(symbol: str,  timeIndex = 0):#币本位交割合约
     return swapC(symbol) + f'-{timeIndex}'
 
+# 返回 32 位唯一字符串
+def generateId():
+    return uuid.uuid4().hex  
+
 # 绑定消息,类需实现def evtProcess(self, key, *args):
 def evtConnect(strEvt, obj):
     def rtMsg(sender, **kwargs):
@@ -37,23 +41,18 @@ def evtConnect(strEvt, obj):
         return obj.evtProcess(sender, *event_args)
     dispatcher.connect(rtMsg, signal=strEvt, weak=False)
     dispatcher.connect(rtMsg, signal=_evtTargetSignal(strEvt, obj.__class__.__name__), weak=False)
-
 def _evtTargetSignal(strEvt: object, targetName: str) -> tuple[object, str]:
     return (strEvt, targetName)
-
 # 发送消息 - 同步版本
 def evtFire(strEvt, *args):
     responses = dispatcher.send(signal=strEvt, sender=strEvt, args=args)
     # 排除False: receiver的switchFn未命中时返回False,不是有效结果
     return next((r for _, r in responses if r is not None and r is not False), None)
-
 # 发送消息 - 指定监听类返回
 def evtReturn(strEvt: object, targetName: str, *args: object) -> Any:
     responses = dispatcher.send(signal=_evtTargetSignal(strEvt, targetName), sender=strEvt, args=args)
     return next((r for _, r in responses if r is not None and r is not False), None)
-
-# 发送消息 - 无返回值版本,单个receiver抛异常不影响其余receiver
-# 必须在事件循环线程内调用: 所有evtProcess都是纯内存操作,丢线程池会让storage状态被多线程读写并打乱事件顺序
+# 发送消息 - 无返回值版本,单个receiver抛异常不影响其余receiver, 必须在事件循环线程内调用: 所有evtProcess都是纯内存操作,丢线程池会让storage状态被多线程读写并打乱事件顺序
 def evtFireAsync(strEvt, *args):
     for receiver in list(dispatcher.getAllReceivers(sender=dispatcher.Any, signal=strEvt)):
         try:
