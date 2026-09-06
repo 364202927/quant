@@ -1,4 +1,5 @@
 import copy
+import re
 from decimal import Decimal, ROUND_DOWN
 from typing import Any, Callable
 from server.utils import evtConnect, evtFireAsync, kEvt_Market, log, switchFn, evtReturn, slit, division,inRange,warn,generateId,threadCall,spawnTask
@@ -132,21 +133,35 @@ class oms:
         return None
 
     def _orderRemaining(self, order: dict, record: dict) -> float:
+        def _toFloat(value: object, field: str) -> float | None:
+            if isinstance(value, bool):
+                warn(f"[oms] 订单剩余数量字段异常: {field}={value!r}")
+                return None
+            if isinstance(value, (int, float)):
+                return float(value)
+            if isinstance(value, str):
+                text = value.strip()
+                if re.fullmatch(r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?', text):
+                    return float(text)
+                warn(f"[oms] 订单剩余数量字段异常: {field}={value!r}")
+                return None
+            if value is not None:
+                warn(f"[oms] 订单剩余数量字段异常: {field}={value!r}")
+            return None
+
         remaining = order.get('remaining')
-        try:
-            if remaining is not None:
-                return max(float(remaining), 0.0)
-        except (TypeError, ValueError):
-            pass
+        remainingValue = _toFloat(remaining, 'remaining')
+        if remainingValue is not None:
+            return max(remainingValue, 0.0)
+
         info = order.get('info') or order
-        try:
-            amount = float(order.get('amount') or info.get('origQty') or info.get('q') or 0)
-            filled = float(order.get('filled') or info.get('executedQty') or info.get('z') or 0)
-            if amount > 0:
-                return max(amount - filled, 0.0)
-        except (TypeError, ValueError):
-            pass
-        return float(record.get('amount') or 0.0)
+        amount = _toFloat(order.get('amount') or info.get('origQty') or info.get('q') or 0, 'amount')
+        filled = _toFloat(order.get('filled') or info.get('executedQty') or info.get('z') or 0, 'filled')
+        if amount is not None and filled is not None and amount > 0:
+            return max(amount - filled, 0.0)
+
+        recordAmount = _toFloat(record.get('amount') or 0.0, 'record.amount')
+        return recordAmount if recordAmount is not None else 0.0
 
     def _orderAmount(self, record: dict, price: float, remaining: float, ex: baseExchange) -> float:
         total = float(record.get('totelPrice') or 0.0)

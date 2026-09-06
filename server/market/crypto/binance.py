@@ -34,26 +34,23 @@ class binance(baseExchange):
         proxy = 'socks5://127.0.0.1:10808'
 
         def _wsCreate(cls, **options):
-            return cls({
-                'apiKey':          api['apiKey'],
-                'secret':          api['secret'],
-                'socksProxy':      proxy,
-                'wsSocksProxy':    proxy,
-                'enableRateLimit': True,
-                'timeout':         30000,
-                'options':         options,
-            })
+            return cls({'apiKey':          api['apiKey'],
+                        'secret':          api['secret'],
+                        'socksProxy':      proxy,
+                        'wsSocksProxy':    proxy,
+                        'enableRateLimit': True,
+                        'timeout':         30000,
+                        'options':         options,
+                    })
         #ccxt
         self._ccxt = ccxt.binance({
             'apiKey':          api['apiKey'],
             'secret':          api['secret'],
             'timeout':         30000,
             'enableRateLimit': True,
-            'options': {
-                'adjustForTimeDifference': True,
-                'recvWindow':  10000,
-                'defaultType': kSpot,
-            },
+            'options': {'adjustForTimeDifference': True,
+                    'recvWindow':  10000,
+                    'defaultType': kSpot},
             'portfolioMargin': True,
             'proxies': {'http': proxy, 'https': proxy},
         })

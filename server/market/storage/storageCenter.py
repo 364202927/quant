@@ -1,16 +1,18 @@
-import copy, os
-from server.utils import evtConnect, evtFireAsync, kEvt_Market,switchFn,log, readFile, writeFile, debouncedSaver
+import copy
+import os
+import re
+from server.utils import evtConnect, kEvt_Market,switchFn,log, warn, readFile, writeFile, debouncedSaver
 from server.utils.fileConfig import kOtherPath
 from server.market import eMarketId, kBuy, kSell,kPm
 
-kCenterStateFile = kOtherPath + 'center.pkl'
+kCenterStateFile = kOtherPath + 'spotCost.pkl'
 
 class storageCenter:
     "个人资产数据缓存"
 
     def __init__(self):
         state = readFile(kCenterStateFile) or {}
-        self.__snapshot: dict[str, dict] = state.get('snapshot', {})  # {okx: {'main': {},... },bybit:{'xx':{}},...}
+        self.__snapshot: dict[str, dict] = {}  # {okx: {'main': {},... },bybit:{'xx':{}},...}; 仅运行期缓存
         self.__spotCost: dict[str, list[dict]] = state.get('spotCost', {})     # {coinId: [现货成交成本轨迹]}
         self._requestSave = debouncedSaver(2.0, self._saveState)
         evtConnect(kEvt_Market, self)
@@ -20,18 +22,17 @@ class storageCenter:
         self._saveState()
 
     def _saveState(self) -> None:
-        if not self.__snapshot and not self.__spotCost:
+        if not self.__spotCost:
             if os.path.isfile(kCenterStateFile):
                 os.remove(kCenterStateFile)
             return
-        writeFile({'snapshot': self.__snapshot, 'spotCost': self.__spotCost}, kCenterStateFile)
+        writeFile({'spotCost': self.__spotCost}, kCenterStateFile)
 
     def evtProcess(self, key, *args):
         id_, exName = args[0], args[1] if len(args) > 2 else None
         def _balanceUpdate(exName,key,data):
             target = self.__snapshot.setdefault(exName, {}).setdefault(key, {})
             self._mergeBalance(target, data)
-            self._requestSave()
         #evt事件
         def _balance():
             key, data = args[2],args[3]
@@ -225,10 +226,21 @@ class storageCenter:
         return infoSymbol
 
     def _float(self, value: object) -> float:
-        try:
-            return float(value or 0)
-        except (TypeError, ValueError):
+        if isinstance(value, bool):
+            warn(f"[storageCenter] 数值字段异常: {value!r}")
             return 0.0
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            text = value.strip()
+            if re.fullmatch(r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?', text):
+                return float(text)
+            if text:
+                warn(f"[storageCenter] 数值字段异常: {value!r}")
+            return 0.0
+        if value is not None:
+            warn(f"[storageCenter] 数值字段异常: {value!r}")
+        return 0.0
     
 
     # def position(self, exName: str = '') -> dict:
