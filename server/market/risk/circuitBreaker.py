@@ -14,7 +14,6 @@ class circuitBreaker:
     """断路器：监听余额骤降和策略连续亏损，触发撤单+平仓+暂停"""
 
     def __init__(self):
-        # super().__init__()
         self._lossCount: dict[str, int] = {}   # {taskName: count}
         self._tripped: set[str] = set()        # 已触发断路的策略
         self._interval = _NORMAL_INTERVAL

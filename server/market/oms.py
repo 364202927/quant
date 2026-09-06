@@ -98,7 +98,7 @@ class oms:
     async def _replaceOpenOrder(self, ex: baseExchange, record: dict) -> None:
         orderID: str = str(record.get('orderID') or '')
         symbol: str = record.get('symbol', '')
-        cancelResult = await ex.order(kCancel, symbol, orderID, 0)
+        cancelResult = await threadCall(ex, ex.order, kCancel, symbol, orderID, 0)
         if not cancelResult:
             raise RuntimeError(f'撤销原挂单失败: {orderID}')
         remaining = self._orderRemaining(cancelResult, record)

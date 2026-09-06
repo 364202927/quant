@@ -1,6 +1,6 @@
 import asyncio
 from itertools import count
-from server.utils import log, warn, err, evtFireAsync, kEvt_Market
+from server.utils import log, warn, err, evtFireAsync, kEvt_Market, threadCall
 from server.market import (eMarketId, kCancel, kPriority_Normal,
                            kPriority_Cancel, kOrderFailedStatuses)
 from server.market.baseExchange import baseExchange
@@ -102,11 +102,12 @@ class gateway:
                 return str(orderID or '')
         
         if item.get('type') == kCancel: #取消订单
-            await self._ex.order('cancel', item.get('symbol', ''), item.get('orderID', ''), 0)
+            await threadCall(self._ex, self._ex.order,
+                             'cancel', item.get('symbol', ''), item.get('orderID', ''), 0)
             self._ex.requestBalanceRefresh()
             return
         #正常订单
-        result = await self._ex.order(
+        result = await threadCall(self._ex, self._ex.order,
                     typeState=item.get('orderDir', item.get('dir', '')),
                     symbol=item.get('symbol', ''),
                     totelPrice=item.get('totelPrice', 0),

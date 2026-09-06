@@ -164,10 +164,17 @@ class pdData:
         """Convert internal UTC0 values to timezone-aware local timestamps."""
         converted = cls._normalizeTime(values)
         localTz = cls._localTimezone()
+        def _format(local: pd.Timestamp) -> str:
+            if pd.isna(local):
+                return ''
+            offsetHours = int(local.utcoffset().total_seconds() // 3600)
+            return f'{local:%Y-%m-%d %H:%M:%S}{offsetHours:+d}'
         if isinstance(converted, pd.Timestamp):
-            return converted.tz_localize('UTC').tz_convert(localTz)
+            local = converted.tz_localize('UTC').tz_convert(localTz)
+            return _format(local)
         if isinstance(converted, pd.Series):
-            return converted.dt.tz_localize('UTC').dt.tz_convert(localTz)
+            local = converted.dt.tz_localize('UTC').dt.tz_convert(localTz)
+            return local.map(_format)
         return converted
 
     def _frist(self):
@@ -401,76 +408,76 @@ class pdData:
         return True
     
     #清洗数据,range_time: [start, end]不为空检测时间范围内的缺失数据,否则检测全量异常数据  //todo不要
-    def detection(self, timeFrame: str = '5m', range_time: list | None = None,adjUtc: bool = True) -> list[tuple]:
-        range_time = range_time or []
-        def offsetUtc(timeList: list[tuple]) -> list[tuple]: #调整时间
-            if not adjUtc:
-                return timeList
-            adjusted = []
-            for tabTime in timeList:
-                tb, te = tabTime
-                adjusted.append((tb - pd.Timedelta(hours=1), te + pd.Timedelta(hours=1)))
-            return adjusted
-        # 计算时间序列的周期间隔（中位数）
-        def calc_freq_delta(times: pd.Series) -> pd.Timedelta:
-            if len(times) <= 1:
-                return pd.Timedelta(timeFrame)
-            freq_delta = times.diff().dropna().quantile(0.5)
-            return freq_delta if freq_delta > pd.Timedelta(0) else pd.Timedelta(timeFrame)
-        # 检测头部、中间、尾部的数据缺失区间（向量化实现）
-        def detect_gaps(times: pd.Series, t_start: pd.Timestamp, t_end: pd.Timestamp,freq_delta: pd.Timedelta, threshold: pd.Timedelta) -> list[tuple]:
-            missing: list[tuple] = []
-            if (times.iloc[0] - t_start) > threshold:# 头部缺失
-                missing.append((t_start, times.iloc[0]))
-            if len(times) > 1:# 中间缺失
-                gaps = times.diff()
-                gap_mask = gaps > threshold
-                if gap_mask.any():
-                    prev_times = times.shift(1)[gap_mask]
-                    curr_times = times[gap_mask]
-                    missing.extend(zip(prev_times + freq_delta, curr_times))
-            if (t_end - times.iloc[-1]) > threshold: # 尾部缺失
-                missing.append((times.iloc[-1] + freq_delta, t_end))
-            return offsetUtc(missing)
+    # def detection(self, timeFrame: str = '5m', range_time: list | None = None,adjUtc: bool = True) -> list[tuple]:
+    #     range_time = range_time or []
+    #     def offsetUtc(timeList: list[tuple]) -> list[tuple]: #调整时间
+    #         if not adjUtc:
+    #             return timeList
+    #         adjusted = []
+    #         for tabTime in timeList:
+    #             tb, te = tabTime
+    #             adjusted.append((tb - pd.Timedelta(hours=1), te + pd.Timedelta(hours=1)))
+    #         return adjusted
+    #     # 计算时间序列的周期间隔（中位数）
+    #     def calc_freq_delta(times: pd.Series) -> pd.Timedelta:
+    #         if len(times) <= 1:
+    #             return pd.Timedelta(timeFrame)
+    #         freq_delta = times.diff().dropna().quantile(0.5)
+    #         return freq_delta if freq_delta > pd.Timedelta(0) else pd.Timedelta(timeFrame)
+    #     # 检测头部、中间、尾部的数据缺失区间（向量化实现）
+    #     def detect_gaps(times: pd.Series, t_start: pd.Timestamp, t_end: pd.Timestamp,freq_delta: pd.Timedelta, threshold: pd.Timedelta) -> list[tuple]:
+    #         missing: list[tuple] = []
+    #         if (times.iloc[0] - t_start) > threshold:# 头部缺失
+    #             missing.append((t_start, times.iloc[0]))
+    #         if len(times) > 1:# 中间缺失
+    #             gaps = times.diff()
+    #             gap_mask = gaps > threshold
+    #             if gap_mask.any():
+    #                 prev_times = times.shift(1)[gap_mask]
+    #                 curr_times = times[gap_mask]
+    #                 missing.extend(zip(prev_times + freq_delta, curr_times))
+    #         if (t_end - times.iloc[-1]) > threshold: # 尾部缺失
+    #             missing.append((times.iloc[-1] + freq_delta, t_end))
+    #         return offsetUtc(missing)
         
-        #logic
-        if self._pf is None or self._pf.empty:
-            return []
-        # 指定时间范围的缺失检测
-        time_col = self._frist()
-        if len(range_time) == 2:
-            t_start, t_end = pd.to_datetime(range_time[0]), pd.to_datetime(range_time[1])
-            if isinstance(range_time[0], str):
-                t_start -= pd.Timedelta(hours=utc_now())
-            if isinstance(range_time[1], str):
-                t_end -= pd.Timedelta(hours=utc_now())
-            times = pd.to_datetime(self._pf[time_col]).sort_values().reset_index(drop=True)
-            times = times[(times >= t_start) & (times <= t_end)]
-            if times.empty:
-                return [(t_start, t_end)]
-            freq_delta = calc_freq_delta(times)
-            missing = detect_gaps(times, t_start, t_end, freq_delta, freq_delta * 10)
-            return missing
-        # 全量异常数据检测
-        gap_tolerance = 10
-        freq_delta = pd.Timedelta(timeFrame)
-        df = self._pf[[time_col, 'close', 'high', 'vol']].copy()
-        df = df.set_index(time_col).sort_index()
-        full_idx = pd.date_range(start=df.index.min(), end=df.index.max(), freq=timeFrame)
-        df = df.reindex(full_idx)
-        # 标记异常：缺失或非正值
-        is_bad = (df['close'].isna() | df['vol'].isna() |
-                  (df['close'] <= 0) | (df['high'] <= 0))
-        bad_idx = np.where(is_bad.values)[0]
-        if len(bad_idx) == 0:
-            return []
-        # 区间合并：利用 diff 找到分割点
-        gaps = np.diff(bad_idx)
-        splits = np.where(gaps > gap_tolerance + 1)[0] + 1
-        groups = np.split(bad_idx, splits)
-        result = [(full_idx[g[0]], full_idx[g[-1]] + freq_delta) for g in groups]
-        log(f"检测异常数据: {len(result)} 个区间需修复")
-        return offsetUtc(result)
+    #     #logic
+    #     if self._pf is None or self._pf.empty:
+    #         return []
+    #     # 指定时间范围的缺失检测
+    #     time_col = self._frist()
+    #     if len(range_time) == 2:
+    #         t_start, t_end = pd.to_datetime(range_time[0]), pd.to_datetime(range_time[1])
+    #         if isinstance(range_time[0], str):
+    #             t_start -= pd.Timedelta(hours=utc_now())
+    #         if isinstance(range_time[1], str):
+    #             t_end -= pd.Timedelta(hours=utc_now())
+    #         times = pd.to_datetime(self._pf[time_col]).sort_values().reset_index(drop=True)
+    #         times = times[(times >= t_start) & (times <= t_end)]
+    #         if times.empty:
+    #             return [(t_start, t_end)]
+    #         freq_delta = calc_freq_delta(times)
+    #         missing = detect_gaps(times, t_start, t_end, freq_delta, freq_delta * 10)
+    #         return missing
+    #     # 全量异常数据检测
+    #     gap_tolerance = 10
+    #     freq_delta = pd.Timedelta(timeFrame)
+    #     df = self._pf[[time_col, 'close', 'high', 'vol']].copy()
+    #     df = df.set_index(time_col).sort_index()
+    #     full_idx = pd.date_range(start=df.index.min(), end=df.index.max(), freq=timeFrame)
+    #     df = df.reindex(full_idx)
+    #     # 标记异常：缺失或非正值
+    #     is_bad = (df['close'].isna() | df['vol'].isna() |
+    #               (df['close'] <= 0) | (df['high'] <= 0))
+    #     bad_idx = np.where(is_bad.values)[0]
+    #     if len(bad_idx) == 0:
+    #         return []
+    #     # 区间合并：利用 diff 找到分割点
+    #     gaps = np.diff(bad_idx)
+    #     splits = np.where(gaps > gap_tolerance + 1)[0] + 1
+    #     groups = np.split(bad_idx, splits)
+    #     result = [(full_idx[g[0]], full_idx[g[-1]] + freq_delta) for g in groups]
+    #     log(f"检测异常数据: {len(result)} 个区间需修复")
+    #     return offsetUtc(result)
     
     def getIndicators(self, *args: list["baseIndicators"]):
         indPf = self._pf.copy()

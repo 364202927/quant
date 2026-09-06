@@ -198,7 +198,7 @@ class baseExchange:
         allpd.format(allData, style='concat')
         return _sortAndClip(allpd.raw())
 
-    async def order(self, typeState: str, symbol: str, totelPrice, amount: float, price: float | None = None, isMarket=False, inForce='GTC', posSide: str | None = None, lv: int = 1, clientOrderId: str | None = None):
+    def order(self, typeState: str, symbol: str, totelPrice, amount: float, price: float | None = None, isMarket=False, inForce='GTC', posSide: str | None = None, lv: int = 1, clientOrderId: str | None = None):
         category, symbolInfo = self.coinInfo(symbol)
         kwargs = {'state': typeState, 'symbol': symbolInfo['id']}
         isSpot = category == kSpot
@@ -247,7 +247,7 @@ class baseExchange:
         fn = dispatch.get(typeState)
         if not fn:
             return False
-        return await threadCall(self, fn, **kwargs)
+        return fn(**kwargs)
 
     def _klineWsClient(self, category: str) -> ccxtpro.Exchange:
         client = self._klineWs.get(category)
