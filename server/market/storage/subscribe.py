@@ -3,13 +3,13 @@ from typing import Any, Coroutine
 import pandas as pd
 from server.market import eMarketId
 from server.market.baseExchange import baseExchange
-from server.utils import (diff_Pdtime, evtConnect, evtFire, evtFireAsync,kEvt_GetTime, kEvt_Market, kEvt_Time, pdData,switchFn, timeFrame2Float, warn, threadCall, spawnTask)
+from server.utils import (diff_Pdtime, evtConnect, evtFire, evtFireAsync, evtReturn, kEvt_GetTime, kEvt_Market, kEvt_Time, pdData,switchFn, timeFrame2Float, warn, log,threadCall, spawnTask)
 
 kFileType = '.parquet'
-kCheckOrderTime = '10s'
+kCheckOrderTime = '5s'
 kKlineTimeframe = '5m'
 kSaveTimeframe = '1h'
-
+#todo:更新k线时还需获取成交记录
 
 class storageSubscribe:
     """K线订阅、内存缓存和定时持久化。"""
@@ -25,7 +25,7 @@ class storageSubscribe:
         self._saveTask: asyncio.Task | None = None
         evtConnect(kEvt_Market, self)
         evtConnect(kEvt_GetTime, self)
-        evtFire(kEvt_Time, 'subscribe', [kCheckOrderTime, kKlineTimeframe, kSaveTimeframe])
+        evtFire(kEvt_Time, 'subscribe', [kKlineTimeframe, kSaveTimeframe])
 
     def setMarket(self, markets: dict[str, baseExchange]) -> None:
         self._exchanges = {}
@@ -37,6 +37,17 @@ class storageSubscribe:
     def evtProcess(self, key: object, *args: Any) -> Any:
         id = args[0]
         if key == kEvt_GetTime:
+            if id == 'subscribe':
+                if len(args) < 2 or args[1] != kCheckOrderTime:
+                    return False
+                orders = evtReturn(kEvt_Market, 'storageOrders', eMarketId['gOpenOrders']) or []
+                hasOrders = bool(orders)
+                if hasOrders:
+                    log(f"[subscribe] 触发订单追踪: {len(orders)}笔挂单")
+                    evtFireAsync(kEvt_Market, eMarketId['checkOrders'])
+                else:
+                    log('[subscribe] 订单追踪结束: 当前无挂单')
+                return not hasOrders
             keyTime = id
             if keyTime == kCheckOrderTime:
                 evtFireAsync(kEvt_Market, eMarketId['checkOrders'])
@@ -46,6 +57,7 @@ class storageSubscribe:
                 self._scheduleSave()
             return None
 
+        #订阅和获取k线
         if key != kEvt_Market:
             return None
         def _addKlines() -> None:

@@ -3,7 +3,7 @@ import re
 from decimal import Decimal, ROUND_DOWN
 from typing import Any, Callable
 from server.utils import evtConnect, evtFireAsync, kEvt_Market, log, switchFn, evtReturn, slit, division,inRange,warn,generateId,threadCall,spawnTask
-from server.market import eMarketId, kSwap, kBuy, kSell,kPm,kClose,kCancel,kLong,kShort
+from server.market import eMarketId, kSpot, kSwap, kBuy, kSell,kPm,kClose,kCancel,kLong,kShort
 from server.market.baseExchange import baseExchange
 
 class oms:
@@ -12,7 +12,6 @@ class oms:
     def __init__(self, exFn: Callable[[str], baseExchange | None] | None = None):
         self._localFree: dict[str, dict[str, dict]] = evtReturn(kEvt_Market, 'storageCenter', eMarketId['gBalance']) or {}  # 本地缓存的 center 数据: {exId: {account: {...}}}
         self._getEx = exFn                  # exName → baseExchange
-        # self._clientOrderSeq: int = 0       # 自增序号,配合 time2ID 保证并发下单时 clientOrderId 不撞车
         self._checkingOrders: bool = False  # 防止上次定时检查未结束时重复处理同一批挂单
         evtConnect(kEvt_Market, self)
 
@@ -34,6 +33,7 @@ class oms:
 
         def _kickOffCheckOrders() -> None:
             if self._checkingOrders:
+                log('[oms] 订单检查正在执行,跳过重复触发')
                 return
             self._checkingOrders = True
             spawnTask(self._checkOrders(), name="oms:checkOrders")
@@ -48,6 +48,7 @@ class oms:
             records: list[dict] = evtReturn(kEvt_Market, 'storageOrders', eMarketId['gOpenOrders']) or []
             if not records:
                 return
+            log(f"[oms] 开始检查挂单: {len(records)}笔")
             for record in records:
                 try:
                     await self._checkOpenOrder(record)
@@ -56,17 +57,28 @@ class oms:
                          f"{record.get('orderID', '')}: {e}")
         finally:
             self._checkingOrders = False
-    async def _checkOpenOrder(self, record: dict) -> None:
+    async def _checkOpenOrder(self, record: dict) -> None: #todo需要检查
         orderID: str = str(record.get('orderID') or '')
         exName: str = record.get('exName', '')
         symbol: str = record.get('symbol', '')
         ex = self._getEx(exName) if self._getEx else None
         if not ex or not orderID or not symbol:
+            warn(f"[oms] 跳过无效追踪订单: {exName}/{symbol} orderID={orderID}")
+            evtFireAsync(kEvt_Market, eMarketId['uOpenOrder'], {
+                'exName': exName, 'taskName': record.get('taskName'),
+                'orderID': orderID, 'clientOrderId': record.get('clientOrderId'),
+                'symbol': symbol, 'remove': True})
             return
 
         orders = await threadCall(ex, ex.findOrder, symbol, orderID, isPos=False, isOpen=True)
         order = self._findOpenOrder(orders, orderID)
         if not order:
+            log(f"[oms] 订单已不在交易所挂单列表,停止本地追踪: "
+                f"{exName}/{symbol} orderID={orderID}")
+            evtFireAsync(kEvt_Market, eMarketId['uOpenOrder'], {
+                'exName': exName, 'taskName': record.get('taskName'),
+                'orderID': orderID, 'clientOrderId': record.get('clientOrderId'),
+                'symbol': symbol, 'remove': True})
             return
 
         retry = int(record.get('retry') or 0) + 1
@@ -74,25 +86,77 @@ class oms:
                   'orderID': orderID, 'retry': retry}
         evtFireAsync(kEvt_Market, eMarketId['uOpenOrder'], update)
         if retry > 3:
+            warn(f"[oms] 挂单追踪次数达到上限,准备替换: "
+                 f"{exName}/{symbol} orderID={orderID} retry={retry}")
             await self._replaceOpenOrder(ex, record)
             return
 
         book = await threadCall(ex, ex.orderBook, symbol, limit=5) or {}
-        direction = record.get('dir')
+        direction = record.get('orderDir') or record.get('dir')
+        if direction == kClose:
+            direction = kSell if record.get('posSide') == kLong else kBuy if record.get('posSide') == kShort else ''
+        if direction not in (kBuy, kSell):
+            raise ValueError(f'订单缺少有效交易方向: {exName}/{symbol} orderID={orderID}')
         side = book.get('asks' if direction == kBuy else 'bids', [])
         if not side:
+            warn(f"[oms] 订单追踪未获取到盘口,保留原挂单: "
+                 f"{exName}/{symbol} orderID={orderID} retry={retry}")
             return
         newPrice = float(side[0][0])
         remaining = self._orderRemaining(order, record)
-        amount = self._orderAmount(record, newPrice, remaining, ex)
+        amount = self._orderAmount(record, newPrice, remaining, ex,
+                                   self._orderFilled(order))
         if amount <= 0:
+            log(f"[oms] 订单剩余数量为0,跳过改单: "
+                f"{exName}/{symbol} orderID={orderID} retry={retry}")
             return
-        result = await threadCall(ex, ex.editOrder, orderID, symbol, direction, amount, newPrice)
+        category, symbolInfo = ex.coinInfo(symbol)
+        minCost = (symbolInfo or {}).get('cost', {}).get('min')
+        if minCost is not None and newPrice * amount < float(minCost):
+            warn(f"[oms] 新改单金额低于交易所最小名义金额,保留原挂单: "
+                 f"{exName}/{symbol} orderID={orderID} total={newPrice * amount:.8f} min={minCost}")
+            return
+        editClientOrderId = generateId() if category == kSpot else record.get('clientOrderId')
+        evtFireAsync(kEvt_Market, eMarketId['uOpenOrder'], {
+            'exName': exName, 'taskName': record.get('taskName'),
+            'orderID': orderID, 'editing': True,
+            'clientOrderId': editClientOrderId})
+        try:
+            result = await threadCall(ex, ex.editOrder, orderID, symbol, direction,
+                                      amount, newPrice, editClientOrderId)
+        except Exception as exception:
+            if '-5027' in str(exception) or 'No need to modify' in str(exception):
+                evtFireAsync(kEvt_Market, eMarketId['uOpenOrder'], {
+                    'exName': exName, 'taskName': record.get('taskName'),
+                    'orderID': orderID, 'editing': False})
+                log(f"[oms] 挂单无需修改,保留当前订单: {exName}/{symbol} orderID={orderID}")
+                return
+            evtFireAsync(kEvt_Market, eMarketId['uOpenOrder'], {
+                'exName': exName, 'taskName': record.get('taskName'),
+                'orderID': orderID, 'editing': False})
+            raise
         if not result:
+            evtFireAsync(kEvt_Market, eMarketId['uOpenOrder'], {
+                'exName': exName, 'taskName': record.get('taskName'),
+                'orderID': orderID, 'editing': False})
             raise RuntimeError('改单未返回订单数据')
-        update.update(price=newPrice, amount=amount)
+        resultInfo = result.get('info') or {} if isinstance(result, dict) else {}
+        newOrderID = ''
+        newClientOrderId = ''
+        if isinstance(result, dict):
+            newOrderID = str(result.get('id') or result.get('orderId') or result.get('orderID') or '')
+            newClientOrderId = str(result.get('clientOrderId') or '')
+        if isinstance(resultInfo, dict):
+            newOrderID = newOrderID or str(resultInfo.get('orderId') or resultInfo.get('orderID') or resultInfo.get('i') or '')
+            newClientOrderId = newClientOrderId or str(resultInfo.get('clientOrderId') or resultInfo.get('c') or '')
+        update.update(price=newPrice, amount=amount, editing=False,
+                      previousOrderID=orderID)
+        if newOrderID:
+            update['orderID'] = newOrderID
+        if newClientOrderId:
+            update['clientOrderId'] = newClientOrderId
         evtFireAsync(kEvt_Market, eMarketId['uOpenOrder'], update)
-        log(f"[oms] 修改挂单成功: {exName} {symbol} orderID={orderID} "
+        log(f"[oms] 修改挂单成功: {exName} {symbol} orderID={newOrderID or orderID} "
             f"price={newPrice} amount={amount} total={record.get('totelPrice')} "
             f"retry={retry}")
         
@@ -104,8 +168,13 @@ class oms:
             raise RuntimeError(f'撤销原挂单失败: {orderID}')
         remaining = self._orderRemaining(cancelResult, record)
         if remaining <= 0:
+            log(f"[oms] 原挂单已撤销且无剩余数量: {symbol} orderID={orderID}")
             ex.requestBalanceRefresh()
             return
+        evtFireAsync(kEvt_Market, eMarketId['uOpenOrder'], {
+            'exName': record.get('exName'), 'taskName': record.get('taskName'),
+            'orderID': orderID, 'clientOrderId': record.get('clientOrderId'),
+            'symbol': symbol, 'remove': True})
 
         replacement = copy.deepcopy(record)
         replacement.update(orderID='', clientOrderId='', amount=remaining,
@@ -131,6 +200,17 @@ class oms:
             if str(currentID or '') == orderID:
                 return order
         return None
+
+    def _orderFilled(self, order: dict) -> float:
+        info = order.get('info') or order
+        value = order.get('filled')
+        if value is None:
+            value = info.get('executedQty', info.get('z', 0))
+        try:
+            return max(float(value or 0), 0.0)
+        except (TypeError, ValueError):
+            warn(f"[oms] 订单已成交数量字段异常: filled={value!r}")
+            return 0.0
 
     def _orderRemaining(self, order: dict, record: dict) -> float:
         def _toFloat(value: object, field: str) -> float | None:
@@ -163,13 +243,21 @@ class oms:
         recordAmount = _toFloat(record.get('amount') or 0.0, 'record.amount')
         return recordAmount if recordAmount is not None else 0.0
 
-    def _orderAmount(self, record: dict, price: float, remaining: float, ex: baseExchange) -> float:
+    def _orderAmount(self, record: dict, price: float, remaining: float,
+                     ex: baseExchange, filled: float = 0.0) -> float:
+        category, info = ex.coinInfo(record.get('symbol', ''))
+        if record.get('dir') == kClose:
+            target = remaining + filled if category == kSwap else remaining
+            return self._floorAmount(target, info.get('step') if info else None)
         total = float(record.get('totelPrice') or 0.0)
         oldPrice = float(record.get('price') or 0.0)
         target = total / price if total > 0 else remaining
         if oldPrice > 0 and remaining < float(record.get('amount') or remaining):
             target = remaining * oldPrice / price
-        _, info = ex.coinInfo(record.get('symbol', ''))
+        if category == kSwap:
+            target += filled
+        else:
+            target = min(target, remaining)
         step = info.get('step') if info else None
         return self._floorAmount(target, step)
 
@@ -396,7 +484,6 @@ class oms:
             consumeCoin = data.get('consumeCoin', '')
             self._deduct(data, 'free', consumeCoin, data.get('amount', 0))
             return
-        # elif direction == kClose:
         # 平仓合约: 从持仓数据设置反向
         positions = data.pop('_positions', [])
         data.pop('_orderLookupDir', None)
@@ -425,10 +512,6 @@ class oms:
             if item.get('side') == target:
                 return item
         return {}
-
-    # def _genClientOrderId(self) -> str:
-        # self._clientOrderSeq += 1
-        # return f"{time2Id()}{self._clientOrderSeq}"
 
     def _floorAmount(self, amount: float, step: float | int | None) -> float:
         if not step:

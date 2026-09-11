@@ -127,7 +127,8 @@ class storageOrders:
                 eMarketId['orderAccepted']: lambda: self._bindOrderId(_arg(1, {})),
                 eMarketId['wsOrder']: lambda: self._wsUpdateOrder(exName, _arg(2, {})),
                 eMarketId['gPosit']: lambda: _gPosit(_arg(1, ''), _arg(2, ''), _arg(3, ''), _arg(4, '')),
-                eMarketId['positions']: lambda: self._verifyPositions(exName, _arg(3, {})),
+                # positions 事件参数为 (exchangeId, accountName, data)，本地记录按账号名存储
+                eMarketId['positions']: lambda: self._verifyPositions(_arg(2, ''), _arg(3, {})),
                 eMarketId['gOpenOrders']: self._gOpenOrders,
                 eMarketId['uOpenOrder']: lambda: self._uOpenOrder(_arg(1, {})),
             }, key=marketId)
@@ -147,20 +148,54 @@ class storageOrders:
 
     def _uOpenOrder(self, data: dict) -> None:
         orderID = str(data.get('orderID') or '')
-        if not orderID:
-            return
         exName = data.get('exName', '')
         taskName = self._taskName(data.get('taskName'))
         taskOrders = self.__openOrders.get(exName, {}).get(taskName, {})
         for records in taskOrders.values():
-            for record in records:
-                if str(record.get('orderID') or '') != orderID:
+            for index, record in enumerate(records):
+                matched = orderID and str(record.get('orderID') or '') == orderID
+                if not matched and data.get('previousOrderID'):
+                    matched = str(record.get('orderID') or '') == str(data['previousOrderID'])
+                if not matched and data.get('clientOrderId'):
+                    matched = str(record.get('clientOrderId') or '') == str(data['clientOrderId'])
+                if not matched:
                     continue
-                for key in ('price', 'amount', 'retry'):
+                if data.get('remove'):
+                    records.pop(index)
+                    if not records:
+                        for coinId, coinRecords in list(taskOrders.items()):
+                            if coinRecords is records:
+                                del taskOrders[coinId]
+                                break
+                        if not taskOrders:
+                            self.__openOrders.get(exName, {}).pop(taskName, None)
+                        if not self.__openOrders.get(exName):
+                            self.__openOrders.pop(exName, None)
+                    self._requestSave()
+                    log(f"[storageOrders] 移除失效挂单: {exName}/{record.get('symbol', '')} "
+                        f"orderID={record.get('orderID', '')} clientOrderId={record.get('clientOrderId', '')}")
+                    return
+                for key in ('price', 'amount', 'retry', 'editing', 'clientOrderId', 'orderID', 'previousOrderID'):
                     if key in data:
                         record[key] = data[key]
                 self._requestSave()
                 return
+        if data.get('remove') and not orderID and data.get('symbol'):
+            symbol = data['symbol']
+            for coinId, records in list(taskOrders.items()):
+                kept = [record for record in records if record.get('symbol') != symbol]
+                if len(kept) == len(records):
+                    continue
+                if kept:
+                    taskOrders[coinId] = kept
+                else:
+                    del taskOrders[coinId]
+                self._requestSave()
+                log(f"[storageOrders] 按撤单结果移除挂单: {exName}/{symbol} task={taskName}")
+            if not taskOrders:
+                self.__openOrders.get(exName, {}).pop(taskName, None)
+            if not self.__openOrders.get(exName):
+                self.__openOrders.pop(exName, None)
 
     # 记录oms通过的订单
     def _saveOrder(self, data: dict) -> None:
@@ -196,6 +231,8 @@ class storageOrders:
         _warnDuplicateOpen(exName, taskName, coinId, record)
         self.__openOrders.setdefault(exName, {}).setdefault(taskName, {}).setdefault(coinId, []).append(record)
         self._requestSave()
+        log(f"[storageOrders] 记录待成交订单: {exName}/{symbol} "
+            f"clientOrderId={record.get('clientOrderId', '')}")
 
     # 下单失败: 删掉 _saveOrder 刚记的待匹配记录,否则它永远等不到WS回报变成孤儿
     def _failOrder(self, data: dict) -> None:
@@ -246,15 +283,21 @@ class storageOrders:
         exOrders = self.__openOrders.get(exName)
         if not exOrders:
             return
-        liveIds = {str(o.get('clientOrderId') or o.get('orderId') or '') for o in exOpenOrders}
+        liveIds: set[str] = set()
+        for order in exOpenOrders:
+            for key in ('clientOrderId', 'orderId', 'id'):
+                value = str(order.get(key) or '')
+                if value:
+                    liveIds.add(value)
         liveIds.discard('')
         changed = False
         for taskName, taskOrders in list(exOrders.items()):
             for coinId, records in list(taskOrders.items()):
                 keep = []
                 for rec in records:
-                    recId = str(rec.get('clientOrderId') or rec.get('orderID') or '')
-                    if recId and recId not in liveIds:
+                    recIds = {str(rec.get(key) or '') for key in ('clientOrderId', 'orderID')}
+                    recIds.discard('')
+                    if not recIds or recIds.isdisjoint(liveIds):
                         log(f"[storageOrders] 挂单矫正: {exName}/{taskName}/{coinId} clientOrderId={rec.get('clientOrderId')} "
                             f"交易所已无此挂单(可能已成交或撤销),历史成交明细无法回溯,移除本地待匹配记录")
                         changed = True
@@ -282,6 +325,12 @@ class storageOrders:
         wsSide = order.get('side', '')        # 'buy' / 'sell'
         isReduce = order.get('reduceOnly', False) or self._bool(info.get('R')) or self._bool(info.get('reduceOnly'))
 
+        # 现货改单会先撤旧单；新单已回填本地后，旧单的延迟撤单WS不能再清掉新单追踪
+        orderID = str(order.get('id') or '')
+        if status in kOrderFailedStatuses and self._isStaleEditedOrder(exName or '', orderID):
+            log(f"[storageOrders] 忽略改单旧订单延迟回报: {coinId} orderID={orderID}")
+            return
+
         # 确定 WS 对应的 dir (kBuy/kSell/kClose)
         wsDir = kBuy if wsSide == 'buy' else kSell
         if isReduce and wsPs is not None:
@@ -290,9 +339,17 @@ class storageOrders:
 
         if status in kOrderFailedStatuses:
             if matched is None:
-                log(f"[storageOrders] 失败订单未找到待匹配记录: {coinId} "
-                    f"orderID={order.get('id', '')} clientOrderId={order.get('clientOrderId', '')}")
+                if status in (kCancel, 'canceled', 'cancelled'):
+                    log(f"[storageOrders] 撤单回报未找到本地挂单记录(可能已提前移除或WS延迟): {coinId} "
+                        f"orderID={order.get('id', '')} clientOrderId={order.get('clientOrderId', '')}")
+                else:
+                    log(f"[storageOrders] 失败订单未找到待匹配记录: {coinId} "
+                        f"orderID={order.get('id', '')} clientOrderId={order.get('clientOrderId', '')}")
             if self._float(order.get('filled')) <= 0:
+                if matched is not None and matched.get('editing'):
+                    self._restoreOpenOrder(exName or '', matchedTask, matched)
+                    log(f"[storageOrders] 改单撤销旧单,保留本地追踪: {coinId} "
+                        f"orderID={order.get('id', '')}")
                 return
             warn(f"[storageOrders] 订单以{status}结束但已有部分成交: "
                  f"orderID={order.get('id', '')} filled={order.get('filled', 0)}")
@@ -328,6 +385,25 @@ class storageOrders:
         self.__taskHistory.push(**fullRecord)
         self._requestSave()
         # log("~~~~__taskHistory~~~~~", self.__taskHistory.buffer())  # 调试用,数据量大时建议保持关闭
+
+    def _restoreOpenOrder(self, exName: str, taskName: str, record: dict) -> None:
+        if not exName:
+            return
+        coinId = self._cleanSymbol(record.get('symbol', ''))
+        records = self.__openOrders.setdefault(exName, {}).setdefault(taskName, {}).setdefault(coinId, [])
+        if not any(self._sameOrderId(item, str(record.get('orderID') or ''),
+                                     str(record.get('clientOrderId') or '')) for item in records):
+            records.append(record)
+            self._requestSave()
+
+    def _isStaleEditedOrder(self, exName: str, orderID: str) -> bool:
+        if not orderID:
+            return False
+        for tasks in self.__openOrders.get(exName, {}).values():
+            for records in tasks.values():
+                if any(str(record.get('previousOrderID') or '') == orderID for record in records):
+                    return True
+        return False
 
     def _updateTaskOrders(self, taskName: str, matched: dict, record: dict, status: str = 'closed') -> None:
         def _taskOrderDir(matched: dict, record: dict) -> str:
@@ -480,6 +556,8 @@ class storageOrders:
                     continue
                 record['orderID'] = orderID
                 self._requestSave()
+                log(f"[storageOrders] 绑定交易所订单ID: {exName}/{record.get('symbol', '')} "
+                    f"clientOrderId={clientOrderId} orderID={orderID}")
                 return
             
     def _orderTime(self, timestamp: int | float | None) -> str:

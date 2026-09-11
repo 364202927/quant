@@ -39,7 +39,7 @@ class testTrade(contractCTA, realTrade):
 
 
     def update_10s(self, id, timeKey):
-        if not self.bInit: 
+        if self.bInit: 
             return
         if self._testStep == 0:
             log("~~~~~~test初始化完成~~~~~~~~")
@@ -50,29 +50,29 @@ class testTrade(contractCTA, realTrade):
             self.buy('DOGE/USDT', totelPrice = 'bet:1')                                 #以现货总仓位的10%,挂单最优价买入
         elif self._testStep == 2:
             self.buy('DOGE/USDT', totelPrice = 1, price = 0.07)             #挂单价0.007,总单价1u
-        elif self._testStep == 3:
+        elif self._testStep == 6:
             self.cencel(spot('DOGE/USDT'))                                  #取消挂单
-        elif self._testStep == 4:
+        elif self._testStep == 8:
             self.sell('DOGE/USDT')                                          #默认全卖
             self.bInit = True
         
         #合约
         if self._testStep == 0:
             # self.openLong(swapU('DOGE/USDT'), totelPrice = 5,price = 0.07,lv=2)
-            self.openLong(swapU('DOGE/USDT'), totelPrice = 5, orderBook=-1)
+            self.openLong(swapU('DOGE/USDT'), totelPrice = 5)
         elif self._testStep == 1:
             # self.openShort(swapU('DOGE/USDT'), totelPrice = 5,price = 0.1)
-            self.openShort(swapU('DOGE/USDT'), totelPrice = 5, orderBook=-1)
+            self.openShort(swapU('DOGE/USDT'), totelPrice = 5)
             # pass
         elif self._testStep == 2:
             # self.openShort(futureU('ETH/USDT', timeIndex = 1), totelPrice = 1)
             pass
-        elif self._testStep == 3:
+        elif self._testStep == 6:
             self.cencel(swapU('DOGE/USDT'))                                      #取消挂单
             # self.cencel(futureU('ETH/USDT', timeIndex = 1))                       #取消季单
-        elif self._testStep == 4:
-            self.closePos(swapU('DOGE/USDT'),dir=kLong, orderBook=-1)
-            self.closePos(swapU('DOGE/USDT'),dir=kShort, orderBook=-1)
+        elif self._testStep == 8:
+            self.closePos(swapU('DOGE/USDT'),dir=kLong)
+            self.closePos(swapU('DOGE/USDT'),dir=kShort)
             # self.closePos(futureU('ETH/USDT', timeIndex = 1),dir=kShort)
             self.bInit = True
         

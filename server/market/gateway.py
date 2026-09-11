@@ -1,6 +1,6 @@
 import asyncio
 from itertools import count
-from server.utils import log, warn, err, evtFireAsync, kEvt_Market, threadCall
+from server.utils import log, warn, err, evtFire, evtFireAsync, kEvt_Market, kEvt_Time, threadCall
 from server.market import (eMarketId, kCancel, kPriority_Normal,
                            kPriority_Cancel, kOrderFailedStatuses)
 from server.market.baseExchange import baseExchange
@@ -104,11 +104,15 @@ class gateway:
         if item.get('type') == kCancel: #取消订单
             await threadCall(self._ex, self._ex.order,
                              'cancel', item.get('symbol', ''), item.get('orderID', ''), 0)
+            evtFireAsync(kEvt_Market, eMarketId['uOpenOrder'], {
+                'exName': self._exName, 'taskName': item.get('taskName'),
+                'orderID': item.get('orderID', ''), 'symbol': item.get('symbol', ''),
+                'remove': True})
             self._ex.requestBalanceRefresh()
             return
         #正常订单
         result = await threadCall(self._ex, self._ex.order,
-                    typeState=item.get('orderDir', item.get('dir', '')),
+                    typeState=item.get('orderDir') or item.get('dir', ''),
                     symbol=item.get('symbol', ''),
                     totelPrice=item.get('totelPrice', 0),
                     amount=item.get('amount'),
@@ -128,3 +132,6 @@ class gateway:
             raise RuntimeError("交易所返回数据缺少订单ID")
         item['orderID'] = orderID
         evtFireAsync(kEvt_Market, eMarketId['orderAccepted'], item)
+        evtFire(kEvt_Time, 'subscribe', ['5s'], False)
+        log(f"[gateway:{self._exName}] 订单已接受,启动订单追踪: "
+            f"{item.get('symbol', '')} orderID={orderID}")

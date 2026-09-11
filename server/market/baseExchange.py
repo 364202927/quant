@@ -299,11 +299,14 @@ class baseExchange:
             return []
         return self._batchOrders(category, orders)
     # 修改订单
-    def editOrder(self, orderID: str, symbol: str, side: str,amount: float, price: float) -> dict | None:
+    def editOrder(self, orderID: str, symbol: str, side: str, amount: float,
+                  price: float, clientOrderId: str | None = None) -> dict | None:
         category, symbolInfo = self.coinInfo(symbol)
         if not symbolInfo or not orderID:
             return None
         params = self._orderParams(category)
+        if category == kSpot and clientOrderId:
+            params = {**params, 'newClientOrderId': clientOrderId}
         return self._ccxt.edit_order(str(orderID), symbolInfo.get('symbol') or symbolInfo.get('id'),'limit', side, amount, price, params)
     #交易所/账户类型相关的 fetch/edit 参数
     def _orderParams(self, category: str) -> dict:
