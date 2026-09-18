@@ -4,6 +4,7 @@ from server.market import eMarketId, kSpot, kSwap, kCancel, kBuy, kSell, kLong, 
 
 # ##todo:任务亏损超过n,不让下单
 # orderBook < 0 表示市价单,其余值表示按盘口/限价逻辑下单
+# todo:后面将交易所单只开启 合约/现货
 
 class realTrade(baseTrade):
     "订单->发送交易所"

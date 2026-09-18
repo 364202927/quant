@@ -13,14 +13,14 @@ class demoVwap(testCTA, testTrade):
     def info(self) -> str:
         return "demo + vwap intraday backtest"
 
-    def init(self) -> None:
+    async def load(self) -> None:
         self.regTime("1m")
         self.regIndicators({"vwap": "volume.vwap",
                             # 'ma':'trend.ma',
                             "backTest":"other.backTest"})
-        log("init demoVwap")
+        self.pause()
+        log("~~~~init demoVwap~~~~~~~~")
         # self.startStrategy()
-        # exit()
 
     #策略检验
     # def strategyTest(self,beginTime,endTime,timeframe = '15m'):

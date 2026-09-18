@@ -29,7 +29,6 @@ class web(extInterface):
         @app.post("/api/postMessage")
         async def post_message(msg: msgRequest):
             rt = evtFire(kEvt_Web, msg.id, msg.args)
-            print("~~~~~~back msg~~~~~~~",rt)
             return {
                 "status": 'success',
                 "message": 'post_message 接收成功',
@@ -39,13 +38,8 @@ class web(extInterface):
                 }
             }
         
-        @app.get("/api/getMessage")
+        @app.get("/api/getMessage") #消息id,arg0, arg1: 可选参数
         async def get_Message(id: int, arg0: str = None, arg1: str = None):
-            """
-            接收 GET 消息
-            id: 消息 ID
-            arg0, arg1: 可选参数
-            """
             args = []
             if arg0 is not None:
                 args.append(arg0)
@@ -63,9 +57,9 @@ class web(extInterface):
             }
         
         return app
-    
+
+    #启动FastAPI
     async def run(self):
-        """启动FastAPI服务器"""
         web_config = g_config.external('web')
         config = uvicorn.Config(
             self._app,

@@ -2,17 +2,15 @@ from server.strategy.base.testCTA import *
 from datetime import datetime
 import numpy as np
 
-class testIndicators(testCTA):
-    """测试用法 - 验证所有指标的自写算法和talib实现"""
+class demoIndicators(testCTA):
+    """指标测试 - 验证所有指标的自写算法和talib实现"""
 
     _kLinePd = None  # 原始数据
 
-    def info(self) -> str:
-        return "demo+测试代码"
-
-    def init(self) -> None:
+    async def load(self) -> None:
         self.regTime('2s', "10s")
-        self.pause()
+        # self.pause()
+        log("~~~~~~demoIndicators~~~~~~~~~")
         # self._kLinePd = pdData()
         # self._kLinePd.readFile('binance_BTCUSDT.pkl')
 
