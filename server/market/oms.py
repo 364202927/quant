@@ -180,6 +180,9 @@ class oms:
         replacement.update(orderID='', clientOrderId='', amount=remaining,
                            retry=0, isMarket=True, price=None, orderBook=-1,
                            _replaceOrder=True)
+        # _saveOrder 从下划线字段读取平仓关联订单；替换单必须保留旧单的关联关系。
+        replacement['_positionOrderIDs'] = list(record.get('positionOrderIDs') or
+                                                record.get('_positionOrderIDs') or [])
         if replacement.get('dir') == kClose and not replacement.get('orderDir'):
             replacement['orderDir'] = (
                 kSell if replacement.get('posSide') == kLong else kBuy)

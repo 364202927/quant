@@ -2,6 +2,8 @@ from server.strategy.base.contractCTA import *
 from server.strategy.base.realTrade import *
 from server.utils import log
 
+#todo稳定后,简化下单链路,只打印必须得,try要改
+
 class testTrade(contractCTA, realTrade):
     "交易所api测试调用"
 
