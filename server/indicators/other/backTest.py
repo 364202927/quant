@@ -59,6 +59,7 @@ k_MSG = {
     "capacity_low": "预估容量 < 100 → +0 (容量过小，实盘资金受限)",
 
     # 综合判定
+    "verdict_no_trades": "⚠️ 无有效交易 (未产生任何成交信号，无法评分)",
     "verdict_live": "✅ 可实盘 (总分 ≥ 70)",
     "verdict_improve": "🔧 继续改善 (总分 40~69)",
     "verdict_discard": "❌ 尽早放弃 (总分 < 40)"
@@ -233,7 +234,8 @@ class backTest(baseIndicators):
 
     # signal转换成下单信息
     def _transform2data(self, kLine: pdData, signal: list) -> list:
-        df = kLine.get()
+        # 回测内部按UTC0时间计算,必须用 raw();get() 返回的是本地时间字符串
+        df = kLine.raw()
         rows = []
         for traj in signal:
             trades = traj.get("trades", [])
@@ -602,6 +604,11 @@ class backTest(baseIndicators):
     
     # 返回测试成绩
     def _score(self,metrics:dict)->dict:
+        # 无有效交易时各分项是空字典,直接给 0 分,避免 KeyError
+        if metrics["basic"].get("status") == "no_trades":
+            return {"total_score": 0,
+                    "verdict": k_MSG["verdict_no_trades"],
+                    "details": [k_MSG["verdict_no_trades"]]}
         score = 0
         details = []
 

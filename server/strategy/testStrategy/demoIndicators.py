@@ -2,14 +2,15 @@ from server.strategy.base.testCTA import *
 from datetime import datetime
 import numpy as np
 
+
 class demoIndicators(testCTA):
     """指标测试 - 验证所有指标的自写算法和talib实现"""
 
     _kLinePd = None  # 原始数据
 
     async def load(self) -> None:
-        self.regTime('2s', "10s")
-        # self.pause()
+        self.regTime("2s", "10s")
+        self.pause()
         log("~~~~~~demoIndicators~~~~~~~~~")
         # self._kLinePd = pdData()
         # self._kLinePd.readFile('binance_BTCUSDT.pkl')
@@ -44,13 +45,13 @@ class demoIndicators(testCTA):
     def _testIndicators(self, pd_data: pdData) -> None:
         """测试所有指标的自写算法和ta库实现"""
         test_cases = [
-            ('atr', self.atr),
-            ('rsi', self.rsi),
-            ('macd', self.macd),
-            ('vwap', self.vwap),
-            ('auctionTheory', self.auctionTheory),
-            ('vpAnalysis', self.vpAnalysis),
-            ('supportResistance', self.supportResistance),
+            ("atr", self.atr),
+            ("rsi", self.rsi),
+            ("macd", self.macd),
+            ("vwap", self.vwap),
+            ("auctionTheory", self.auctionTheory),
+            ("vpAnalysis", self.vpAnalysis),
+            ("supportResistance", self.supportResistance),
         ]
 
         for indicator_name, indicator in test_cases:
@@ -69,10 +70,9 @@ class demoIndicators(testCTA):
         print(f"✓ {name} 指标测试完成")
         self._compareResults(custom_df, ta_df)
 
-    def _compareResults(self, custom_df:pdData, ta_df: pdData) -> None:
+    def _compareResults(self, custom_df: pdData, ta_df: pdData) -> None:
         """比较自写算法和talib结果的差异"""
-        numeric_cols = [col for col in custom_df.columns
-                        if col != 'candle_begin_time' and custom_df[col].dtype != 'object']
+        numeric_cols = [col for col in custom_df.columns if col != "candle_begin_time" and custom_df[col].dtype != "object"]
 
         for col in numeric_cols:
             custom_vals = custom_df[col].dropna().tail(10).values

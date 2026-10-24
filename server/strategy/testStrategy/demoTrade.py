@@ -23,7 +23,7 @@ class demoTrade(contractCTA, realTrade):
         self.regIndicators({'candles':'other.kLine',
                             'vwap':'volume.vwap',
                             'boll':'oscillators.boll'})
-        log("~~~~init demoTrade~~~~")
+        # log("~~~~init demoTrade~~~~")
         self.pause()                     #不激活策略,定时器和回测 会忽略该策略
         # 指标获取and合并
         # self.candles.delimit(exName = 'binance', symbols = ['spot_BTCUSDT','swap_BTCUSDT'])

@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 import uvicorn
 from server.utils.fileConfig import g_config
-from server.utils import evtFire, kEvt_Web
+from server.utils import evtFire, kEvt_Web, log
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Any, List
@@ -12,6 +12,17 @@ class msgRequest(BaseModel):
     id: int
     args: List[Any] = []
 
+class _webServer(uvicorn.Server):
+    """监听成功后打印实际绑定的地址与端口"""
+    async def startup(self, sockets=None):
+        await super().startup(sockets)
+        if not self.started:
+            return
+        for server in self.servers:
+            for sock in server.sockets or []:
+                host, port = sock.getsockname()[:2]
+                log(f"[web] 已监听 http://{host}:{port}")
+
 class web(extInterface):
     def __init__(self):
         super().__init__()
@@ -21,7 +32,7 @@ class web(extInterface):
     def _create_app(self) -> FastAPI:
         app = FastAPI()
         app.add_middleware(CORSMiddleware, 
-                    allow_origins=["http://localhost:5173"], 
+                    allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?", 
                     allow_credentials=True, 
                     allow_methods=["*"], 
                     allow_headers=["*"])
@@ -67,6 +78,5 @@ class web(extInterface):
             port=int(web_config.get('port')),
             log_level="info"
         )
-        # print('~~~~~',web_config.get('host'),web_config.get('port'))
-        self._server = uvicorn.Server(config)
+        self._server = _webServer(config)
         await self._server.serve()

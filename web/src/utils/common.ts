@@ -162,11 +162,26 @@ export function uploadJson<T = any>(): Promise<T> {
 }
 
 /**
- * API 配置
+ * API 默认配置，实际值以 public/config.json 的 api 字段为准
  */
 const API_CONFIG = {
-    baseURL: 'http://localhost:8000',
+    baseURL: 'http://localhost:7666',
     timeout: 5000
+}
+
+let _apiConfig: Promise<typeof API_CONFIG> | null = null
+
+/**
+ * 读取 public/config.json（只加载一次），读取失败回退默认配置
+ */
+function _getApiConfig(): Promise<typeof API_CONFIG> {
+    _apiConfig ??= readJson<{ api?: { baseUrl?: string; timeout?: number } }>('/config.json')
+        .then(cfg => ({
+            baseURL: cfg.api?.baseUrl ?? API_CONFIG.baseURL,
+            timeout: cfg.api?.timeout ?? API_CONFIG.timeout
+        }))
+        .catch(() => API_CONFIG)
+    return _apiConfig
 }
 
 /**
@@ -220,13 +235,14 @@ export async function apiRequest<T = any>(
     data?: any
 ): Promise<ApiResponse<T>> {
     try {
-        const url = `${API_CONFIG.baseURL}${endpoint}`
+        const { baseURL, timeout } = await _getApiConfig()
+        const url = `${baseURL}${endpoint}`
         const options: RequestInit = {
             method,
             headers: {
                 'Content-Type': 'application/json',
             },
-            signal: AbortSignal.timeout(API_CONFIG.timeout)
+            signal: AbortSignal.timeout(timeout)
         }
 
         if (data && method !== 'GET')

@@ -1,10 +1,11 @@
 from server.strategy.base.testCTA import *
 from server.strategy.base.testTrade import *
 import numpy as np
+
 # import pandas as pd
 from server.utils.science import trend
 
-#todo调试的结构写在testCTA
+# todo调试的结构写在testCTA
 
 
 class demoVwap(testCTA, testTrade):
@@ -15,14 +16,18 @@ class demoVwap(testCTA, testTrade):
 
     async def load(self) -> None:
         self.regTime("1m")
-        self.regIndicators({"vwap": "volume.vwap",
-                            # 'ma':'trend.ma',
-                            "backTest":"other.backTest"})
-        self.pause()
+        self.regIndicators(
+            {
+                "vwap": "volume.vwap",
+                # 'ma':'trend.ma',
+                "backTest": "other.backTest",
+            }
+        )
+        # self.pause()
         log("~~~~init demoVwap~~~~~~~~")
         # self.startStrategy()
 
-    #策略检验
+    # 策略检验
     # def strategyTest(self,beginTime,endTime,timeframe = '15m'):
     #     #获取k线,并添加指标
     #     # self._kLine = pdData(read = 'binance_spot_BTCUSDT')
@@ -31,13 +36,14 @@ class demoVwap(testCTA, testTrade):
     #     self._signal(_indPd)
     #     # logFormat(self.getTransaction())
     #     print("~~~~~~~~~~~~~~",self.getTradesCount())
-    
+
     #     #计算回测
     #     self.backTest.delimit(principal = 1000, lv = 1)
     #     self.backTest.calculate(self._kLine, self.getTransaction())
 
     def _signal(self, sorPf) -> list:
-        pf = sorPf.get()
+        # 用 raw() 取内部UTC0原始数据;get() 会把时间转成本地时间字符串,无法再做时间运算
+        pf = sorPf.raw()
         pf["typical_price"] = (pf["high"] + pf["low"] + pf["close"]) / 3
 
         trade_day = pf["candle_begin_time"].dt.date
@@ -51,14 +57,8 @@ class demoVwap(testCTA, testTrade):
         trade_time = pf["candle_begin_time"].dt.strftime("%H:%M:%S")
         time_mask = (trade_time >= "09:30:00") & (trade_time <= "14:30:00")
 
-        long_entry = ((pf["typical_price"] > lower)
-            & (pf["typical_price"].shift(1) <= lower.shift(1))
-            & vol_cond
-            & time_mask )
-        short_entry = ((pf["typical_price"] < upper)
-            & (pf["typical_price"].shift(1) >= upper.shift(1))
-            & vol_cond
-            & time_mask)
+        long_entry = (pf["typical_price"] > lower) & (pf["typical_price"].shift(1) <= lower.shift(1)) & vol_cond & time_mask
+        short_entry = (pf["typical_price"] < upper) & (pf["typical_price"].shift(1) >= upper.shift(1)) & vol_cond & time_mask
 
         pf["signal"] = 0
         pf.loc[long_entry, "signal"] = 1
@@ -82,7 +82,7 @@ class demoVwap(testCTA, testTrade):
             if position == 1:
                 if price <= float(vwaps[i]) or price <= entry_price * 0.998 or time_text >= "14:50:00":
                     # LONG 平仓: sell
-                    self.addTransaction(kLong,kSell,lv,idx,100)
+                    self.addTransaction(kLong, kSell, lv, idx, 100)
                     position = 0
                     continue
             elif position == -1:
@@ -103,19 +103,22 @@ class demoVwap(testCTA, testTrade):
                     entry_price = price
                     self.addTransaction(kShort, kSell, lv, idx, 10)
 
-    # web测试    
+    # web测试
     def startStrategy(self):
-        self._kLine = pdData(read = 'binance_spot_BTCUSDT')
-        self._kLine.resample(timeframe = '1h', seTime = ['2024-01-01 00:00:00', '2025-01-01 00:00:00'])
+        # 回测需要完整历史,readFile 默认只读最新年份会导致区间裁剪后为空
+        self._kLine = pdData()
+        self._kLine.readFile("binance_spot_BTCUSDT", True)
+        self._kLine.resample(timeframe="1h", seTime=["2024-01-01 00:00:00", "2025-01-01 00:00:00"])
+        if self._kLine.raw().empty:
+            raise ValueError("回测区间无K线数据: 2024-01-01 ~ 2025-01-01")
         _indPd = self._kLine.getIndicators(self.vwap)
         self._signal(_indPd)
-        self.backTest.delimit(principal = 1000, lv = 1)
+        self.backTest.delimit(principal=1000, lv=1)
         summarize = self.backTest.calculate(self._kLine, self.getTransaction())
-        # print(_indPd.get())
-        # print(self.getTransaction())
+        print(_indPd.get())
+        print(self.getTransaction())
         # logFormat(summarize)
-        return {'kLine': _indPd.get(), 'tradeRecords': self.getTransaction(), 'summarize': summarize}
-
+        return {"kLine": _indPd.get(), "tradeRecords": self.getTransaction(), "summarize": summarize}
 
     def update_1m(self, id: str, timeKey: str) -> None:
         return None

@@ -27,8 +27,8 @@ kEvt_Engine = 'evtEngine'       #调用task的方法
 #log
 kLog,kError,kInfo,kWarn = 'log','err','info','warn'
 
-# 交易所功能是否开启
-kOpenMarket = True
+# 交易所功能是否开启 todo:这里要换个位置
+kOpenMarket = False
 
 # 导出常用工具函数和类
 from server.utils.recordBuffer import recordBuffer

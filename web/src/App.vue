@@ -20,6 +20,7 @@ provide('userDataStore', user)
 provide('sidebarRef', sidebarRef)
 provide('pageData', pageData)
 onMounted(async () => {
+  console.log("~~~~~~app.init~~~~~~~~~~")
   const response = await postMessage(eMsg.eWebInit)
   if (response.received?.args) {
     user.initFromServer(response.received.args)
