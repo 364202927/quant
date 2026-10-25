@@ -1,5 +1,10 @@
 {
-    "multidQuant": [
-        "mqMain"
-    ]
+  "test": [
+    "mqMain1",
+    "mqMain2"
+  ],
+  "test2": [
+    "mqMain5",
+    "mqMain6"
+  ]
 }

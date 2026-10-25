@@ -1,6 +1,8 @@
 import asyncio
+import os
+import pandas as pd
 from server.core.engine import engine
-from server.utils import switchFn,evtConnect, rtWeb,evtFire,kEvt_Web,kEvt_Engine,log,spawnTask
+from server.utils import switchFn,evtConnect, rtWeb,evtFire,kEvt_Web,kEvt_Engine,log,pdData
 from server.utils.fileConfig import g_config
 
 eMsgId = {
@@ -45,8 +47,14 @@ class msgHandler:
             # print("~~~~~~~initWeb~~~~~~~~",user,apiKey)
             # 返回数据: user配置 + apiKey配置+start文件
             return {"user": user, "apiKey": apiKey} #todo:还有start文件
-        def initMarketTrends():
-            return
+        async def initMarketTrends():
+            args = msg[0] if msg else []
+            coin = args[0].strip() if args else ''
+            start = str(args[1]).strip() if len(args) > 1 and args[1] else ''
+            end = str(args[2]).strip() if len(args) > 2 and args[2] else ''
+            if not coin:
+                return await asyncio.to_thread(self._marketCoins)
+            return await asyncio.to_thread(self._marketKline, coin, start, end)
         def initStartFile():
             return
         def initBacktesting():
@@ -58,12 +66,11 @@ class msgHandler:
             g_config.saveFile()
             #todo:是否重启服务器
             return
-        def startBackTest():#开启回测: 立即返回"已启动",实际回测在下一轮事件循环调度,不卡住本次web请求
+        async def startBackTest():#开启回测: 执行完直接把结果放进本次响应,web据此渲染
             checkId = msg[0][0].get('id')
             taskName = msg[0][0].get('selectedTask')
             if checkId == 1:
-                spawnTask(self._runBackTest(taskName), name=f"backtest:{taskName}")
-                return {'status': 'started'}
+                return await self._runBackTest(taskName)
             return {}
         return switchFn({eMsgId['eWebInit']: initWeb,
                         eMsgId['ePage_k']: initMarketTrends,
@@ -74,11 +81,12 @@ class msgHandler:
                         eMsgId['eStartBackTest']:startBackTest},
                         key=id)
     
-    async def _runBackTest(self, taskName: str) -> None:
+    async def _runBackTest(self, taskName: str) -> dict:
         try:
-            self.callTask(taskName, 'startStrategy')
+            return self.callTask(taskName, 'startStrategy')
         except Exception as e:
             log(f"[msgHandler] 回测启动失败: {e}")
+            return {"error": str(e)}
 
     # 调用engine功能
     def callTask(self, taskName, fnName):
@@ -86,6 +94,46 @@ class msgHandler:
         if taskName =='main':
             return rt
         return rtWeb(rt)
+    
+    # 历史行情文件中的全部币种名
+    def _marketCoins(self) -> list[str]:
+        root = g_config.fils('marketsPath')
+        if not os.path.isdir(root):
+            return []
+        names = set()
+        for year in os.listdir(root):
+            yearPath = os.path.join(root, year)
+            if not (year.isdigit() and len(year) == 4 and os.path.isdir(yearPath)):
+                continue
+            for fileName in os.listdir(yearPath):
+                if fileName.endswith('.parquet'):
+                    names.add(os.path.splitext(fileName)[0])
+        return sorted(names)
+
+    # 指定币种的全部历史K线,可传start/end(UTC,闭区间)做时间剪裁
+    def _marketKline(self, coin: str, start: str = '', end: str = '') -> list[dict]:
+        if os.path.basename(coin) != coin or coin not in self._marketCoins():
+            return []
+        data = pdData()
+        try:
+            loaded = data.readFile(coin, isFull=True)
+        except Exception as exception:
+            log(f"[msgHandler] 行情读取失败 {coin}: {exception}")
+            return []
+        if not loaded:
+            return []
+        startTime = pdData._normalizeTime(pd.to_datetime(start, errors='coerce')) if start else None
+        endTime = pdData._normalizeTime(pd.to_datetime(end, errors='coerce')) if end else None
+        if (start and pd.isna(startTime)) or (end and pd.isna(endTime)):
+            return []
+        frame = data.raw()
+        if startTime is not None:
+            frame = frame[frame['candle_begin_time'] >= startTime]
+        if endTime is not None:
+            frame = frame[frame['candle_begin_time'] <= endTime]
+        if frame.empty:
+            return []
+        return rtWeb({'kLine': frame})['kLine']
 
     # 处理web id
     def process(self, id, msg):

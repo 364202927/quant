@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+import inspect
 import uvicorn
 from server.utils.fileConfig import g_config
 from server.utils import evtFire, kEvt_Web, log
@@ -40,6 +41,9 @@ class web(extInterface):
         @app.post("/api/postMessage")
         async def post_message(msg: msgRequest):
             rt = evtFire(kEvt_Web, msg.id, msg.args)
+            # 处理器返回协程时(如回测)需要 await,结果随本次响应一起返回
+            if inspect.isawaitable(rt):
+                rt = await rt
             return {
                 "status": 'success',
                 "message": 'post_message 接收成功',
