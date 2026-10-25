@@ -220,7 +220,7 @@ function summaryCardClass(config: SummaryMetricConfig, raw: unknown): string {
   const tone = summaryValueClass(config, raw)
   return [
     'rounded-lg border px-4 py-3 flex flex-col gap-1',
-    important ? 'bg-slate-50 border-slate-200' : 'bg-gray-50 border-gray-100',
+    important ? 'bg-paper border-paper-line' : 'bg-paper-deep/40 border-paper-line/70',
     tone.includes('emerald') ? 'shadow-[inset_0_0_0_1px_rgba(16,185,129,0.18)]' : '',
     tone.includes('rose') ? 'shadow-[inset_0_0_0_1px_rgba(244,63,94,0.12)]' : ''
   ].filter(Boolean).join(' ')
@@ -434,24 +434,24 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="h-full flex flex-col gap-3 p-4 overflow-hidden">
+  <div class="page-body flex flex-col gap-3 overflow-hidden">
 
     <!-- K线图区域 -->
-    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-4 shrink-0">
+    <div class="panel shrink-0 p-4">
       <!-- 实例选择栏 -->
-      <div class="flex items-center gap-3 mb-3">
-        <span class="text-xs font-semibold text-gray-400 uppercase tracking-widest whitespace-nowrap">实例</span>
+      <div class="flex flex-wrap items-center gap-3 mb-3">
+        <span class="text-xs font-semibold text-ink-faint uppercase tracking-widest whitespace-nowrap">实例</span>
 
         <!-- 实例下拉 -->
-        <div class="relative flex-1 max-w-56">
-          <select v-model="selectedTask" class="w-full appearance-none bg-gray-50 border border-gray-200 rounded-lg
-                   pl-3 pr-8 py-1.5 text-sm font-medium text-gray-700
-                   focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent
+        <div class="relative min-w-40 flex-1 max-w-56">
+          <select v-model="selectedTask" class="w-full appearance-none bg-paper border border-paper-line rounded-lg
+                   pl-3 pr-8 py-1.5 text-sm font-medium text-ink
+                   focus:outline-none focus:ring-2 focus:ring-indigo-400/40 focus:border-transparent
                    transition-all cursor-pointer">
             <option v-if="!taskList.length" value="" disabled>暂无实例</option>
             <option v-for="task in taskList" :key="task" :value="task">{{ task }}</option>
           </select>
-          <svg class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400"
+          <svg class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-ink-faint"
             fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
             <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
           </svg>
@@ -459,44 +459,44 @@ onMounted(() => {
 
         <!-- 操作按钮组 -->
         <div class="ml-auto flex items-center gap-2">
-          <!-- 播放按钮 -->
-          <button @click="handleBacktest(1)" :disabled="isRunning" class="group flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold
+          <!-- 开始回测 -->
+          <button @click="handleBacktest(1)" :disabled="isRunning" title="开始回测" class="group flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold
                    transition-all duration-150 select-none
-                   bg-emerald-500 hover:bg-emerald-600 active:scale-95
-                   text-white shadow-sm shadow-emerald-200
+                   bg-emerald-600 hover:bg-emerald-700 active:scale-95
+                   text-white shadow-sm shadow-emerald-200/50
                    disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100">
             <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
               <path d="M8 5v14l11-7z" />
             </svg>
-
+            {{ isRunning ? '回测中…' : '开始回测' }}
           </button>
 
-          <!-- 刷新按钮 -->
-          <button @click="handleBacktest(2)" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold
-                   bg-white/60 border border-gray-200/70 text-gray-500
-                   hover:bg-white/90 hover:text-gray-700
-                   active:scale-95 transition-all duration-150 backdrop-blur-sm">
+          <!-- 清空按钮 -->
+          <button @click="handleBacktest(2)" title="清空回测结果" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold
+                   border border-paper-line bg-paper text-ink-soft
+                   hover:bg-paper-deep hover:text-ink
+                   active:scale-95 transition-all duration-150">
             <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round"
                 d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
-
+            清空
           </button>
         </div>
       </div>
 
-      <LightweightChart ref="chartRef" :data="klineData" :trade-records="tradeRecords" :height="400" />
+      <LightweightChart ref="chartRef" :data="klineData" :trade-records="tradeRecords" :height="360" />
     </div>
 
     <!-- 下单记录 / 回测结果 -->
-    <div class="bg-white rounded-xl border border-gray-100 shadow-sm flex-1 flex flex-col min-h-0">
+    <div class="panel flex-1 flex flex-col min-h-0">
       <!-- Tab 导航 -->
-      <div class="flex items-center px-4 py-3 border-b border-gray-100 shrink-0 bg-white">
-        <div class="inline-flex rounded-lg bg-slate-100 p-1 gap-1">
+      <div class="flex items-center px-4 py-3 border-b border-paper-line shrink-0">
+        <div class="inline-flex rounded-lg bg-paper-deep p-1 gap-1">
           <button v-for="tab in tabs" :key="tab.key" @click="activeTab = tab.key"
             class="relative px-4 py-1.5 rounded-md text-sm font-medium transition-all duration-150 select-none" :class="activeTab === tab.key
-              ? 'text-white bg-indigo-500 shadow-sm'
-              : 'text-slate-500 bg-white hover:text-slate-700'">
+              ? 'text-white bg-indigo-600 shadow-sm'
+              : 'text-ink-soft bg-paper-soft hover:text-ink'">
             {{ tab.label }}
           </button>
         </div>
@@ -507,8 +507,8 @@ onMounted(() => {
 
         <!-- 下单记录 -->
         <template v-if="activeTab === 'orders'">
-          <table class="w-full">
-            <thead class="bg-gray-50 sticky top-0">
+          <table class="w-full min-w-[760px]">
+            <thead class="bg-paper-deep/70 sticky top-0 backdrop-blur">
               <tr>
                 <th class="px-4 py-2.5 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide">顺序</th>
                 <th class="pl-8 pr-4 py-2.5 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide">时间
@@ -528,7 +528,7 @@ onMounted(() => {
                 <td colspan="9" class="px-4 py-12 text-center text-sm text-gray-300">暂无交易轨迹</td>
               </tr>
               <tr v-for="row in tableRows" :key="row.key" :class="row.kind === 'child'
-                ? 'bg-slate-200/80'
+                ? 'bg-paper-deep/70'
                 : 'hover:bg-gray-50 transition-colors duration-75'">
                 <td :class="row.kind === 'child'
                   ? 'pl-9 pr-4 py-2 text-xs font-mono text-gray-400'
@@ -604,7 +604,7 @@ onMounted(() => {
               </div>
             </div>
 
-            <div v-for="section in summarySections" :key="section.title" class="rounded-xl border border-gray-100 bg-white">
+            <div v-for="section in summarySections" :key="section.title" class="rounded-xl border border-paper-line bg-paper-soft">
               <div class="flex items-center justify-between px-4 pt-4 pb-3">
                 <h3 class="text-sm font-semibold text-slate-700">{{ section.title }}</h3>
                 <span class="text-xs text-slate-400">{{ section.metrics.length }}项</span>
@@ -619,20 +619,20 @@ onMounted(() => {
               </div>
             </div>
 
-            <div v-if="scoreDetails.length" class="rounded-xl border border-gray-100 bg-white p-4">
+            <div v-if="scoreDetails.length" class="rounded-xl border border-paper-line bg-paper-soft p-4">
               <div class="flex items-center justify-between mb-3">
                 <h3 class="text-sm font-semibold text-slate-700">评分说明</h3>
                 <span class="text-xs text-slate-400">{{ scoreDetails.length }}条</span>
               </div>
               <div class="space-y-2">
                 <div v-for="(detail, index) in scoreDetails" :key="`${index}-${detail}`"
-                  class="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                  class="rounded-lg bg-paper px-3 py-2 text-sm text-ink-soft">
                   {{ detail }}
                 </div>
               </div>
             </div>
           </div>
-          <div v-else class="p-8 text-center text-sm text-gray-300">
+          <div v-else class="p-8 text-center text-sm text-ink-faint">
             暂无回测结果
           </div>
         </template>

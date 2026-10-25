@@ -33,6 +33,8 @@ interface Props {
   width?: number
   height?: number
   autosize?: boolean
+  /** 撑满父容器高度，用于需要随窗口伸缩的仪表盘图表 */
+  fill?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -40,7 +42,8 @@ const props = withDefaults(defineProps<Props>(), {
   period: '',
   width: 600,
   height: 400,
-  autosize: true
+  autosize: true,
+  fill: false
 })
 
 const emit = defineEmits<{
@@ -64,9 +67,42 @@ let dragState: {
   priceHeight: number
 } | null = null
 
+/** 价格轴下界：K 线不会为负，禁止把标尺拖到 0 以下 */
+const priceFloor = 0
+let priceClampFrame = 0
+let priceClampTimer = 0
+
 // --- 辅助函数：校验与取值 ---
 function isValidNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
+}
+
+/** 区间整体上移到 0 之上，保持可视高度不变 */
+function clampPriceRange(range: { from: number; to: number }): { from: number; to: number } {
+  if (range.from >= priceFloor) return range
+  return { from: priceFloor, to: range.to + priceFloor - range.from }
+}
+
+function applyPriceRange(range: { from: number; to: number }): void {
+  if (!chart) return
+  chart.priceScale('right').setVisibleRange(clampPriceRange(range))
+}
+
+function clampPriceScale(): void {
+  const range = chart?.priceScale('right').getVisibleRange()
+  if (range && range.from < priceFloor) applyPriceRange(range)
+}
+
+/** 轻量图表自带的轴拖拽/滚轮缩放不经过自定义拖拽，交互后再兜底校正 */
+function schedulePriceClamp(): void {
+  if (!priceClampFrame) {
+    priceClampFrame = requestAnimationFrame(() => {
+      priceClampFrame = 0
+      clampPriceScale()
+    })
+  }
+  window.clearTimeout(priceClampTimer)
+  priceClampTimer = window.setTimeout(clampPriceScale, 60)
 }
 
 function volumeValue(bar: CandlestickData): number | null {
@@ -90,7 +126,7 @@ function isTopTradeMarker(dir: string, behavior: string): boolean {
   return (dir === 'SHORT' && behavior === 'sell') || (dir === 'LONG' && behavior === 'buy')
 }
 
-function timeToSeconds(time: CandlestickData['time']): number | null {
+function timeToSeconds(time: CandlestickData['time'] | Time): number | null {
   if (typeof time === 'number' && Number.isFinite(time)) return time
   const parsed = Date.parse(String(time))
   return Number.isFinite(parsed) ? parsed / 1000 : null
@@ -110,13 +146,23 @@ function formatIndicatorValue(value: number | null | undefined): string {
   return value.toFixed(6)
 }
 
-function sameBarTime(source: CandlestickData['time'], target: Time): boolean {
-  if (typeof source === 'number' && typeof target === 'number') return source === target
-  return String(source) === String(target)
-}
-
 function resolveBarByTime(time: Time): CandlestickData | null {
-  return props.data.find((bar) => sameBarTime(bar.time, time)) ?? null
+  const target = timeToSeconds(time)
+  if (target === null) return null
+
+  let left = 0
+  let right = props.data.length - 1
+  while (left <= right) {
+    const mid = Math.floor((left + right) / 2)
+    const bar = props.data[mid]
+    if (!bar) return null
+    const barTime = timeToSeconds(bar.time)
+    if (barTime === null) return null
+    if (barTime === target) return bar
+    if (barTime < target) left = mid + 1
+    else right = mid - 1
+  }
+  return null
 }
 
 function latestBar(): CandlestickData | null {
@@ -125,13 +171,13 @@ function latestBar(): CandlestickData | null {
 
 const periodText = computed(() => {
   if (props.period) return props.period
-  const times = props.data
-    .map((bar) => timeToSeconds(bar.time))
-    .filter((time): time is number => time !== null)
-  for (let i = 1; i < times.length; i += 1) {
-    const current = times[i]
-    const previous = times[i - 1]
-    if (current === undefined || previous === undefined) continue
+  for (let i = 1; i < props.data.length; i += 1) {
+    const currentBar = props.data[i]
+    const previousBar = props.data[i - 1]
+    if (!currentBar || !previousBar) continue
+    const current = timeToSeconds(currentBar.time)
+    const previous = timeToSeconds(previousBar.time)
+    if (current === null || previous === null) continue
     const seconds = Math.round(current - previous)
     if (seconds > 0) return formatPeriod(seconds)
   }
@@ -286,13 +332,22 @@ function refreshChartData(newData: CandlestickData[]): void {
 
 function setPriceVisibleRange(newData: CandlestickData[]): void {
   if (!chart) return
-  const prices = newData.flatMap((bar) => [bar.high, bar.low]).filter(isValidNumber)
-  if (!prices.length) return
+  let min = Infinity
+  let max = -Infinity
+  for (const bar of newData) {
+    if (isValidNumber(bar.low)) {
+      min = Math.min(min, bar.low)
+      max = Math.max(max, bar.low)
+    }
+    if (isValidNumber(bar.high)) {
+      min = Math.min(min, bar.high)
+      max = Math.max(max, bar.high)
+    }
+  }
+  if (min === Infinity) return
 
-  const min = Math.min(...prices)
-  const max = Math.max(...prices)
   const padding = Math.max((max - min) * 0.08, Math.abs(max || min) * 0.001, 1)
-  chart.priceScale('right').setVisibleRange({
+  applyPriceRange({
     from: min - padding,
     to: max + padding
   })
@@ -313,7 +368,7 @@ function focusTrade(pos: number): void {
   const min = Math.min(...prices)
   const max = Math.max(...prices)
   const padding = Math.max((max - min) * 0.12, Math.abs(max || min) * 0.001, 1)
-  chart.priceScale('right').setVisibleRange({
+  applyPriceRange({
     from: min - padding,
     to: max + padding
   })
@@ -346,7 +401,8 @@ function handlePointerDown(event: PointerEvent): void {
 }
 
 function handlePointerMove(event: PointerEvent): void {
-  if (!chart || !chartContainer.value || !dragState || dragState.pointerId !== event.pointerId) return
+  if (!chart || !chartContainer.value) return
+  if (!dragState || dragState.pointerId !== event.pointerId) return
   const rect = chartContainer.value.getBoundingClientRect()
   const currentX = event.clientX - rect.left
 
@@ -367,7 +423,7 @@ function handlePointerMove(event: PointerEvent): void {
   if (priceRange) {
     const size = priceRange.to - priceRange.from
     const delta = (event.clientY - dragState.startY) / dragState.priceHeight * size
-    chart.priceScale('right').setVisibleRange({
+    applyPriceRange({
       from: priceRange.from + delta,
       to: priceRange.to + delta
     })
@@ -377,7 +433,9 @@ function handlePointerMove(event: PointerEvent): void {
 }
 
 function handlePointerUp(event: PointerEvent): void {
-  if (!chartContainer.value || !dragState || dragState.pointerId !== event.pointerId) return
+  if (!chartContainer.value) return
+  schedulePriceClamp()
+  if (!dragState || dragState.pointerId !== event.pointerId) return
   chartContainer.value.releasePointerCapture(event.pointerId)
   dragState = null
 }
@@ -389,15 +447,15 @@ function initChart(): void {
   chart = createChart(chartContainer.value, {
     autoSize: props.autosize,
     width: chartContainer.value.clientWidth,
-    height: props.height,
+    height: props.fill ? chartContainer.value.clientHeight : props.height,
     layout: {
-      background: { color: '#1a1a2e' },
-      textColor: '#d1d5db',
+      background: { color: '#fbf7ec' },
+      textColor: '#74664f',
       attributionLogo: false
     },
     grid: {
-      vertLines: { color: '#2d2d44' },
-      horzLines: { color: '#2d2d44' }
+      vertLines: { color: '#eadfc8' },
+      horzLines: { color: '#eadfc8' }
     },
     handleScroll: {
       mouseWheel: true,
@@ -421,11 +479,11 @@ function initChart(): void {
       mode: CrosshairMode.Normal
     },
     rightPriceScale: {
-      borderColor: '#2d2d44',
+      borderColor: '#ddd0b2',
       autoScale: false,
     },
     timeScale: {
-      borderColor: '#2d2d44',
+      borderColor: '#ddd0b2',
       timeVisible: true,
       secondsVisible: false,
       rightOffset: 8,
@@ -475,7 +533,8 @@ function initChart(): void {
 function handleResize(): void {
   if (!chart || !chartContainer.value) return
   if (!chart.autoSizeActive()) {
-    chart.resize(chartContainer.value.clientWidth, props.height, true)
+    const height = props.fill ? chartContainer.value.clientHeight : props.height
+    chart.resize(chartContainer.value.clientWidth, height, true)
   }
 }
 
@@ -508,11 +567,11 @@ function appendData(bar: CandlestickData): void {
 
 watch(() => props.data, (newData) => {
   updateData(newData)
-}, { deep: true })
+})
 
 watch(() => props.tradeRecords, (records) => {
   updateTradeMarkers(records)
-}, { deep: true })
+})
 
 onMounted(() => {
   initChart()
@@ -520,6 +579,10 @@ onMounted(() => {
   chartContainer.value?.addEventListener('pointermove', handlePointerMove)
   chartContainer.value?.addEventListener('pointerup', handlePointerUp)
   chartContainer.value?.addEventListener('pointercancel', handlePointerUp)
+  chartContainer.value?.addEventListener('wheel', schedulePriceClamp, { passive: true })
+  // 释放在时间轴等内部元素时事件不会冒泡到容器，用 window 捕获阶段兜底
+  window.addEventListener('pointerup', schedulePriceClamp, true)
+  window.addEventListener('pointercancel', schedulePriceClamp, true)
   if (props.autosize) {
     window.addEventListener('resize', handleResize)
   }
@@ -530,6 +593,14 @@ onUnmounted(() => {
   chartContainer.value?.removeEventListener('pointermove', handlePointerMove)
   chartContainer.value?.removeEventListener('pointerup', handlePointerUp)
   chartContainer.value?.removeEventListener('pointercancel', handlePointerUp)
+  chartContainer.value?.removeEventListener('wheel', schedulePriceClamp)
+  window.removeEventListener('pointerup', schedulePriceClamp, true)
+  window.removeEventListener('pointercancel', schedulePriceClamp, true)
+  if (priceClampFrame) {
+    cancelAnimationFrame(priceClampFrame)
+    priceClampFrame = 0
+  }
+  window.clearTimeout(priceClampTimer)
   if (props.autosize) {
     window.removeEventListener('resize', handleResize)
   }
@@ -544,13 +615,19 @@ defineExpose({ updateData, appendData, focusTrade })
 
 <template>
   <div ref="chartContainer" class="relative w-full select-none overflow-hidden"
-    :style="{ height: `${height}px`, touchAction: 'none' }">
-    <div class="pointer-events-none absolute left-2 top-2 z-10 flex flex-wrap items-center gap-x-3 gap-y-1 rounded bg-black/45 px-2 py-1 text-xs font-semibold text-slate-200">
-      <span class="text-slate-100">{{ periodText }}</span>
+    :style="fill ? { height: '100%', minHeight: '240px', touchAction: 'none' } : { height: `${height}px`, touchAction: 'none' }">
+    <div v-if="data.length" class="pointer-events-none absolute left-2 top-2 z-10 flex flex-wrap items-center gap-x-3 gap-y-1 rounded border border-paper-line/80 bg-paper/90 px-2 py-1 text-xs font-semibold text-ink-soft backdrop-blur-sm">
+      <span class="text-ink">{{ periodText }}</span>
       <span v-for="item in infoItems" :key="item.label" class="whitespace-nowrap">
-        <span class="text-slate-400">{{ item.label }}</span>
-        <span class="ml-1 text-slate-100">{{ item.value }}</span>
+        <span class="text-ink-faint">{{ item.label }}</span>
+        <span class="ml-1 text-ink">{{ item.value }}</span>
       </span>
+    </div>
+    <div v-else class="absolute inset-0 z-10 flex items-center justify-center bg-paper-soft">
+      <div class="flex flex-col items-center gap-2 text-ink-faint">
+        <i class="ri-line-chart-line text-2xl"></i>
+        <span class="text-xs">暂无 K 线数据</span>
+      </div>
     </div>
   </div>
 </template>

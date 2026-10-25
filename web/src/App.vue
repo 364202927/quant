@@ -37,36 +37,23 @@ onMounted(async () => {
 // 处理菜单选择通知
 const handleSelect = async (item: MenuItem) => {
   activeItem.value = item
-  if (item.id !== eMenuId.eSettings) {
-    const response = await postMessage(1000 + item.id)
-    pageData.value = response.received?.args ?? null
-  }
+  // 行情页在激活时自行请求 1001（币种列表），设置页无需页面数据
+  if (item.id === eMenuId.eSettings || item.id === eMenuId.eMarket)
+    return
+  const response = await postMessage(1000 + item.id)
+  pageData.value = response.received?.args ?? null
 }
 </script>
 
 <template>
-  <!-- 外层布局容器 -->
-  <div class="flex h-screen overflow-hidden bg-gray-50 text-gray-800">
-    <!-- 左侧侧边栏 -->
+  <div class="flex h-screen overflow-hidden bg-paper text-ink">
     <uiSidebar ref="sidebarRef" @select-item="handleSelect" />
-    <!-- 右侧内容区 -->
     <uiMainContent v-if="activeItem" :active-item="activeItem" />
+    <main v-else class="flex flex-1 items-center justify-center bg-paper">
+      <div class="flex flex-col items-center gap-3 text-ink-soft">
+        <i class="ri-loader-4-line animate-spin text-2xl"></i>
+        <span class="text-sm tracking-wide">正在连接量化服务…</span>
+      </div>
+    </main>
   </div>
 </template>
-
-<style>
-/* 全局字体设置，也可以放在 index.css 中 */
-body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  margin: 0;
-  padding: 0;
-}
-
-html,
-body,
-#app {
-  height: 100%;
-  width: 100%;
-  overflow: hidden;
-}
-</style>

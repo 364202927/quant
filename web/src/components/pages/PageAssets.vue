@@ -40,20 +40,15 @@ function initPieChart(): void {
       trigger: 'item',
       formatter: '{b}: {c} USDT ({d}%)'
     },
-    legend: {
-      orient: 'vertical',
-      right: 10,
-      top: 'center',
-      textStyle: { color: '#374151' }
-    },
+    legend: { show: false },
     series: [{
       type: 'pie',
-      radius: ['45%', '70%'],
-      center: ['40%', '50%'],
+      radius: ['48%', '72%'],
+      center: ['50%', '50%'],
       avoidLabelOverlap: false,
       itemStyle: {
         borderRadius: 8,
-        borderColor: '#fff',
+        borderColor: '#fbf7ec',
         borderWidth: 2
       },
       label: {
@@ -120,35 +115,36 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="h-full flex flex-col gap-4 p-4 overflow-auto">
+  <div class="page-body flex flex-col gap-4">
     <!-- 顶部资产概览 -->
-    <div class="bg-white rounded-lg shadow p-6">
+    <section class="panel p-6">
       <div class="flex items-center gap-2 mb-4">
-        <h3 class="text-lg font-semibold text-gray-800">资产概览</h3>
-        <button @click="isPrivate = !isPrivate" class="text-gray-400 hover:text-gray-600 transition-colors">
+        <h2 class="text-base font-semibold text-ink">资产概览</h2>
+        <button @click="isPrivate = !isPrivate" title="切换隐私模式"
+          class="text-ink-faint hover:text-ink transition-colors">
           <i :class="isPrivate ? 'ri-eye-off-line' : 'ri-eye-line'" class="text-xl"></i>
         </button>
       </div>
-      <div class="flex items-stretch gap-6">
+      <div class="flex flex-col items-stretch gap-6 lg:flex-row">
         <!-- 左侧饼图 -->
-        <div class="flex-1 min-w-0">
+        <div class="min-w-0 flex-1">
           <div ref="pieChart" class="w-full h-64"></div>
         </div>
 
         <!-- 右侧总资产信息 -->
-        <div class="flex-1 flex flex-col justify-center space-y-4 pl-6 border-l border-gray-200">
+        <div class="flex flex-1 flex-col justify-center space-y-4 border-t border-paper-line pt-5 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
           <!-- 总资产 -->
           <div>
-            <p class="text-sm text-gray-500 mb-1">总资产估值</p>
-            <p class="text-3xl font-bold text-gray-800">
+            <p class="text-sm text-ink-soft mb-1">总资产估值</p>
+            <p class="text-3xl font-bold text-ink">
               {{ formatMoney(totalAssets.total) }}
-              <span class="text-base font-normal text-gray-500 ml-1">{{ totalAssets.currency }}</span>
+              <span class="text-base font-normal text-ink-soft ml-1">{{ totalAssets.currency }}</span>
             </p>
           </div>
 
           <!-- 今日收益 -->
           <div>
-            <p class="text-sm text-gray-500 mb-1">今日收益</p>
+            <p class="text-sm text-ink-soft mb-1">今日收益</p>
             <div class="flex items-baseline gap-3">
               <p class="text-xl font-semibold" :class="getProfitColor(totalAssets.todayProfit)">
                 {{ getProfitSign(totalAssets.todayProfit) }}{{ formatMoney(totalAssets.todayProfit) }}
@@ -162,25 +158,28 @@ onUnmounted(() => {
 
           <!-- 各交易所资产 -->
           <div class="pt-2">
-            <p class="text-sm text-gray-500 mb-2">交易所分布</p>
+            <p class="text-sm text-ink-soft mb-2">交易所分布</p>
             <div class="space-y-2">
               <div v-for="item in exchangeAssets" :key="item.name" class="flex items-center justify-between">
                 <div class="flex items-center gap-2">
                   <span class="w-3 h-3 rounded-full" :style="{ backgroundColor: item.color }"></span>
-                  <span class="text-sm text-gray-700">{{ item.name }}</span>
+                  <span class="text-sm text-ink-soft">{{ item.name }}</span>
                 </div>
-                <span class="text-sm font-medium text-gray-800">{{ formatMoney(item.value) }} USDT</span>
+                <span class="text-sm font-medium text-ink">{{ formatMoney(item.value) }} USDT</span>
               </div>
             </div>
           </div>
         </div>
       </div>
-    </div>
+    </section>
 
     <!-- 资产走势K线图 -->
-    <div class="bg-white rounded-lg shadow p-4 flex-1">
-      <h3 class="text-lg font-semibold text-gray-800 mb-3">资产走势</h3>
-      <LightweightChart :data="assetKlineData" :height="350" />
-    </div>
+    <section class="panel p-4 flex-1 min-h-[380px] flex flex-col">
+      <header class="mb-3">
+        <h2 class="text-base font-semibold text-ink">资产走势</h2>
+        <p class="mt-0.5 text-xs text-ink-soft">权益曲线与回撤概览</p>
+      </header>
+      <LightweightChart class="min-h-0 flex-1" :data="assetKlineData" fill />
+    </section>
   </div>
 </template>

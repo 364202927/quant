@@ -20,42 +20,38 @@ function updateField(field: string, value: any): void {
   emit('update:modelValue', { ...props.modelValue, [field]: value })
 }
 
-// 删除按钮 SVG
-const deleteIcon = `M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16`
-
 // 输入框通用样式
-const inputClass = 'px-3 py-2 text-sm bg-gray-100 text-black border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500'
+const inputClass = 'rounded-lg border border-paper-line bg-paper-soft px-3 py-2 text-sm text-ink outline-none transition-colors placeholder:text-ink-faint focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20'
+
+const removeButtonClass = 'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-rose-500 transition-colors hover:bg-rose-50 hover:text-rose-700'
 </script>
 
 <template>
   <!-- Notification 类型 -->
-  <div v-if="itemType === 'notification'" class="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+  <div v-if="itemType === 'notification'" class="flex flex-wrap items-center gap-3 rounded-xl border border-paper-line bg-paper p-3">
     <input type="text" :value="(modelValue as newsletter).id"
       @input="updateField('id', ($event.target as HTMLInputElement).value)" placeholder="ID"
       :class="[inputClass, 'w-32']" />
     <input type="text" :value="(modelValue as newsletter).token"
       @input="updateField('token', ($event.target as HTMLInputElement).value)" placeholder="Token"
-      :class="[inputClass, 'flex-1']" />
+      :class="[inputClass, 'min-w-40 flex-1']" />
     <input type="text" :value="(modelValue as newsletter).value1"
       @input="updateField('value1', ($event.target as HTMLInputElement).value)" placeholder="Value 1"
       :class="[inputClass, 'w-32']" />
     <input type="text" :value="(modelValue as newsletter).value2"
       @input="updateField('value2', ($event.target as HTMLInputElement).value)" placeholder="Value 2"
       :class="[inputClass, 'w-32']" />
-    <button @click="emit('remove', modelValue.id)"
-      class="p-2 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-md transition-colors">
-      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="deleteIcon" />
-      </svg>
+    <button @click="emit('remove', modelValue.id)" :class="removeButtonClass" title="删除">
+      <i class="ri-delete-bin-line text-base"></i>
     </button>
   </div>
 
   <!-- Exchange 类型 -->
-  <div v-else-if="itemType === 'exchange'" class="p-4 bg-gray-50 rounded-lg border border-gray-200 space-y-3">
-    <div class="flex items-center gap-3">
+  <div v-else-if="itemType === 'exchange'" class="space-y-3 rounded-xl border border-paper-line bg-paper p-4">
+    <div class="flex flex-wrap items-center gap-3">
       <input type="checkbox" :checked="(modelValue as markets).enable"
         @change="updateField('enable', ($event.target as HTMLInputElement).checked)"
-        class="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500" />
+        class="h-4 w-4 rounded border-paper-line accent-indigo-600 focus:ring-indigo-500" />
       <input type="text" :value="(modelValue as markets).id"
         @input="updateField('id', ($event.target as HTMLInputElement).value)" placeholder="ID"
         :class="[inputClass, 'w-32']" />
@@ -64,44 +60,38 @@ const inputClass = 'px-3 py-2 text-sm bg-gray-100 text-black border border-gray-
         :class="[inputClass, 'w-40']" />
       <input type="text" :value="(modelValue as markets).description"
         @input="updateField('description', ($event.target as HTMLInputElement).value)" placeholder="描述"
-        :class="[inputClass, 'flex-1']" />
-      <button @click="emit('remove', modelValue.id)"
-        class="p-2 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-md transition-colors">
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="deleteIcon" />
-        </svg>
+        :class="[inputClass, 'min-w-40 flex-1']" />
+      <button @click="emit('remove', modelValue.id)" :class="removeButtonClass" title="删除">
+        <i class="ri-delete-bin-line text-base"></i>
       </button>
     </div>
-    <div class="flex gap-3 pl-7">
+    <div class="flex flex-wrap gap-3 pl-0 md:pl-7">
       <input type="text" :value="(modelValue as markets).apiKey"
         @input="updateField('apiKey', ($event.target as HTMLInputElement).value)" placeholder="API Key"
-        :class="[inputClass, 'flex-1 font-mono']" />
+        :class="[inputClass, 'min-w-40 flex-1 font-mono']" />
       <input type="password" :value="(modelValue as markets).secret"
         @input="updateField('secret', ($event.target as HTMLInputElement).value)" placeholder="Secret"
-        :class="[inputClass, 'flex-1 font-mono']" />
+        :class="[inputClass, 'min-w-40 flex-1 font-mono']" />
     </div>
   </div>
 
   <!-- AI 类型 -->
-  <div v-else-if="itemType === 'ai'" class="p-4 bg-gray-50 rounded-lg border border-gray-200 space-y-3">
-    <div class="flex items-center gap-3">
+  <div v-else-if="itemType === 'ai'" class="space-y-3 rounded-xl border border-paper-line bg-paper p-4">
+    <div class="flex flex-wrap items-center gap-3">
       <input type="text" :value="(modelValue as ai).id"
         @input="updateField('id', ($event.target as HTMLInputElement).value)" placeholder="ID"
         :class="[inputClass, 'w-32']" />
       <input type="text" :value="(modelValue as ai).url"
         @input="updateField('url', ($event.target as HTMLInputElement).value)" placeholder="API URL"
-        :class="[inputClass, 'flex-1']" />
-      <button @click="emit('remove', modelValue.id)"
-        class="p-2 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-md transition-colors">
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="deleteIcon" />
-        </svg>
+        :class="[inputClass, 'min-w-40 flex-1']" />
+      <button @click="emit('remove', modelValue.id)" :class="removeButtonClass" title="删除">
+        <i class="ri-delete-bin-line text-base"></i>
       </button>
     </div>
-    <div class="flex gap-3 pl-7">
+    <div class="flex flex-wrap gap-3 pl-0 md:pl-7">
       <input type="text" :value="(modelValue as ai).token"
         @input="updateField('token', ($event.target as HTMLInputElement).value)" placeholder="API Token"
-        :class="[inputClass, 'flex-1 font-mono']" />
+        :class="[inputClass, 'min-w-40 flex-1 font-mono']" />
     </div>
   </div>
 </template>

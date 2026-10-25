@@ -166,7 +166,7 @@ export function uploadJson<T = any>(): Promise<T> {
  */
 const API_CONFIG = {
     baseURL: 'http://localhost:7666',
-    timeout: 5000
+    timeout: 30000
 }
 
 let _apiConfig: Promise<typeof API_CONFIG> | null = null

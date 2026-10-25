@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, inject, onActivated, watch } from 'vue'
+import { ref, inject, onActivated, watch, computed } from 'vue'
 import SettingItem from './settingItem.vue'
 import type { newsletter, markets, ai } from '../../types/userDataStore'
 import type { userDataStore } from '../../types/userDataStore'
@@ -73,6 +73,12 @@ const exchanges = ref<markets[]>([])
 const ais = ref<ai[]>([])
 const store = inject<userDataStore>('userDataStore')!
 const sidebarRef = inject<any>('sidebarRef')
+const inputClass = 'w-full max-w-md rounded-lg border border-paper-line bg-paper px-3 py-2 text-sm text-ink outline-none transition-colors placeholder:text-ink-faint focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20'
+
+const activeSectionLabel = computed(() => {
+  const section = SECTION_BUTTONS.find(btn => btn.key === activeSection.value)
+  return section?.label ?? ''
+})
 
 type ListSectionKey = Exclude<SettingSectionKey, 'account'>
 
@@ -170,10 +176,10 @@ function loadSectionData(section: SettingSectionKey): void {
 }
 
 // 返回选中样式
-function chectSelect(section: SettingSectionKey): string {
+function sectionButtonClass(section: SettingSectionKey): string {
   return activeSection.value === section
-    ? 'bg-indigo-600 text-white'
-    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+    ? 'bg-indigo-600 text-white shadow-sm'
+    : 'text-ink-soft hover:bg-paper-deep hover:text-ink'
 }
 
 // 监听 activeSection 变化，自动加载对应数据
@@ -203,95 +209,116 @@ onActivated(() => {
 </script>
 
 <template>
-  <div class="h-full flex flex-col p-4 overflow-hidden">
-    <div class="bg-white rounded-lg shadow flex-1 flex flex-col overflow-hidden">
-      <!-- tab按钮区 -->
-      <div class="px-4 py-4 border-b border-gray-200 flex gap-3">
-        <button v-for="btn in SECTION_BUTTONS" :key="btn.key" @click="activeSection = btn.key"
-          :class="['px-4 py-2 text-sm font-medium rounded-md transition-colors', chectSelect(btn.key)]">
-          {{ btn.label }}
-        </button>
-      </div>
-
-      <!-- 设置内容区 -->
-      <div class="flex-1 overflow-auto p-4">
-        <!-- 账号信息 -->
-        <div v-if="activeSection === 'account'" class="space-y-4">
-          <div class="flex items-center gap-4">
-            <label class="w-24 text-sm font-medium text-gray-700">{{ TEXT_MAP.settings_account_name_label }}</label>
-            <input v-model="accountName" type="text" :placeholder="TEXT_MAP.settings_account_name_placeholder"
-              class="flex-1 max-w-md px-3 py-2 text-sm bg-gray-100 text-black border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500" />
-          </div>
-          <div class="flex items-center gap-4">
-            <label class="w-24 text-sm font-medium text-gray-700">CCXT重试次数</label>
-            <input v-model.number="ccxtRetry" type="number"
-              class="flex-1 max-w-md px-3 py-2 text-sm bg-gray-100 text-black border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500" />
-          </div>
-          <div class="flex items-center gap-4">
-            <label class="w-24 text-sm font-medium text-gray-700">控制台启用</label>
-            <input v-model="consoleEnable" type="checkbox"
-              class="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500" />
-          </div>
-          <div class="flex items-center gap-4">
-            <label class="w-24 text-sm font-medium text-gray-700">Telegram启用</label>
-            <input v-model="tgEnable" type="checkbox" class="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500" />
-          </div>
+  <div class="page-body">
+    <section class="panel flex h-full flex-col overflow-hidden lg:flex-row">
+      <!-- 左侧分页导航 -->
+      <aside class="shrink-0 border-b border-paper-line p-3 lg:w-52 lg:border-b-0 lg:border-r">
+        <div class="px-2 pb-3 pt-1">
+          <h2 class="panel-title">设置</h2>
+          <p class="mt-0.5 text-[11px] text-ink-faint">连接与账户配置</p>
         </div>
-
-        <!-- 通知设置 -->
-        <div v-else-if="activeSection === 'notification'" class="space-y-4">
-          <button @click="addUnit('notification')"
-            class="px-4 py-2 bg-indigo-600 text-white text-sm rounded-md hover:bg-indigo-700 transition-colors">
-            {{ TEXT_MAP.prefix_add }} {{ SETTINGS_CONFIG.notification.addBtnText }}
+        <div class="flex gap-2 overflow-x-auto lg:flex-col">
+          <button v-for="btn in SECTION_BUTTONS" :key="btn.key" @click="activeSection = btn.key"
+            :class="['shrink-0 rounded-lg px-3 py-2 text-left text-sm font-medium transition-colors lg:w-full', sectionButtonClass(btn.key)]">
+            {{ btn.label }}
           </button>
-          <div class="space-y-3">
-            <SettingItem v-for="(item, index) in notifications" :key="index" item-type="notification"
-              :model-value="item" @update:model-value="checkItem('newsletter', index, $event)"
-              @remove="removeUnit($event, 'notification')" />
+        </div>
+        <p class="mt-4 hidden rounded-lg border border-paper-line bg-paper p-3 text-[11px] leading-relaxed text-ink-soft lg:block">
+          修改后点击「保存设置」同步到服务端；首次配置账号时会解锁工作台菜单。
+        </p>
+      </aside>
+
+      <!-- 右侧内容 -->
+      <div class="flex min-h-0 min-w-0 flex-1 flex-col">
+        <header class="shrink-0 border-b border-paper-line px-5 py-4">
+          <h2 class="text-sm font-semibold text-ink">{{ activeSectionLabel }}</h2>
+          <p class="mt-0.5 text-xs text-ink-soft">{{ activeSection === 'account' ? '维护账户名称与运行偏好' : '管理用于通知、交易与 AI 服务的连接凭据' }}</p>
+        </header>
+
+        <!-- 设置内容区 -->
+        <div class="flex-1 overflow-auto p-5">
+          <!-- 账号信息 -->
+          <div v-if="activeSection === 'account'" class="max-w-xl space-y-4">
+            <div class="flex items-center gap-4">
+              <label class="w-24 shrink-0 text-sm font-medium text-ink-soft">{{ TEXT_MAP.settings_account_name_label }}</label>
+              <input v-model="accountName" type="text" :placeholder="TEXT_MAP.settings_account_name_placeholder"
+                :class="inputClass" />
+            </div>
+            <div class="flex items-center gap-4">
+              <label class="w-24 shrink-0 text-sm font-medium text-ink-soft">CCXT重试次数</label>
+              <input v-model.number="ccxtRetry" type="number" :class="inputClass" />
+            </div>
+            <div class="flex items-center gap-4">
+              <label class="w-24 shrink-0 text-sm font-medium text-ink-soft">控制台启用</label>
+              <input v-model="consoleEnable" type="checkbox"
+                class="h-4 w-4 rounded border-paper-line accent-indigo-600 focus:ring-indigo-500" />
+            </div>
+            <div class="flex items-center gap-4">
+              <label class="w-24 shrink-0 text-sm font-medium text-ink-soft">Telegram启用</label>
+              <input v-model="tgEnable" type="checkbox" class="h-4 w-4 rounded border-paper-line accent-indigo-600 focus:ring-indigo-500" />
+            </div>
           </div>
-          <p v-if="notifications.length === 0" class="text-sm text-gray-500">
-            {{ TEXT_MAP.settings_notification_empty }}
-          </p>
+
+          <!-- 通知设置 -->
+          <div v-else-if="activeSection === 'notification'" class="space-y-4">
+            <button @click="addUnit('notification')"
+              class="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700">
+              <i class="ri-add-line"></i>
+              {{ SETTINGS_CONFIG.notification.addBtnText }}通知
+            </button>
+            <div class="space-y-3">
+              <SettingItem v-for="(item, index) in notifications" :key="index" item-type="notification"
+                :model-value="item" @update:model-value="checkItem('newsletter', index, $event)"
+                @remove="removeUnit($event, 'notification')" />
+            </div>
+            <p v-if="notifications.length === 0" class="text-sm text-ink-faint">
+              {{ TEXT_MAP.settings_notification_empty }}
+            </p>
+          </div>
+
+          <!-- 交易所API -->
+          <div v-else-if="activeSection === 'exchange'" class="space-y-4">
+            <button @click="addUnit('exchange')"
+              class="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700">
+              <i class="ri-add-line"></i>
+              {{ SETTINGS_CONFIG.exchange.addBtnText }}交易所
+            </button>
+            <div class="space-y-3">
+              <SettingItem v-for="(item, index) in exchanges" :key="index" item-type="exchange" :model-value="item"
+                @update:model-value="checkItem('exchange', index, $event)" @remove="removeUnit($event, 'exchange')" />
+            </div>
+            <p v-if="exchanges.length === 0" class="text-sm text-ink-faint">
+              {{ TEXT_MAP.settings_exchange_empty }}
+            </p>
+          </div>
+
+          <!-- AI API -->
+          <div v-else-if="activeSection === 'ai'" class="space-y-4">
+            <button @click="addUnit('ai')"
+              class="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700">
+              <i class="ri-add-line"></i>
+              {{ SETTINGS_CONFIG.ai.addBtnText }}AI 接口
+            </button>
+            <div class="space-y-3">
+              <SettingItem v-for="(item, index) in ais" :key="index" item-type="ai" :model-value="item"
+                @update:model-value="checkItem('ai', index, $event)" @remove="removeUnit($event, 'ai')" />
+            </div>
+            <p v-if="ais.length === 0" class="text-sm text-ink-faint">
+              {{ TEXT_MAP.settings_ai_empty }}
+            </p>
+          </div>
         </div>
 
-        <!-- 交易所API -->
-        <div v-else-if="activeSection === 'exchange'" class="space-y-4">
-          <button @click="addUnit('exchange')"
-            class="px-4 py-2 bg-indigo-600 text-white text-sm rounded-md hover:bg-indigo-700 transition-colors">
-            {{ TEXT_MAP.prefix_add }} {{ SETTINGS_CONFIG.exchange.addBtnText }}
+        <!-- 保存按钮区 -->
+        <footer class="flex shrink-0 items-center justify-between gap-3 border-t border-paper-line px-5 py-3.5">
+          <p class="hidden text-xs text-ink-faint sm:block">配置保存在本地服务端，可随时修改</p>
+          <button @click="handleSave"
+            class="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-indigo-700">
+            <i class="ri-save-3-line"></i>
+            {{ TEXT_MAP.btn_save }}
           </button>
-          <div class="space-y-3">
-            <SettingItem v-for="(item, index) in exchanges" :key="index" item-type="exchange" :model-value="item"
-              @update:model-value="checkItem('exchange', index, $event)" @remove="removeUnit($event, 'exchange')" />
-          </div>
-          <p v-if="exchanges.length === 0" class="text-sm text-gray-500">
-            {{ TEXT_MAP.settings_exchange_empty }}
-          </p>
-        </div>
-
-        <!-- AI API -->
-        <div v-else-if="activeSection === 'ai'" class="space-y-4">
-          <button @click="addUnit('ai')"
-            class="px-4 py-2 bg-indigo-600 text-white text-sm rounded-md hover:bg-indigo-700 transition-colors">
-            {{ TEXT_MAP.prefix_add }} {{ SETTINGS_CONFIG.ai.addBtnText }}
-          </button>
-          <div class="space-y-3">
-            <SettingItem v-for="(item, index) in ais" :key="index" item-type="ai" :model-value="item"
-              @update:model-value="checkItem('ai', index, $event)" @remove="removeUnit($event, 'ai')" />
-          </div>
-          <p v-if="ais.length === 0" class="text-sm text-gray-500">
-            {{ TEXT_MAP.settings_ai_empty }}
-          </p>
-        </div>
+        </footer>
       </div>
-
-      <!-- 保存按钮区 -->
-      <div class="px-4 py-4 border-t border-gray-200">
-        <button @click="handleSave"
-          class="w-full px-4 py-3 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 transition-colors shadow-md">
-          {{ TEXT_MAP.btn_save }}
-        </button>
-      </div>
-    </div>
+    </section>
   </div>
 </template>

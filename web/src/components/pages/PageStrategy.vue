@@ -39,62 +39,67 @@ function formatProfit(profit: number): string {
 </script>
 
 <template>
-  <div class="h-full flex flex-col p-4 overflow-auto">
-    <div class="bg-white rounded-lg shadow flex-1 flex flex-col">
+  <div class="page-body flex flex-col">
+    <section class="panel flex flex-1 flex-col overflow-hidden">
       <!-- 表头 -->
-      <div class="px-4 py-3 border-b border-gray-200 flex justify-between items-center">
-        <h3 class="text-lg font-semibold text-gray-800">策略列表</h3>
+      <div class="panel-header">
+        <div class="flex items-baseline gap-2">
+          <h2 class="panel-title">策略列表</h2>
+          <span class="text-xs text-ink-faint">{{ strategies.length }} 个实例</span>
+        </div>
         <button
           @click="addStrategy"
-          class="px-4 py-2 bg-indigo-600 text-white text-sm rounded-md hover:bg-indigo-700 transition-colors"
+          class="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700"
         >
-          + 添加策略
+          <i class="ri-add-line"></i>
+          添加策略
         </button>
       </div>
 
       <!-- 表格 -->
       <div class="flex-1 overflow-auto">
-        <table class="w-full">
-          <thead class="bg-gray-50 sticky top-0">
+        <table class="w-full min-w-[640px]">
+          <thead class="sticky top-0 bg-paper-deep/70 backdrop-blur">
             <tr>
-              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">名称</th>
-              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">交易对</th>
-              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">周期</th>
-              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">状态</th>
-              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">收益率</th>
-              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">胜率</th>
-              <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">操作</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-ink-soft">名称</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-ink-soft">交易对</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-ink-soft">周期</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-ink-soft">状态</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-ink-soft">收益率</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-ink-soft">胜率</th>
+              <th class="px-4 py-3 text-center text-xs font-medium text-ink-soft">操作</th>
             </tr>
           </thead>
-          <tbody class="divide-y divide-gray-200">
-            <tr v-for="strategy in strategies" :key="strategy.id" class="hover:bg-gray-50">
-              <td class="px-4 py-3 text-sm font-medium text-gray-900">{{ strategy.name }}</td>
-              <td class="px-4 py-3 text-sm text-gray-600">{{ strategy.symbol }}</td>
-              <td class="px-4 py-3 text-sm text-gray-600">{{ strategy.timeframe }}</td>
+          <tbody class="divide-y divide-paper-line/70">
+            <tr v-if="!strategies.length">
+              <td colspan="7" class="px-4 py-12 text-center text-sm text-ink-faint">暂无策略，点击右上角添加</td>
+            </tr>
+            <tr v-for="strategy in strategies" :key="strategy.id" class="transition-colors hover:bg-paper-deep/40">
+              <td class="px-4 py-3 text-sm font-medium text-ink">{{ strategy.name }}</td>
+              <td class="px-4 py-3 text-sm text-ink-soft">{{ strategy.symbol }}</td>
+              <td class="px-4 py-3 text-sm text-ink-soft">{{ strategy.timeframe }}</td>
               <td class="px-4 py-3">
                 <span :class="['px-2 py-1 text-xs rounded-full', STRATEGY_STATUS_MAP[strategy.status].class]">
                   {{ STRATEGY_STATUS_MAP[strategy.status].text }}
                 </span>
               </td>
-              <td class="px-4 py-3 text-sm" :class="strategy.profit >= 0 ? 'text-green-600' : 'text-red-600'">
+              <td class="px-4 py-3 text-sm font-medium" :class="strategy.profit >= 0 ? 'text-emerald-700' : 'text-rose-700'">
                 {{ formatProfit(strategy.profit) }}
               </td>
-              <td class="px-4 py-3 text-sm text-gray-600">{{ strategy.winRate }}%</td>
+              <td class="px-4 py-3 text-sm text-ink-soft">{{ strategy.winRate }}%</td>
               <td class="px-4 py-3 text-center">
                 <button
                   @click="removeStrategy(strategy.id)"
-                  class="p-1 text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition-colors"
+                  class="rounded-md p-1.5 text-rose-600 transition-colors hover:bg-rose-50 hover:text-rose-700"
                   title="删除策略"
                 >
-                  <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4" />
-                  </svg>
+                  <i class="ri-delete-bin-line text-base"></i>
                 </button>
               </td>
             </tr>
           </tbody>
         </table>
       </div>
-    </div>
+    </section>
   </div>
 </template>

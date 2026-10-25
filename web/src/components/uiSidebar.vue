@@ -10,14 +10,14 @@ export default defineComponent({
 import { ref, onMounted } from 'vue'
 import { type MenuItem, eMenuId } from '../types'
 
-// 定义菜单数据
+// 菜单按交易流程排序：看行情 → 管策略 → 做回测 → 跟订单 → 看资产
 const menuItems: MenuItem[] = [
-  { id: eMenuId.eSettings, name: '设  置', icon: 'ri-settings-3-line' },
-  { id: eMenuId.eAssets, name: '资  产', icon: 'ri-wallet-3-line' },
-  { id: eMenuId.eMarket, name: '行  情', icon: 'ri-dashboard-line' },
-  { id: eMenuId.eStrategy, name: '策略管理', icon: 'ri-user-settings-line' },
-  { id: eMenuId.eBacktest, name: '回  测', icon: 'ri-file-list-3-line' },
-  { id: eMenuId.eOrders, name: '订单管理', icon: 'ri-pie-chart-2-line' },
+  { id: eMenuId.eMarket, name: '行情', icon: 'ri-line-chart-line' },
+  { id: eMenuId.eStrategy, name: '策略管理', icon: 'ri-node-tree' },
+  { id: eMenuId.eBacktest, name: '回测', icon: 'ri-history-line' },
+  { id: eMenuId.eOrders, name: '订单管理', icon: 'ri-list-check-2' },
+  { id: eMenuId.eAssets, name: '资产', icon: 'ri-wallet-3-line' },
+  { id: eMenuId.eSettings, name: '设置', icon: 'ri-settings-3-line' },
 ]
 
 const emit = defineEmits<{
@@ -31,7 +31,7 @@ const userName = ref<string>('')
 const isDisabled = ref<boolean>(false)
 
 // 当前激活项
-const activeItem = ref<MenuItem>(menuItems[4]!)
+const activeItem = ref<MenuItem>(menuItems[0]!)
 
 // 初始化函数
 const init = (strName: string) => {
@@ -75,7 +75,6 @@ const setItem = (id: eMenuId) => {
 onMounted(() => {
   console.log('侧边栏组件挂载完成')
   setLock(true)  // 初始状态锁定
-  // setItem(5) // 默认选中设置
 })
 
 // export
@@ -87,47 +86,59 @@ defineExpose({
 </script>
 
 <template>
-  <aside class="w-52 bg-gray-900 text-white flex flex-col shadow-2xl z-10 shrink-0">
+  <aside class="flex w-16 shrink-0 flex-col border-r border-black/20 bg-[#2a241c] text-[#e9dfcc] shadow-2xl z-10 md:w-56">
     <!-- Logo 区域 -->
-    <div class="h-16 flex items-center px-6 border-b border-gray-800 justify-center">
-      <span class="text-lg font-bold tracking-wide ">Dashboard</span>
+    <div class="flex h-16 shrink-0 items-center justify-center gap-3 border-b border-white/10 px-3 md:justify-start md:px-5">
+      <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#d3ab67] text-[#2a241c]">
+        <i class="ri-pulse-line text-lg"></i>
+      </div>
+      <div class="hidden min-w-0 md:block">
+        <p class="truncate text-sm font-semibold tracking-wide text-[#f4e9d3]">Quant Desk</p>
+        <p class="truncate text-[10px] uppercase tracking-[0.18em] text-[#8f816b]">Trading Terminal</p>
+      </div>
     </div>
 
     <!-- 菜单列表 -->
-    <nav class="flex-1 overflow-y-auto py-4">
+    <nav class="flex-1 overflow-y-auto px-2 py-4 md:px-3">
+      <p class="mb-2 hidden px-2 text-[10px] font-medium uppercase tracking-[0.2em] text-[#7d705d] md:block">工作台</p>
       <ul class="space-y-1">
         <li v-for="item in menuItems.filter(i => i.id !== eMenuId.eSettings)" :key="item.id">
-          <button @click="onSelect(item)" :disabled="isDisabled || activeItem.id === item.id"
-            class="w-full box-border flex items-center justify-center px-6 py-3 text-lg transition-all duration-200 border-l-4"
+          <button @click="onSelect(item)" :disabled="isDisabled || activeItem.id === item.id" :title="item.name"
+            class="relative flex w-full items-center justify-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors duration-150 md:justify-start"
             :class="[
               activeItem.id === item.id
-                ? 'bg-transparent border-indigo-500 text-blue-400 hover:text-blue-500 font-medium'
-                : 'bg-transparent text-white hover:text-white',
-              (isDisabled || activeItem.id === item.id) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+                ? 'bg-white/[0.07] text-[#f0d6a2]'
+                : 'text-[#b6a98f] hover:bg-white/5 hover:text-[#f5ead6]',
+              isDisabled ? 'cursor-not-allowed opacity-45' : 'cursor-pointer'
             ]">
-            <i :class="[item.icon, 'mr-3 text-2xl']"></i>
-            <span>{{ item.name }}</span>
+            <span v-if="activeItem.id === item.id"
+              class="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r bg-[#d3ab67]"></span>
+            <i :class="[item.icon, 'shrink-0 text-xl']"></i>
+            <span class="hidden truncate md:inline">{{ item.name }}</span>
           </button>
         </li>
       </ul>
     </nav>
 
     <!-- 底部用户信息 -->
-    <div class="p-4 border-t border-gray-800">
-      <div class="flex items-center justify-between gap-3">
-        <div class="flex items-center gap-3 flex-1 min-w-0">
-          <div class="w-8 h-8 rounded-full bg-indigo-500 flex items-center justify-center text-white font-bold text-sm">
+    <div class="border-t border-white/10 p-3 md:p-4">
+      <div class="flex items-center justify-center gap-3 md:justify-between">
+        <div class="flex min-w-0 items-center gap-3">
+          <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#d3ab67] text-sm font-bold text-[#2a241c]">
             {{ getUserInitial() }}
           </div>
-          <div class="flex-1 min-w-0">
-            <p class="text-sm font-small truncate">{{ userName }}</p>
+          <div class="hidden min-w-0 md:block">
+            <p class="text-[10px] uppercase tracking-wider text-[#7d705d]">当前用户</p>
+            <p class="truncate text-sm text-[#e9dfcc]">{{ userName || '未登录' }}</p>
           </div>
         </div>
         <!-- 设置按钮 -->
-        <button @click="onSettingsClick"
-          class="w-13 h-13 flex items-center justify-center overflow-visible opacity-70 hover:opacity-100 transition-opacity cursor-pointer flex-shrink-0"
-          :class="[activeItem.id === eMenuId.eSettings ? 'opacity-100' : '']">
-          <img src="/setting.png" alt="设置" class="w-10 h-10 object-cover" />
+        <button @click="onSettingsClick" title="设置"
+          class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors"
+          :class="activeItem.id === eMenuId.eSettings
+            ? 'bg-white/[0.07] text-[#f0d6a2]'
+            : 'text-[#8f816b] hover:bg-white/5 hover:text-[#f5ead6]'">
+          <i class="ri-settings-3-line text-xl"></i>
         </button>
       </div>
     </div>
