@@ -151,9 +151,8 @@ def sec2min(seconds):
     minutes = seconds // 60
     return minutes
 def utc_now():
-    local_now = datetime.now().astimezone()
-    utc_offset_seconds = local_now.utcoffset().total_seconds()
-    return int(utc_offset_seconds / 3600)
+    hours = datetime.now().astimezone().utcoffset().total_seconds() / 3600
+    return int(hours) if hours.is_integer() else hours
 
 # 搜索路径下的文件
 def path2File(path, fileType=''):
