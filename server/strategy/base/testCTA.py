@@ -1,103 +1,76 @@
 import abc
 from server.strategy.base.baseCTA import *
-# from server.utils import log
-# from datetime import date, datetime
-
+from server.strategy.base.testTrade import *
 
 class testCTA(baseCTA):
-    "测试模式"
-    
+    "测试模式: 隔离预知, 策略每根只能看到截止当前bar的K线"
+
     def __init__(self):
         super().__init__()
-        # print("~~~~~~testCTA __init__~~~~~~~~~")
+        self._trade = testTrade()
+        self._pfAll = None          # 全量K线: 回放框架独占, 策略不得读取
+        self._kLine = None          # 可见快照: 策略唯一数据入口(每根一个新对象)
+        self._cursor = -1            # 已揭示条数 = 当前bar的全局下标+1
+        self._startCount = 100
+        self._testTimeKey = ''
+        self._step = 1
 
-    #增量测试,每次时间刷新触发k线改变
-    def testModel(self,testPd:pdData, startCount=100):
-        self.regTime('0.1s')
+    #增量测试(interval间隔时间触发1次, 首帧startCount条, 之后每次推进step条)
+    def _testModel(self,interval=0.1,startCount=100,step = 1):
+        self._testTimeKey = str(interval) + 's'
+        self.regTime(self._testTimeKey)
+        self._startCount = startCount
+        self._step = step
 
-    #type(contract/spot/stock)合约/现货/股票
-    def createTransaction(self, type: str = 'contract') -> None:
-        self.trajectories: list[dict] = []
-        self.type = type
-    def addTransaction(self, dir: str, behavior: str, lv: int, idx: int, position: int) -> None:
-        trade = {"behavior": behavior, "pos": idx, "lv": lv, "position%": position}
-        # 找同方向最后一条仅有 1 笔的 trajectory（待平仓）
-        for item in reversed(self.trajectories):
-            if item["dir"] == dir and (len(item["trades"]) > 0 and item["trades"][-1].get('position%')!= 100):
-                item["trades"].append(trade)
-                return
-            
-        # 未找到待平仓 → 新开仓 trajectory
-        self.trajectories.append({ "dir": dir,"type": self.type, "trades": [trade]})
-    
-    def getTransaction(self):
-        return self.trajectories
-    def getTradesCount(self):
-        count = 0
-        for tra in self.trajectories:
-            count += len(tra.get('trades'))
-        return count
-    
-    #web测试开启接口
+    def _loadFile(self,filename,timeframe='5m',stTime=[]):
+        self._pfAll = pdData()
+        self._pfAll.readFile(filename, True)
+        if timeframe != '5m' or len(stTime) > 0:
+            # resample 只返回副本不改内部数据,必须回填;stTime 先统一成 UTC0 时间戳(resample 内部把字符串按本地时区解释)
+            self._pfAll.format(self._pfAll.resample(timeframe=timeframe,
+                                                    seTime=[pdData._normalizeTime(t) for t in stTime],
+                                                    offsetUtc=False), style='copy')
+        if self._pfAll.empty():
+            raise ValueError("回测区间无K线数据:",stTime)
+
+    # 隔离预知: 重置回测数据并揭示 pf[:startCount]; 之后只由 evtTime 推进, 不在这里步进
+    def beginTest(self):
+        if self._cursor != -1:
+            warn("回测运行中, 忽略本次 beginTest")
+            return
+        if self._pfAll is None or self._pfAll.empty():
+            raise ValueError("未加载K线数据, 先调用 _loadFile")
+        self._resetTest()
+        self._cursor = 0
+        self._advance(self._startCount)
+
+    # interval 每触发1次揭示step根K线; 只认自己注册的回放间隔, 避免与实时周期重复推进
+    def evtTime(self,timeKey):
+        if self._cursor == -1 or timeKey != self._testTimeKey:
+            return
+        self._advance(self._step)
+
+    # 推进 count 根 -> 决策 -> 已到最后一根时先把结束标记置上, 策略里的 isOver() 才成立
+    def _advance(self,count):
+        self._reveal(min(self._cursor + count, self._pfAll.size()))
+        if self._cursor >= self._pfAll.size():
+            self._cursor = -1
+        self.startStrategy(self._kLine)
+
+    # 只前进不后退; 快照是 _pfAll 的只读切片(零拷贝), 每根仍是长度固定的新对象
+    def _reveal(self,n):
+        self._cursor = min(max(self._cursor, n), self._pfAll.size())
+        live = self._pfAll.raw().iloc[:self._cursor]
+        self._kLine = pdData()
+        self._kLine.setHead(live.columns.tolist())
+        self._kLine._pf = live
+
+    def isOver(self):
+        return self._cursor == -1
+
+    # 回测数据重置点: 策略在这里把账户/持仓/统计恢复到初始状态
+    def _resetTest(self):pass
+
+    # 每根新K线调用一次: kLine 只含截止当前bar的数据, 指标需在该快照上自行计算
     @abc.abstractmethod
-    def startStrategy(self):pass
-
-   # # 增量测试:对原始数据进行剪裁,每次update发送测试的数据
-    # def incrementalTesting(self, pdData, startCount=100, closeCount=-1):  
-    #     self.__testCount = startCount
-    #     self.__testData = pdData
-    #     self.__closeCount = closeCount
-    #     if closeCount == -1:
-    #         self.__closeCount = len(pdData.get())
-
-    # # 测试模式开仓
-    # def testOpen(self, longFn, shortFn, mark=''):  # mark:开仓标记
-    #     def open(dir):
-    #         pos = longFn() if dir == 'long' else shortFn()
-    #         if pos == 0:
-    #             return False
-    #         # print("~~~~~~open~~~",dir,pos)
-    #         open_dir = self.__openl if dir == 'long' else self.__opens
-    #         open_dir.append(
-    #             {'mark': mark, 'idx': self.__testCount - 1, 'position': pos})
-    #         return True
-    #     # logic
-    #     if not open('long'):
-    #         return open('short')
-    #     return False
-    # # 测试模式平仓
-    # def testClose(self, longFn, shortFn):
-    #     def close(dir):
-    #         open_dir = self.__openl if dir == 'long' else self.__opens
-    #         if len(open_dir) > 0:
-    #             pos = longFn() if dir == 'long' else shortFn()
-    #             if pos == 0:
-    #                 return False
-    #             # print("~~~~~~close~~~",dir,pos)
-    #             mark = open_dir[0]['mark']
-    #             open_dir.append(
-    #                 {'mark': mark, 'idx': self.__testCount - 1, 'position': pos})
-    #             # 仓位百分比为100完全平仓
-    #             if abs(pos) == 100:
-    #                 self.__testOrders.append(
-    #                     {'dir': 1 if dir == 'long' else -1, 'mark': mark, 'position': open_dir})
-    #                 if dir == 'long':
-    #                     self.__openl = []
-    #                 else:
-    #                     self.__opens = []
-    #             return True
-    #     #
-    #     if not close('long'):
-    #         return close('short')
-    #     return False
-    # # 测试模式返回仓位
-    # def testPosition(self, dir):
-    #     open_dir = self.__openl if dir == 'long' else self.__opens
-    #     if len(open_dir) > 0:
-    #         return open_dir[0]['idx']
-    #     return 0
-    
-    # 继承,测试函数
-    # def testSignal(self, pf, count): pass  # 信号
-    # def testEnd(self, orders): pass  # 测试结束
-    # def evtTime(self, timeKey): pass  # 时间事件统一接收
+    def startStrategy(self, kLine):pass

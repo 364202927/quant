@@ -19,8 +19,7 @@ class pdData:
     _timeKey = 'candle_begin_time'  # 外来数据表里的标准时间列名
     _extraCols = {'funding_bps': 'last'}  # head之外需要保留的列: 列名 -> resample聚合方式(资金费率取周期末生效值)
 
-    def __init__(self, head=("candle_begin_time", "open", "high", "low", "close", "vol"),
-                 read='', style='', data=None):
+    def __init__(self, head=("candle_begin_time", "open", "high", "low", "close", "vol"),read='', style='', data=None):
         self._pf = None  # DataFrame
         self._head = []
         self.setHead(head)

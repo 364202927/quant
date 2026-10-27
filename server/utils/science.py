@@ -65,109 +65,44 @@ def division(a:float, b:float, step = 0, precision:str = '0.001'):
     # pass
 
 
-# todo暂时测试过周线有效
-# 最简单的对策：优化方向
-# 如果你想用更粗的指标来管理这个牛市，不用缠论那么精细。
-# 用周线收盘价，配合周线MA20和趋势线。只要周线收盘价没有有效跌破MA20，或者没有跌破前一个波段的最低点（比如4.9万），你就可以坚定认为牛市还在继续。
-def trend(pf, mode='all'):
-    """
-    基于长期均线斜率的牛/熊二元趋势识别。
-    无震荡输出，自动适配日/周/月周期。
-    """
-    df = pf.copy()
+# ======== 交易成本与账户口径: backTest(指标回测) 与 testTrade(模拟交易) 共用一份 ========
+kFeeRate = 0.0005               # 单边吃单手续费率
+kSlip = (0.0001, 0.0005, 42)    # 默认滑点区间 [最小, 最大, 随机种子]
+kFundingFreq = '8h'             # 资金费结算周期(UTC 00/08/16)
+kMarginRatio = 0.95             # 起始权益占本金比例,剩余 5% 作为缓冲
+kLiqRatio = 0.1                 # 净值跌破 初始权益×该比例 → 强平(爆仓)
 
-    # ============ 0. 周期检测与参数设定 ============
-    def detect_period(idx):
-        if not isinstance(idx, pd.DatetimeIndex):
-            return 'd'
-        diffs = idx.to_series().diff().dropna()
-        if len(diffs) == 0:
-            return 'd'
-        median_diff = diffs.median()
-        days = median_diff / pd.Timedelta(days=1)
-        if days <= 3:
-            return 'd'
-        elif days <= 10:
-            return 'w'
-        else:
-            return 'm'
+# 手续费: qty 成交数量, price 成交价
+def feeCost(qty, price, rate=kFeeRate):
+    return qty * price * rate
 
-    period = detect_period(df.index)
+# 按滑点偏移成交价: side=±1,滑点始终取不利方向
+def slipPrice(price, side, slip):
+    return price * (1 + side * slip)
 
-    if period == 'd':
-        ma_len = 60          # 长期均线周期
-        slope_lookback = 10  # 斜率回溯期（用于判断方向）
-        min_seg_len = 5      # 最小段合并长度
-    elif period == 'w':
-        ma_len = 26
-        slope_lookback = 4
-        min_seg_len = 2
-    else:  # 月线
-        ma_len = 12
-        slope_lookback = 2
-        min_seg_len = 1
+# 滑点区间 [最小, 最大, 种子]: 缺省或 None 的项取 kSlip
+def slipRange(slip=None):
+    given = list(slip or ())[:3]
+    return [d if v is None else v for d, v in zip(kSlip, given + [None] * (3 - len(given)))]
 
-    # ============ 1. 计算长期均线及其斜率 ============
-    df['ma_long'] = df['close'].ewm(span=ma_len, adjust=False).mean()
-    # 斜率简化：均线当前值 vs slope_lookback 前的值
-    df['slope'] = df['ma_long'] - df['ma_long'].shift(slope_lookback)
+# 资金费结算时刻: 缺失结算 K 线时 df.loc 会直接 KeyError(数据必须含 00/08/16 UTC)
+def fundingTimes(index):
+    return pd.date_range(index[0].ceil(kFundingFreq), index[-1], freq=kFundingFreq)
 
-    # ============ 2. 每日状态判定（忽略震荡，强制二元） ============
-    def assign_state(row):
-        if pd.isna(row['slope']):
-            return None
-        return 'bull' if row['slope'] > 0 else 'bear'
+# 结算表 {结算时刻: (结算价, 费率)}; 无 funding_bps 列返回空表
+def fundingTable(df):
+    if "funding_bps" not in df.columns:
+        return {}
+    rows = df.loc[fundingTimes(df.index)]
+    return dict(zip(rows.index, zip(rows["open"], rows["funding_bps"] / 1e4)))
 
-    df['state'] = df.apply(assign_state, axis=1)
-    valid_df = df.dropna(subset=['state']).copy()
+# 资金费: 多头付正费率,空头收正费率
+def fundingPay(qty, price, rate, side):
+    return qty * price * rate * side 
 
-    if valid_df.empty:
-        seg = (int(df.index[0]), int(df.index[-1]))
-        if mode == 'last':
-            return {'bull': None, 'bear': None, 'range': None}
-        return {'bull': [], 'bear': [], 'range': []}
-
-    # ============ 3. 原始分段 ============
-    raw_segments = []
-    start_idx = valid_df.index[0]
-    current_state = valid_df['state'].iloc[0]
-    for i in range(1, len(valid_df)):
-        if valid_df['state'].iloc[i] != current_state:
-            end_idx = valid_df.index[i-1]
-            raw_segments.append((current_state, int(start_idx), int(end_idx)))
-            start_idx = valid_df.index[i]
-            current_state = valid_df['state'].iloc[i]
-    raw_segments.append((current_state, int(start_idx), int(valid_df.index[-1])))
-
-    # ============ 4. 合并短片段 + 震荡吞没 ============
-    merged = []
-    for state, s, e in raw_segments:
-        length = e - s + 1
-        if length <= min_seg_len and merged:
-            # 短片段并入前一段，状态随前一段
-            prev_state, prev_s, prev_e = merged[-1]
-            merged[-1] = (prev_state, prev_s, e)
-        else:
-            merged.append((state, s, e))
-
-    # 二次合并相邻同状态
-    final = []
-    for seg in merged:
-        if not final:
-            final.append(seg)
-            continue
-        last_state, last_s, last_e = final[-1]
-        state, s, e = seg
-        if state == last_state:
-            final[-1] = (state, last_s, e)
-        else:
-            final.append(seg)
-
-    # ============ 5. 输出 ============
-    result = {'bull': [], 'bear': [], 'range': []}
-    for state, s, e in final:
-        result[state].append((s, e))
-
-    if mode == 'last':
-        return {k: (result[k][-1] if result[k] else None) for k in ['bull', 'bear', 'range']}
-    return result
+# 通用下单门禁: 未爆仓 + 在允许时段 + 有可用保证金
+# clock: UTC 时钟 "HH:MM:SS"; avail: 可用保证金(净值-已占用); session: (起, 止) 或 None 不限时段
+def canOrder(clock, avail, session=None, blown=False):
+    if blown or avail <= 0:
+        return False
+    return session is None or session[0] <= clock <= session[1]

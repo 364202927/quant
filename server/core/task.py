@@ -122,8 +122,10 @@ class task:
         if callable(updateFn):
             updateFn(tabId, timeKey)
             return True
-        warn('当前时间事件未接收:', fnName)
-        # self.__handle.evtTime(timeKey)
+        #兜底时间处理
+        if self.__handle.evtTime:
+            self.__handle.evtTime(timeKey)
+            return True
 
     async def _runAsyncEvent(self, processFn: Any, updateFn: Any,tabId: object, timeKey: str) -> None:
         try:
