@@ -1,760 +1,405 @@
+import math
+import operator as op
+from bisect import bisect_right
+from collections import defaultdict
+import numpy as np
+import pandas as pd
 from server.indicators.baseIndicators import *
+from server.utils import switch, switchFn
 from server.market import kLong, kShort, kBuy, kSell
-from typing import NamedTuple
-# todo:open_eff,close时添加冲击成本价,模拟资金量大的情况下对市场的影响
-# todo:当前只实现了单条交易估计,多条交易轨迹相交没做
-# todo:后面添加type 对现货,股票,永续合约的回测
-# todo:添加指标:参数平原+bpo,多倍压力(滑点+手续费)
 
-k_MSG = {
-    # 盈利能力
-    "profit_pos": "总收益为正 → +{score}",
-    "profit_neg": "总收益为负 → +0 (策略未产生正回报)",
-    "sharpe_high": "夏普比率 > 1 → +{score} (风险调整后收益优秀)",
-    "sharpe_mid": "夏普比率 0~1 → +{score} (勉强为正，但不够突出)",
-    "sharpe_low": "夏普比率 ≤ 0 → +0 (风险调整后无超额收益)",
-    "sortino_high": "索提诺比率 > 1 → +{score} (下行风险控制好)",
-    "sortino_mid": "索提诺比率 0~1 → +{score}",
-    "sortino_low": "索提诺比率 ≤ 0 → +0 (下行波动未带来正回报)",
-    "calmar_high": "卡玛比率 > 1 → +{score} (相对于最大回撤的收益好)",
-    "calmar_mid": "卡玛比率 0~1 → +{score}",
-    "calmar_low": "卡玛比率 ≤ 0 → +0 (收益/回撤无吸引力)",
+"""
+结构: 一、统计指标 → 二、评分规则 → 三、事件驱动撮合 → 四、backTest 类
+约定:
+ - 事件时间 = K线开盘时间,成交价 = 该K线 close(即 K线结束时刻成交)
+ - 资金费按 8h(UTC 00/08/16)结算,取结算K线的 open 价,多头付正费率、空头收正费率
+ - 保证金采用全仓、不做多空轧差(对冲仓位各自占用保证金,偏保守)
+"""
 
-    # 风险控制
-    "dd_low": "最大回撤 < 10% → +{score} (资金回撤小)",
-    "dd_mid": "最大回撤 10%~20% → +{score} (回撤适中)",
-    "dd_high": "最大回撤 ≥ 20% → +0 (回撤过大，实盘压力大)",
-    "vol_low": "日波动率 < 0.01 → +{score} (净值波动极低)",
-    "vol_mid": "日波动率 0.01~0.03 → +{score} (波动适中)",
-    "vol_high": "日波动率 ≥ 0.03 → +0 (净值起伏过大)",
-    "cvar_low": "CVaR 95% ≤ 2% → +{score} (尾部风险极小)",
-    "cvar_mid": "CVaR 95% 2%~5% → +{score} (极端损失可控)",
-    "cvar_high": "CVaR 95% > 5% → +0 (黑天鹅事件可能重创策略)",
+# todo:open_eff,close时添加冲击成本价(基于ADV/参与率/波动率的平方根模型)
+# todo:接入参数平原+标准PBO(需同策略多参数日收益矩阵);deflated_sharpe 的 n_trials 改传优化器真实试验次数
+# todo:市场类型抽象(MarketConfig): 现货/股票/永续 的手续费、资金费、杠杆、强平、日历
+# todo:逐K线(high/low)强平检查与持仓期最大不利波动(MAE)
 
-    # 过拟合检测
-    "dsig_pvalue_good": "Deflated Sharpe p-value ≤ 0.05 → +{score} (good,非数据窥探)",
-    "dsig_pvalue_bad": "Deflated Sharpe p-value > 0.05 → +0 (严重过拟合嫌疑，高夏普可能是噪声)",
-    "oos_decay_good": "样本外夏普衰减 > -0.3 → +{score} (good,参数稳定性好)",
-    "oos_decay_mid": "样本外夏普衰减 -0.3~-0.5 → +{score} (有一定衰减)",
-    "oos_decay_bad": "样本外夏普衰减 < -0.5 → +0 (样本内过优化，实盘易失效)",
 
-    # 稳健性 / 一致性
-    "roll_std_low": "滚动夏普标准差 < 0.3 → +{score} (good,时间维度上表现一致)",
-    "roll_std_mid": "滚动夏普标准差 0.3~0.6 → +{score} (稳定性一般)",
-    "roll_std_high": "滚动夏普标准差 ≥ 0.6 → +0 (不同时段差异大，不可靠)",
-    "win_rate_ok": "胜率 ≥ 40% → +{score}",
-    "win_rate_low": "胜率 < 40% → +0 (胜率偏低，需依赖高盈亏比)",
-    "max_cons_loss_ok": "最大连续亏损 ≤ 5 → +{score} (good,心理承受压力小)",
-    "max_cons_loss_warn": "最大连续亏损 > 5 → +0 (容易出现连续回撤期)",
-    "skew_ok": "收益偏度 > 0 → +{score} (good,极端风险低,亏小赚大)",
-    "skew_warn": "收益偏度 ≤ 0 → +0 (负偏，可能有跳空亏损风险)",
-
-    # 实盘摩擦 / 容量
-    "stress_slip_good": "2x滑点后利润衰减 < 50% → +{score} (good,不怕成本恶化,实盘存活率高。)",
-    "stress_slip_mid": "2x滑点后利润衰减 50%~80% → +{score} (对成本较敏感)",
-    "stress_slip_bad": "2x滑点后利润衰减 ≥ 80% → +0 (稍微增加滑点就大幅恶化，实盘危险)",
-    "turnover_ok": "年化换手率 < 200 → +{score} (good,换手率健康)",
-    "turnover_high": "年化换手率 ≥ 200 → +0 (换手率过高，市场冲击成本大)",
-    "capacity_ok": "预估容量 ≥ 100 → +{score} (good,资金容量尚可)",
-    "capacity_low": "预估容量 < 100 → +0 (容量过小，实盘资金受限)",
-
-    # 综合判定
-    "verdict_no_trades": "⚠️ 无有效交易 (未产生任何成交信号，无法评分)",
-    "verdict_live": "✅ 可实盘 (总分 ≥ 70)",
-    "verdict_improve": "🔧 继续改善 (总分 40~69)",
-    "verdict_discard": "❌ 尽早放弃 (总分 < 40)"
-}
-
-Year = 365  # 每一年有几天开盘，若是股票252天
-
-# ----test 辅助函数 ----
-def _skewness(x: np.ndarray) -> float:
-    n = len(x)
-    if n < 3:
-        return 0.0
-    mean_x = np.mean(x)
-    std_x = np.std(x, ddof=1)
-    if std_x == 0:
-        return 0.0
-    m3 = np.sum((x - mean_x) ** 3) / n
-    return (n * n) / ((n - 1) * (n - 2)) * m3 / (std_x ** 3)
-
-def _kurtosis(x: np.ndarray) -> float:
-    n = len(x)
-    if n < 4:
-        return 0.0
-    mean_x = np.mean(x)
-    std_x = np.std(x, ddof=1)
-    if std_x == 0:
-        return 0.0
-    m4 = np.sum((x - mean_x) ** 4) / n
-    k = (n * (n + 1)) / ((n - 1) * (n - 2) * (n - 3)) * m4 / (std_x ** 4)
-    k -= 3.0 * (n - 1) * (n - 1) / ((n - 2) * (n - 3))
-    return k
-
-def _annual_sharpe(returns: np.ndarray, ppy: float) -> float:
-    std_r = np.std(returns, ddof=1)
-    if std_r == 0:
-        return 0.0
-    return np.mean(returns) / std_r * math.sqrt(ppy)
-
-def _sortino_ratio(returns: np.ndarray, ppy: float) -> float:
-    downside = returns[returns < 0]
-    if len(downside) == 0:
-        return 999.0
-    downside_std = np.std(downside, ddof=1)
-    if downside_std == 0:
-        return 0.0
-    return math.sqrt(ppy) * np.mean(returns) / downside_std
-
-def _cagr(start: float, end: float, days: int) -> float:
-    if days <= 0 or start <= 0:
-        return 0.0
-    years = days / 365.0
-    return (end / start) ** (1.0 / years) - 1.0
-
-def _calmar_ratio(cagr_val: float, max_dd: float) -> float:
-    if max_dd == 0:
-        return 0.0
-    return cagr_val / abs(max_dd)
-
-def _cvar(returns: np.ndarray, alpha: float) -> float:
-    cutoff = np.percentile(returns, alpha * 100)
-    tail = returns[returns <= cutoff]
-    if len(tail) == 0:
-        return 0.0
-    return float(tail.mean())
-
-def _max_drawdown(equity: np.ndarray, close_times: np.ndarray):
-    running_max = np.maximum.accumulate(equity)
-    drawdowns = (equity - running_max) / running_max
-    max_dd = float(drawdowns.min())
-    trough_idx = int(drawdowns.argmin())
-    peak_vals = np.where(np.isclose(equity[:trough_idx + 1], running_max[trough_idx]))[0]
-    peak_idx = int(peak_vals[-1]) if len(peak_vals) > 0 else trough_idx
-    dd_duration = trough_idx - peak_idx
-    recovery_days = None
-    peak_value = running_max[trough_idx]
-    remaining = equity[trough_idx + 1:]
-    recovered = np.where(remaining >= peak_value)[0]
-    if len(recovered) > 0:
-        ri = trough_idx + 1 + recovered[0]
-        recovery_days = int((close_times[ri] - close_times[trough_idx]).days)
-    return max_dd, dd_duration, recovery_days, drawdowns
-
-def _deflated_sharpe_pval(returns: np.ndarray, ppy: float,
-                           n_simulations: int = 1000,
-                           block_size: int | None = None,
-                           seed: int = 42):
-    """块状 bootstrap 通货紧缩夏普检验（内层循环已向量化）"""
+# ======== 一、统计指标 ========
+PPY = 365.0  # 日收益年化周期数(加密货币全年开盘;股票改 252)
+def annual_sharpe(returns: np.ndarray, ppy: float = PPY) -> float:
+    std = np.std(returns, ddof=1) if len(returns) > 1 else 0.0
+    return float(np.mean(returns) / std * math.sqrt(ppy)) if std > 0 else 0.0
+def cagr(start: float, end: float, days: int) -> float:
+    return (end / start) ** (365.0 / days) - 1.0 if days > 0 and start > 0 and end > 0 else 0.0
+def calmar(cagr_val: float, max_dd: float) -> float:# 回撤为 0 且赚钱 → 封顶 999;不赚钱 → 0
+    return min(cagr_val / abs(max_dd), 999.0) if max_dd else 999.0 * (cagr_val > 0)
+def max_drawdown(nav: np.ndarray) -> float:
+    """nav 须包含初始权益点,否则首段回撤会被漏掉"""
+    peak = np.maximum.accumulate(nav)
+    return float(((nav - peak) / peak).min())
+def cvar(returns: np.ndarray, alpha: float) -> float:
+    return float(returns[returns <= np.percentile(returns, alpha * 100)].mean())
+def profit_factor(pnl: np.ndarray) -> float:
+    loss = -pnl[pnl < 0].sum()
+    return min(float(pnl[pnl > 0].sum() / loss), 999.0) if loss > 0 else 999.0
+def trimmed_profit(pnl: np.ndarray, top_frac: float = 0.05) -> float:
+    """剔除最赚钱的 top_frac 笔(至少1笔)后的总盈亏,衡量利润是否依赖少数极端单"""
+    k = max(1, math.ceil(len(pnl) * top_frac))
+    return float(np.sort(pnl)[:-k].sum())
+def deflated_sharpe_pval(returns: np.ndarray, ppy: float = PPY, n_sim: int = 1000,
+                         n_trials: int = 100, seed: int = 42):
+    """零收益 bootstrap 下 n_trials 个随机策略的最大夏普 ≥ 实测夏普的概率。
+    n_trials 应等于真实调参试验次数(目前是经验值,接入优化器后传真实值)"""
     n = len(returns)
-    sr_obs = _annual_sharpe(returns, ppy)
+    sr_obs = annual_sharpe(returns, ppy)
     if n < 10 or sr_obs == 0.0:
         return 1.0, sr_obs
-
     rng = np.random.default_rng(seed)
-    if block_size is None:
-        block_size = max(2, int(np.sqrt(n)))
+    zero_mean = returns - returns.mean()
+    max_sr = np.empty(n_sim)
+    for i in range(n_sim):
+        batch = zero_mean[rng.integers(0, n, size=(n_trials, n))]
+        std = batch.std(axis=1, ddof=1)
+        sr = np.divide(batch.mean(axis=1), std, out=np.zeros(n_trials), where=std > 0)
+        max_sr[i] = sr.max() * math.sqrt(ppy)
+    return float(np.mean(max_sr >= sr_obs)), sr_obs
 
-    simulated_max_sr = np.zeros(n_simulations)
-    n_strategies = 100
-    sqrt_ppy = np.sqrt(ppy)
-    for i in range(n_simulations):
-        n_blocks = (n + block_size - 1) // block_size
-        starts = rng.integers(0, n - block_size + 1, size=n_blocks)
-        blocks = [returns[s:s + block_size] for s in starts]
-        sim_zero = np.concatenate(blocks)[:n]
-        sim_zero = sim_zero - np.mean(sim_zero)
+# ======== 二、评分规则 ========
+_GT, _GE, _LT, _LE = op.gt, op.ge, op.lt, op.le
+# (指标分区, 指标名, ((比较, 阈值, 得分, 文案), ...) 按序首个命中, 未命中文案)  未命中得 0 分
+_RULES = (
+    # ---- 盈利 25 ----
+    ("return_quality", "total_return_pct",
+     ((_GT, 0, 5, "总收益为正"),), "总收益 ≤ 0 (策略未产生正回报)"),
+    ("overfit_filter", "sharpe_ratio",
+     ((_GT, 1, 10, "夏普 > 1 (风险调整后收益优秀)"), (_GT, 0, 5, "夏普 0~1 (勉强为正)")),
+     "夏普 ≤ 0 (风险调整后无超额收益)"),
+    ("overfit_filter", "calmar_ratio",
+     ((_GT, 1, 10, "卡玛 > 1 (相对回撤收益好)"), (_GT, 0, 5, "卡玛 0~1")),
+     "卡玛 ≤ 0 (收益/回撤无吸引力)"),
+    # ---- 风险 20 (回撤/CVaR 单位为 %,波动率为小数) ----
+    ("live_tolerance", "max_drawdown_pct",
+     ((_LT, 10, 8, "最大回撤 < 10%"), (_LT, 20, 4, "最大回撤 10%~20%")),
+     "最大回撤 ≥ 20% (实盘压力大)"),
+    ("post_cost_survival", "cvar_95_pct",
+     ((_LE, 2, 6, "日 CVaR95 ≤ 2% (尾部风险小)"), (_LE, 5, 3, "日 CVaR95 2%~5%")),
+     "日 CVaR95 > 5% (极端日亏损大)"),
+    ("post_cost_survival", "daily_volatility",
+     ((_LT, 0.01, 6, "日波动率 < 1%"), (_LT, 0.03, 3, "日波动率 1%~3%")),
+     "日波动率 ≥ 3% (净值起伏过大)"),
+    # ---- 过拟合 20 ----
+    ("overfit_filter", "deflated_sharpe_pvalue",
+     ((_LE, 0.05, 12, "Deflated Sharpe p ≤ 0.05 (非数据窥探)"),),
+     "Deflated Sharpe p > 0.05 (高夏普可能是噪声)"),
+    ("live_tolerance", "oos_sharpe_change",   # (后半段-前半段)/|前半段|,负=变差
+     ((_GE, -0.3, 8, "后半段夏普衰减 < 30% (时间稳定)"), (_GE, -0.5, 4, "后半段夏普衰减 30%~50%")),
+     "后半段夏普衰减 > 50% 或无法计算 (前强后弱)"),
+    # ---- 稳健 15 ----
+    ("return_quality", "profit_factor",
+     ((_GE, 1.5, 8, "盈利因子 ≥ 1.5"), (_GE, 1.1, 4, "盈利因子 1.1~1.5")),
+     "盈利因子 < 1.1 (盈亏结构薄)"),
+    ("return_quality", "trimmed_profit",
+     ((_GT, 0, 7, "剔除最赚 5% 交易后仍盈利"),),
+     "剔除最赚 5% 交易后亏损 (利润依赖少数极端单)"),
+    # ---- 实盘摩擦 20 ----
+    ("live_tolerance", "cost_breakeven_multiple",   # 成本放大几倍后利润归零
+     ((_GE, 3, 12, "成本放大 ≥ 3 倍才归零 (抗成本恶化)"), (_GE, 2, 6, "成本放大 2~3 倍归零")),
+     "成本放大 < 2 倍即归零 (实盘危险)"),
+    ("basic", "n_trades",
+     ((_GE, 100, 8, "交易数 ≥ 100"), (_GE, 30, 4, "交易数 30~100")),
+     "交易数 < 30 (统计置信度低)"),
+)
 
-        # 向量化：一次生成所有策略的随机索引矩阵
-        idx_matrix = rng.integers(0, n, size=(n_strategies, n))
-        ret_batch = sim_zero[idx_matrix]
-        means = ret_batch.mean(axis=1)
-        stds = ret_batch.std(axis=1, ddof=1)
-        mask = stds > 0
-        sharpes = np.where(mask, means / stds * sqrt_ppy, 0.0)
-        simulated_max_sr[i] = sharpes.max()
+_VERDICT = {
+    "no_trades": "⚠️ 无有效交易 (未产生任何成交信号，无法评分)",
+    "insufficient_sample": "⚠️ 样本不足 (交易数或天数过少，指标不可信)",
+    "blowup": "💥 爆仓 (资金跌破清算线，策略失效)",
+    "live": "✅ 可实盘 (总分 ≥ 70)",
+    "improve": "🔧 继续改善 (总分 40~69)",
+    "discard": "❌ 尽早放弃 (总分 < 40)",
+}
 
-    p_value = float(np.mean(simulated_max_sr >= sr_obs))
-    return p_value, sr_obs
+def score(metrics: dict) -> dict:
+    basic = metrics["basic"]
+    gate = switch(_VERDICT, basic["status"])      # status=ok 时无对应键 → False
+    if gate:
+        return {"total_score": 0, "verdict": gate, "details": [gate]}
+    total, details = 0, []
+    for section, field, tiers, miss in _RULES:
+        value = metrics[section][field]
+        value = np.nan if value is None else value   # None=无法计算,所有比较为 False → 0 分
+        pts, desc = next(((p, d) for cmp, thr, p, d in tiers if cmp(value, thr)), (0, miss))
+        total += pts
+        details.append(f"{desc} → +{pts}")
+    tier = "blowup" if basic["blowup"] else ("discard", "improve", "live")[bisect_right((40, 70), total)]
+    return {"total_score": total, "verdict": switch(_VERDICT, tier), "details": details}
 
-def _consecutive_streaks(returns: np.ndarray):
-    if len(returns) == 0:
-        return 0, 0
-    signs = np.sign(returns)
-    changes = np.where(np.diff(signs) != 0)[0] + 1
-    groups = np.split(signs, changes)
-    max_wins = max((len(g) for g in groups if len(g) > 0 and g[0] > 0), default=0)
-    max_losses = max((len(g) for g in groups if len(g) > 0 and g[0] <= 0), default=0)
-    return max_wins, max_losses
+# ======== 三、事件驱动撮合 ========
+EPS = 1e-8
+FUNDING_FREQ = "8h"
+LIQUIDATION_RATIO = 0.1     # 账户净值 < 初始权益 * 该比例 → 全部强平
+_SIDE = {kLong: 1, kShort: -1}   # 方向 -> 盈亏符号
+_KIND = {f"{kLong}:{kBuy}": "open", f"{kLong}:{kSell}": "close",
+         f"{kShort}:{kSell}": "open", f"{kShort}:{kBuy}": "close"}
+TRADE_COLS = ["traj_id", "side", "open_time", "close_time", "duration", "qty", "entry", "exit",
+              "margin", "fee", "pnl", "exit_kind"]
 
-def _rolling_sharpe_metrics(returns: np.ndarray, window: int | None = None):
-    if window is None:
-        window = max(len(returns) // 5, 5)
-    if len(returns) < window:
-        return 0.0, 0.0
-    s = pd.Series(returns)
-    rolling_mean = s.rolling(window).mean()
-    rolling_std = s.rolling(window).std(ddof=1)
-    rolling_sr = (rolling_mean / rolling_std).dropna().replace([np.inf, -np.inf], 0.0).fillna(0.0)
-    return float(rolling_sr.std(ddof=1)), float(rolling_sr.min())
+def check_kline(df: pd.DataFrame) -> None:
+    """df 以 candle_begin_time(UTC,无时区)为索引。有问题直接抛错并给出首个异常行"""
+    bad = df[["open", "close", "funding_bps"]].isna().any(axis=1)
+    if bad.any():
+        raise ValueError(f"K线含 NaN,首个异常行:\n{df[bad].head(1)}")
+    if not (df.index.is_unique and df.index.is_monotonic_increasing):
+        raise ValueError("K线时间必须唯一且递增")
+    if df.index.tz is not None:
+        raise ValueError("raw() 应为 UTC 无时区时间")
 
-##class
+def build_events(df: pd.DataFrame, signal: list) -> list:
+    """signal -> 全局事件队列。同一时刻先平后开(释放的保证金可立即复用)"""
+    times, close = df.index, df["close"].to_numpy()
+    events = []
+    for tid, traj in enumerate(signal):
+        trades = traj["trades"]
+        if len(trades) < 2:
+            continue
+        side, pos = switch(_SIDE, traj["dir"]), [t["pos"] for t in trades]
+        if not side or any(b <= a for a, b in zip(pos, pos[1:])):
+            raise ValueError(f"轨迹 {tid} 非法: dir={traj['dir']}, pos={pos} (dir 需合法且 pos 严格递增)")
+        for t in trades:
+            kind = switch(_KIND, f"{traj['dir']}:{t['behavior']}")
+            if not kind:
+                raise ValueError(f"轨迹 {tid}: behavior={t['behavior']} 与 dir={traj['dir']} 不匹配")
+            pct, lv = float(t.get("position%", 10)) / 100.0, float(t.get("lv", 1))
+            if not (pct > 0 and lv > 0):     # 同时拦住 NaN
+                raise ValueError(f"轨迹 {tid} 的 position%/lv 非法: {t}")
+            events.append({"time": times[t["pos"]], "traj_id": tid, "side": side, "kind": kind, "pct": pct,
+                           "lv": lv, "price": float(close[t["pos"]]), "last": t is trades[-1]})
+    events.sort(key=lambda e: (e["time"], e["kind"] == "open", e["traj_id"]))
+    return events
+
+class Account:
+    """共享账户。cash=已实现权益(含手续费/资金费),净值=cash+全部持仓浮盈"""
+
+    def __init__(self, equity: float, fee_rate: float, slip: list, liq_ratio: float):
+        self.cash, self.fee_rate, self.floor = equity, fee_rate, equity * liq_ratio
+        self.slip_lo, self.slip_hi, seed = slip
+        self.rng = np.random.default_rng(int(seed))
+        self.positions, self.trades = {}, []            # (traj_id, side) -> 持仓
+        self.fee_open = self.fee_close = self.slip_cost = self.funding_cost = self.max_margin = 0.0
+        self.skipped, self.blown, self.blown_at = 0, False, None
+
+    # ---- 状态 ----
+    def used_margin(self) -> float:
+        return sum(p["margin"] for p in self.positions.values())
+    def nav(self, price: float) -> float:
+        return self.cash + sum((price - p["cost"]) * p["qty"] * p["side"] for p in self.positions.values())
+
+    # ---- 事件 ----
+    def on_event(self, e: dict) -> None:
+        if self.blown:
+            return
+        switchFn({"open": self._open, "close": self._close}, e["kind"], e=e)
+        key = (e["traj_id"], e["side"])
+        if e["last"] and key in self.positions:      # 轨迹最后一个事件后仍有残仓 → 按该价强平
+            self._exit(key, self.positions[key]["qty"], e["price"], e["time"], "traj_end")
+        self._check_liquidation(e["time"], e["price"])
+
+    def _open(self, e: dict) -> None:
+        side, slip, nav = e["side"], self.rng.uniform(self.slip_lo, self.slip_hi), self.nav(e["price"])
+        margin = min(nav * e["pct"], nav - self.used_margin())   # 不得超过可用保证金
+        if margin <= EPS:
+            self.skipped += 1
+            return
+        px = e["price"] * (1 + side * slip)
+        qty, fee = margin * e["lv"] / px, margin * e["lv"] * self.fee_rate
+        pos = self.positions.setdefault((e["traj_id"], side), {
+            "side": side, "traj_id": e["traj_id"], "opened_at": e["time"],
+            "qty": 0.0, "cost": 0.0, "margin": 0.0, "fee": 0.0})
+        pos["cost"] = (pos["qty"] * pos["cost"] + qty * px) / (pos["qty"] + qty)
+        pos["qty"] += qty
+        pos["margin"] += margin
+        pos["fee"] += fee
+        self.cash -= fee
+        self.fee_open += fee
+        self.slip_cost += qty * px * slip
+        self.max_margin = max(self.max_margin, self.used_margin())
+
+    def _close(self, e: dict) -> None:
+        pos = self.positions.get((e["traj_id"], e["side"]))
+        if pos is None:        # 对应开仓被保证金约束拒绝
+            return
+        self._exit((e["traj_id"], e["side"]), pos["qty"] * min(e["pct"], 1.0), e["price"], e["time"], "signal")
+
+    def _exit(self, key: tuple, qty: float, price: float, ts, kind: str) -> None:
+        pos, side = self.positions[key], key[1]
+        frac, slip = qty / pos["qty"], self.rng.uniform(self.slip_lo, self.slip_hi)
+        px = price * (1 - side * slip)
+        fee_close, fee_open, margin = qty * px * self.fee_rate, pos["fee"] * frac, pos["margin"] * frac
+        gross = (px - pos["cost"]) * qty * side
+        self.cash += gross - fee_close
+        self.fee_close += fee_close
+        self.slip_cost += qty * px * slip
+        pos["qty"] -= qty
+        pos["fee"] -= fee_open
+        pos["margin"] -= margin
+        self.trades.append({"traj_id": key[0], "side": side, "open_time": pos["opened_at"], "close_time": ts,
+                            "duration": int((ts - pos["opened_at"]).total_seconds() // 60), "qty": qty,
+                            "entry": pos["cost"], "exit": px, "margin": margin, "fee": fee_open + fee_close,
+                            "pnl": gross - fee_open - fee_close, "exit_kind": kind})
+        if pos["qty"] <= EPS:
+            del self.positions[key]
+
+    def flatten(self, ts, price: float, kind: str) -> None:
+        for key in list(self.positions):
+            self._exit(key, self.positions[key]["qty"], price, ts, kind)
+
+    def sweep(self, closes: pd.Series) -> None:
+        """两个检查点之间逐K线(按 close)检查强平。期间 cash 不变,只需向量化比较浮盈"""
+        if self.blown or not self.positions:
+            return
+        px = closes.to_numpy()
+        nav = self.cash + sum(p["qty"] * p["side"] * (px - p["cost"]) for p in self.positions.values())
+        hit = np.flatnonzero(nav < self.floor)
+        if hit.size:
+            self.flatten(closes.index[hit[0]], px[hit[0]], "liquidation")
+            self.blown, self.blown_at = True, closes.index[hit[0]]
+
+    def settle_funding(self, ts, price: float, rate: float) -> None:
+        if self.blown:
+            return
+        cost = sum(p["qty"] * price * rate * p["side"] for p in self.positions.values() if p["opened_at"] < ts)
+        self.cash -= cost
+        self.funding_cost += cost
+        self._check_liquidation(ts, price)
+
+    def _check_liquidation(self, ts, price: float) -> None:
+        if self.nav(price) < self.floor:
+            self.flatten(ts, price, "liquidation")
+            self.blown, self.blown_at = True, ts
+
+
+def run_portfolio(df: pd.DataFrame, events: list, equity: float, fee_rate: float, slip: list):
+    """返回 (trades_df, curve_df[time,equity], summary)。curve 含初始点、逐日收盘净值、期末平仓后净值"""
+    acct = Account(equity, fee_rate, slip, LIQUIDATION_RATIO)
+    close = df["close"]
+    # 结算点按时间生成,缺结算K线会在 .loc 处直接 KeyError
+    settle_ts = pd.date_range(df.index[0].ceil(FUNDING_FREQ), df.index[-1], freq=FUNDING_FREQ)
+    rows = df.loc[settle_ts]
+    settle = dict(zip(rows.index, zip(rows["open"], rows["funding_bps"] / 1e4)))
+    day_end = set(df.index.to_series().groupby(df.index.normalize()).last())
+    by_time = defaultdict(list)
+    for e in events:
+        by_time[e["time"]].append(e)
+
+    curve, prev = [(df.index[0], equity)], df.index[0]
+    for ts in sorted(set(settle) | day_end | set(by_time)):
+        acct.sweep(close.loc[prev:ts])
+        prev = ts
+        if ts in settle:
+            acct.settle_funding(ts, *settle[ts])
+        for e in by_time.get(ts, ()):
+            acct.on_event(e)
+        if acct.blown:
+            curve.append((acct.blown_at, acct.cash))
+            break
+        if ts in day_end:
+            curve.append((ts, acct.nav(close.at[ts])))
+    if not acct.blown:     # 期末仍有持仓 → 按最后一根收盘价平仓(计入手续费/滑点)
+        acct.flatten(df.index[-1], close.iloc[-1], "end")
+        curve.append((df.index[-1], acct.nav(close.iloc[-1])))
+
+    curve_df = pd.DataFrame(curve, columns=["time", "equity"]).drop_duplicates("time", keep="last")
+    lvs = [e["lv"] for e in events if e["kind"] == "open"] or [1.0]
+    summary = {"initial_equity": equity, "final_equity": float(curve_df["equity"].iloc[-1]),
+               "fee_total": acct.fee_open + acct.fee_close, "slip_cost": acct.slip_cost,
+               "funding_cost": acct.funding_cost, "max_margin_used": acct.max_margin,
+               "skipped_opens": acct.skipped, "avg_leverage": float(np.mean(lvs)),
+               "blowup": acct.blown, "blowup_time": acct.blown_at}
+    return pd.DataFrame(acct.trades, columns=TRADE_COLS), curve_df, summary
+
+# ======== 四、回测类 ========
 class backTest(baseIndicators):
     "回测数据：性能测试"
-    level = 1  # 杠杆
-    principal = 0  # 本金
-    margin = 0     #保证金
+    MARGIN_RATIO = 0.95                       # 可用本金占比,保证金不等于100%本金
+    DEFAULT_SLIP = (0.0001, 0.0005, 42)       # [slip_min, slip_max, seed]
+    MIN_TRADES, MIN_DAYS = 10, 5
 
     def init(self):
         self.principal = 1000
-        self.margin = self.principal
-        self.level = 1
+        self.margin = self.principal * self.MARGIN_RATIO   # 起始权益
+        self.fee_rate = 0.0005                             # 单边吃单手续费率
+        self.slip = list(self.DEFAULT_SLIP)
 
     def delimit(self, **kWargs):
-        if kWargs.get('principal'):
-            self.principal = kWargs['principal']
-            self.margin = self.principal * 0.95  #保证金不等于100%本金
-        # if kWargs.get('margin'): self.margin = kWargs['margin']
-        if kWargs.get('lv'): self.level = kWargs['lv']
+        """principal=本金, fee_rate=手续费率, slip=[min,max,seed] (None/缺省项取默认,杠杆由信号 lv 决定,缺省 1)"""
+        self.principal = kWargs.get('principal') or self.principal
+        self.margin = self.principal * self.MARGIN_RATIO
+        self.fee_rate = kWargs.get('fee_rate', self.fee_rate)
+        given = list(kWargs.get('slip', self.slip)) + [None] * 3
+        self.slip = [d if v is None else v for d, v in zip(self.DEFAULT_SLIP, given)]
 
-    def calculateTa(self, kline:pdData, signalPd:pd.DataFrame):pass
-    def calculate(self, kLine: pdData, signal: list):
-        # 1.将信号转换成订单
-        orders = self._transform2data(kLine, signal)
-        # 2.对每笔订单计算利润
-        statistical = self._equityCurve(orders)
-        # 3.计算策划关键的回测值
-        result = self._testing(statistical)
-        # 4.计算分数
-        resScore = self._score(result)
-        result['score'] = resScore
-        # logJson(result)
+    def calculateTa(self, kline, signalPd): pass
+    def calculate(self, kLine, signal: list):# raw() 为 UTC0 无时区;回测按 UTC 结算资金费
+        df = kLine.raw().set_index("candle_begin_time")
+        check_kline(df)
+        events = build_events(df, signal)
+        trades, curve, summary = run_portfolio(df, events, self.margin, self.fee_rate, self.slip)
+        result = self._testing(trades, curve, summary)
+        result['score'] = score(result)
         return result
 
-    # signal转换成下单信息
-    def _transform2data(self, kLine: pdData, signal: list) -> list:
-        # 回测内部按UTC0时间计算,必须用 raw();get() 返回的是本地时间字符串
-        df = kLine.raw()
-        rows = []
-        for traj in signal:
-            trades = traj.get("trades", [])
-            if len(trades) < 2:
-                continue
-            enriched = []
-            for t in trades:
-                kr = df.loc[t["pos"]]
-                enriched.append({**t,
-                                "time": kr["candle_begin_time"],
-                                "price": float(kr["close"])})
-            first_time = enriched[0]["time"]
-            for e in enriched:
-                e["duration"] = int((e["time"] - first_time).total_seconds() // 60)
-            # 轨迹方向: "LONG" 或 "SHORT"，第一个动作的 behavior 决定了开仓方向
-            rows.append({"dir": traj["dir"],
-                        "trades": enriched})
-        return rows
+    def _testing(self, trades, curve, summary: dict) -> dict:
+        daily = curve.set_index("time")["equity"].resample("D").last().ffill()
+        n_trades, n_days = len(trades), len(daily)
+        status = "no_trades" if not n_trades else "insufficient_sample" if (
+            n_trades < self.MIN_TRADES or n_days < self.MIN_DAYS) else "ok"
+        if status != "ok":
+            return {"basic": {"status": status, "n_trades": n_trades, "trading_days": n_days},
+                    "overfit_filter": {}, "post_cost_survival": {}, "return_quality": {}, "live_tolerance": {}}
 
-    # 计算每一单的基础数据
-    def _equityCurve(self, orders: list) -> pdData:
-        TAKER_FEE_RATE = 0.0005          # 单边吃单手续费率
-        FUNDING_RATE_8H = 0.0001         # 单次 8h 资金费率
-        FUNDING_INTERVAL = '8h'
-        SLIP_MIN, SLIP_MAX = 0.0001, 0.0005
-        LIQUIDATION_RATIO = 0.1          # 剩余保证金 < 本金 * 该比例 视为爆仓
-        QTY_EPSILON = 1e-8               # 持仓残量阈值
-        DEFAULT_UTILIZATION = 0.1        # 单笔默认仓位占比
-        DIR_MAP = {kLong: (kBuy, 1), kShort: (kSell, -1)} # 方向 → (增仓行为, 盈亏符号)
-        class trajResult(NamedTuple):
-            profit: float
-            fee: float
-            rate: float
-            margin_used: float
-            avg_slip_pct: float
-            funding_fee: float
-            total_notional: float
-        columns = ["dir", "openTime", "duration", "openPrice", "closePrice", "lv",
-                   "fee", "profit_Usdt", "rate", "slip", "margin_after", "funding_fee",
-                   "total_notional"]
-        def _funding_count(open_time, close_time) -> int:# 持仓期内覆盖的 8h 结算点次数
-            ticks = pd.date_range(start=open_time.floor('D'), end=close_time.ceil('D'),freq=FUNDING_INTERVAL)
-            return int(((ticks > open_time) & (ticks <= close_time)).sum())
-        def _close(qty: float, eff_price: float, avg_cost: float, sign: int):# 平仓 qty 张：返回 (手续费, 已实现盈亏)
-            fee = qty * eff_price * TAKER_FEE_RATE
-            profit = (eff_price - avg_cost) * qty * sign
-            return fee, profit
-        def _row(meta: dict, *, fee=0.0, profit=0.0, rate=0.0, slip=0.0, funding_fee=0.0,
-                 total_notional=0.0) -> dict: #返回值
-            return {**meta, "fee": fee, "profit_Usdt": profit, "rate": rate, "slip": slip,
-                    "margin_after": self.margin, "funding_fee": funding_fee,
-                    "total_notional": total_notional}
+        init_eq, final_eq = summary["initial_equity"], summary["final_equity"]
+        net = final_eq - init_eq
+        nav = np.r_[init_eq, daily.to_numpy()]            # 含初始点,首日损益不丢
+        ret = np.diff(nav) / nav[:-1]
+        pnl = trades["pnl"].to_numpy()
+        max_dd = max_drawdown(nav)
+        cagr_val = cagr(init_eq, final_eq, n_days)
+        dsr_p, _ = deflated_sharpe_pval(ret)
+        daily_vol = float(np.std(ret, ddof=1))
 
-        def _process_trajectory(trades: list, dir: str, equity: float) -> trajResult:
-            add_behavior, sign = DIR_MAP[dir]
-            qty = avg_cost = fee_total = realized_profit = 0.0
-            max_notional = used_margin_total = total_notional = 0.0
-            slip_sum, slip_count = 0.0, 0
-            last_idx = len(trades) - 1
+        mid = len(ret) // 2                               # 按时间前/后半段对比夏普
+        is_sr, oos_sr = annual_sharpe(ret[:mid]), annual_sharpe(ret[mid:])
+        oos_change = (oos_sr - is_sr) / is_sr if is_sr > 0 and len(ret) >= 10 else None   # 前半段无效时稳定性无意义
 
-            for i, t in enumerate(trades):
-                pct = (t['position%'] / 100.0) if pd.notna(t.get('position%')) else DEFAULT_UTILIZATION
-                price, lv = t["price"], t["lv"]
-                is_increase = (t["behavior"] == add_behavior)
-
-                # 滑点：每个动作独立生成，开仓/平仓方向对称不利
-                slip = random.uniform(SLIP_MIN, SLIP_MAX)
-                slip_sum += slip
-                slip_count += 1
-                eff_price = price * (1 + sign * slip) if is_increase else price * (1 - sign * slip)
-
-                if is_increase:
-                    margin_used = equity * pct
-                    d_qty = margin_used * lv / eff_price
-                    if d_qty <= 0:
-                        continue
-                    fee_total += d_qty * eff_price * TAKER_FEE_RATE
-                    avg_cost = eff_price if qty == 0 else (qty * avg_cost + d_qty * eff_price) / (qty + d_qty)
-                    qty += d_qty
-                    used_margin_total += margin_used
-                else:
-                    close_qty = qty if i == last_idx else qty * pct
-                    if close_qty <= 0:
-                        continue
-                    fee, profit = _close(close_qty, eff_price, avg_cost, sign)
-                    fee_total += fee
-                    realized_profit += profit
-                    qty -= close_qty
-                    if qty <= QTY_EPSILON:
-                        qty = avg_cost = 0.0
-                    # 注意：保证金未释放，rate 计算基于累计 used_margin_total
-
-                trade_notional = d_qty * eff_price if is_increase else close_qty * eff_price
-                total_notional += trade_notional
-                max_notional = max(max_notional, qty * eff_price)
-
-            # 残留仓位强制平仓
-            if qty > QTY_EPSILON:
-                slip = random.uniform(SLIP_MIN, SLIP_MAX)
-                slip_sum += slip
-                slip_count += 1
-                eff_price = trades[-1]["price"] * (1 - sign * slip)
-                fee, profit = _close(qty, eff_price, avg_cost, sign)
-                fee_total += fee
-                realized_profit += profit
-                total_notional += qty * eff_price
-                qty = 0.0
-
-            fee_funding = _funding_count(trades[0]["time"], trades[-1]["time"]) * max_notional * FUNDING_RATE_8H
-            fee_total = round(fee_total + fee_funding, 6)
-            profit_usdt = round(realized_profit - fee_total, 4)
-            rate = round(profit_usdt / used_margin_total * 100, 2) if used_margin_total else 0.0
-            avg_slip_pct = (round(slip_sum / slip_count, 6) * 100) if slip_count else 0.0
-            return trajResult(profit_usdt, fee_total, rate, used_margin_total, avg_slip_pct, fee_funding, total_notional)
-        #logic
-        rows, blowup = [], False
-        for order in orders:
-            first, last = order["trades"][0], order["trades"][-1]
-            meta = {"dir": order["dir"], "openTime": first["time"], "duration": last["duration"],
-                    "openPrice": first["price"], "closePrice": last["price"], "lv": first["lv"]}
-
-            if blowup:
-                rows.append(_row(meta))
-                continue
-
-            r = _process_trajectory(order["trades"], order["dir"], self.margin)
-            self.margin += r.profit
-            if self.margin < self.principal * LIQUIDATION_RATIO:
-                print("爆仓了")
-                blowup = True
-
-            rows.append(_row(meta, fee=r.fee, profit=r.profit, rate=r.rate,
-                             slip=r.avg_slip_pct, funding_fee=r.funding_fee,
-                             total_notional=r.total_notional))
-
-        # 计算平均杠杆
-        lvs = [o["trades"][0]["lv"] for o in orders]
-        self.level = sum(lvs) / len(lvs) if lvs else self.level
-
-        # 一次性构造 DataFrame，避免逐行 pd.concat 的 O(N²) 开销
-        return pdData(columns, style='xml', data=rows)
-    
-    # 回测计算
-    def _testing(self, statistical: pdData) -> dict:
-        df = statistical.raw().copy()
-        n_trades = len(df)
-        if n_trades == 0:
-            return {
-                "basic": {"status": "no_trades"},
-                "overfit_filter": {}, "post_cost_survival": {}, "return_quality": {}, "live_tolerance": {}
-            }
-
-        # ---------- derived columns ----------
-        if "margin_after" not in df.columns:
-            df["margin_after"] = self.principal * 0.95 + df["profit_Usdt"].cumsum()
-
-        df["margin_before"] = df["margin_after"].shift(1)
-        df.loc[df.index[0], "margin_before"] = df["margin_after"].iloc[0] - df["profit_Usdt"].iloc[0]
-
-        df["trade_return"] = np.where(df["margin_before"] > 0,
-                                      df["profit_Usdt"] / df["margin_before"],
-                                    0.0)
-        close_times = df["openTime"] + pd.to_timedelta(df["duration"], unit="min")
-        df["closeTime"] = close_times
-        total_days = max((close_times.max() - df["openTime"].min()).days, 1)
-        trade_return = df["trade_return"].values
-        profit_series = df["profit_Usdt"].values
-        margin_curve = df["margin_after"].values
-        periods_per_year = n_trades / (total_days / 365.0) if total_days > 0 else n_trades
-
-        # ---------- basic ----------
-        final_margin = float(df["margin_after"].iloc[-1])
-        net_profit = float(profit_series.sum())
-        total_funding = float(df["funding_fee"].sum()) if "funding_fee" in df.columns else 0.0
-        total_trade_fee = float(df["fee"].sum()) - total_funding
-        win_rate = float((profit_series > 0).sum() / n_trades * 100)
-        basic = {
-            "margin": round(final_margin, 2),
-            "leverage": self.level,
-            "initial_principal": self.principal,
-            "remaining_capital": round(self.principal + net_profit, 2),
-            "net_profit": round(net_profit, 4),
-            "total_trade_fee": round(total_trade_fee, 4),
-            "total_funding_fee": round(total_funding, 8),
-            "win_rate_pct": round(win_rate, 2),
-            "n_trades": n_trades,
-            "trading_days": total_days,
-        }
-
-        # ---------- overfit filter ----------
-        sr = _annual_sharpe(trade_return, periods_per_year)
-        dsr_pval, dsr_val = _deflated_sharpe_pval(trade_return, periods_per_year)
-        cagr_val = _cagr(float(df["margin_before"].iloc[0]), float(df["margin_after"].iloc[-1]), total_days)
-        max_dd_val, dd_dur, recovery_days, _ = _max_drawdown(margin_curve, close_times.values)
-        calmar = _calmar_ratio(cagr_val, max_dd_val)
-        sortino = _sortino_ratio(trade_return, periods_per_year)
-
-        overfit = {
-            "sharpe_ratio": round(sr, 4),
-            "deflated_sharpe": round(dsr_val, 4),
-            "deflated_sharpe_pvalue": round(dsr_pval, 6),
-            "calmar_ratio": round(calmar, 4),
-            "sortino_ratio": round(sortino, 4),
-        }
-
-        # ---------- post-cost survival ----------
-        cvar_95 = _cvar(trade_return, 0.05)
-        cvar_99 = _cvar(trade_return, 0.01)
-
-        # 完整的每日净值序列（含无交易日填前值），避免低估隔夜波动
-        close_date = close_times.dt.date
-        daily_margin_last = df.groupby(close_date)["margin_after"].last()
-        full_dates = pd.date_range(start=daily_margin_last.index.min(),
-                                   end=daily_margin_last.index.max(), freq="D")
-        daily_nav = daily_margin_last.reindex(full_dates.date, method="ffill")
-        daily_ret = daily_nav.pct_change().dropna()
-        daily_vol = float(np.std(daily_ret, ddof=1)) if len(daily_ret) > 1 else 0.0
-        annual_vol = daily_vol * math.sqrt(365)
-        vol_deviation = abs(annual_vol - 0.20) / 0.20 * 100 if annual_vol > 0 else None
-
-        survival = {
-            "cvar_95_pct": round(-cvar_95 * 100, 2),
-            "cvar_99_pct": round(-cvar_99 * 100, 2),
-            "daily_volatility": round(daily_vol, 6),
-            "annual_volatility": round(annual_vol, 4),
-            "target_volatility": 0.20,
-            "volatility_deviation_pct": round(vol_deviation, 2) if vol_deviation is not None else "N/A",
-        }
-
-        # ---------- return quality ----------
-        wins = df[df["profit_Usdt"] > 0]
-        losses = df[df["profit_Usdt"] < 0]
-        n_wins, n_losses = len(wins), len(losses)
-        total_win = float(wins["profit_Usdt"].sum()) if n_wins > 0 else 0.0
-        total_loss = float(losses["profit_Usdt"].sum()) if n_losses > 0 else 0.0
-
-        monthly = df.groupby(close_times.dt.to_period("M"))["profit_Usdt"].sum()
-        month_win_rate = float((monthly > 0).sum() / len(monthly) * 100) if len(monthly) > 0 else 0.0
-
-        weekly = df.groupby(close_times.dt.to_period("W"))["profit_Usdt"].sum()
-        week_win_rate = float((weekly > 0).sum() / len(weekly) * 100) if len(weekly) > 0 else 0.0
-
-        total_return_pct = float(
-            (df["margin_after"].iloc[-1] - df["margin_before"].iloc[0])
-            / df["margin_before"].iloc[0] * 100)
-
-        # win_loss_ratio = 平均单笔盈利 / |平均单笔亏损|（盈亏比）
-        # profit_factor = 总盈利 / |总亏损|（盈利因子）
-        avg_win = total_win / n_wins if n_wins > 0 else 0.0
-        avg_loss = total_loss / n_losses if n_losses > 0 else 0.0
-
-        quality = {
-            "win_count": n_wins,
-            "loss_count": n_losses,
-            "total_win_amount": round(total_win, 4),
-            "total_loss_amount": round(total_loss, 4),
-            "max_single_win": round(float(wins["profit_Usdt"].max()), 4) if n_wins > 0 else 0.0,
-            "max_single_loss": round(float(losses["profit_Usdt"].min()), 4) if n_losses > 0 else 0.0,
-            "cagr_pct": round(cagr_val * 100, 2),
-            "total_return_pct": round(total_return_pct, 2),
-            "win_loss_ratio": round(abs(avg_win / avg_loss), 4) if avg_loss != 0 else None,
-            "profit_factor": round(abs(total_win / total_loss), 4) if total_loss != 0 else None,
-            "return_skewness": round(_skewness(trade_return), 4),
-            "return_kurtosis": round(_kurtosis(trade_return), 4),
-            "monthly_win_rate_pct": round(month_win_rate, 2),
-            "weekly_win_rate_pct": round(week_win_rate, 2),
-        }
-
-        # ---------- turnover & capacity ----------
-        total_notional = float(df["total_notional"].sum()) if "total_notional" in df.columns else 0.0
-        avg_margin = float(np.mean(margin_curve)) if len(margin_curve) > 0 else final_margin
-        turnover_rate = (total_notional / avg_margin * (365.0 / total_days)) if avg_margin > 0 else 0.0
-        capacity_estimate = avg_margin / max(turnover_rate, 0.01) if turnover_rate > 0 else None
-
-        # ---------- live tolerance ----------
-        max_wins, max_losses = _consecutive_streaks(trade_return)
-        roll_sr_std, roll_sr_min = _rolling_sharpe_metrics(trade_return)
-        extra_cost = (df["slip"].values / 100.0) * df["margin_before"].values * df["lv"].values
-        stressed_profit = float(profit_series.sum() - extra_cost.sum())
-
-        # OOS: 样本内/外夏普衰减率
-        mid = n_trades // 2
-        if mid >= 5:
-            is_ret = trade_return[:mid]
-            oos_ret = trade_return[mid:]
-            is_ppy = mid / max(total_days / 2.0 / 365.0, 0.01)
-            oos_ppy = (n_trades - mid) / max(total_days / 2.0 / 365.0, 0.01)
-            is_sr = _annual_sharpe(is_ret, is_ppy)
-            oos_sr = _annual_sharpe(oos_ret, oos_ppy)
-            oos_decay = (is_sr - oos_sr) / is_sr if is_sr != 0 else None
-        else:
-            oos_decay = None
-
-        stress = {
-            "max_drawdown_pct": round(abs(max_dd_val) * 100, 2),
-            "max_drawdown": round(max_dd_val, 4),
-            "drawdown_duration_trades": dd_dur,
-            "recovery_days": recovery_days,
-            "turnover_rate_annual": round(turnover_rate, 4),
-            "capacity_estimate": round(capacity_estimate, 2) if capacity_estimate is not None else None,
-            "stress_2x_slip_profit": round(stressed_profit, 4),
-            "stress_original_profit": round(net_profit, 4),
-            "rolling_sharpe_std": round(roll_sr_std, 4),
-            "rolling_sharpe_min": round(roll_sr_min, 4),
-            "max_consecutive_wins": max_wins,
-            "max_consecutive_losses": max_losses,
-            "oos_sharpe_decay": round(oos_decay, 4) if oos_decay is not None else None,
-        }
+        # 成本压力:费用+滑点+资金费(仅付出部分)整体放大 k 倍,k=breakeven 时利润归零
+        cost = summary["fee_total"] + summary["slip_cost"] + max(summary["funding_cost"], 0.0)
+        wins, losses = pnl[pnl > 0], pnl[pnl < 0]
+        avg_loss = losses.mean() if len(losses) else 0.0
 
         return {
-            "basic": basic,
-            "overfit_filter": overfit,
-            "post_cost_survival": survival,
-            "return_quality": quality,
-            "live_tolerance": stress,
+            "basic": {
+                "status": "ok", "margin": round(final_eq, 2), "leverage": round(summary["avg_leverage"], 2),
+                "initial_principal": self.principal, "initial_equity": round(init_eq, 2),
+                "net_profit": round(net, 4), "total_trade_fee": round(summary["fee_total"], 4),
+                "total_slippage_cost": round(summary["slip_cost"], 4),
+                "total_funding_fee": round(summary["funding_cost"], 6),
+                "win_rate_pct": round(float((pnl > 0).mean() * 100), 2), "n_trades": n_trades,
+                "trading_days": n_days, "skipped_opens": summary["skipped_opens"],
+                "blowup": summary["blowup"]},
+            "overfit_filter": {
+                "sharpe_ratio": round(annual_sharpe(ret), 4), "deflated_sharpe_pvalue": round(dsr_p, 6),
+                "calmar_ratio": round(calmar(cagr_val, max_dd), 4)},
+            "post_cost_survival": {
+                "cvar_95_pct": round(-cvar(ret, 0.05) * 100, 2), "daily_volatility": round(daily_vol, 6),
+                "annual_volatility": round(daily_vol * PPY ** 0.5, 4)},
+            "return_quality": {
+                "cagr_pct": round(cagr_val * 100, 2), "total_return_pct": round(net / init_eq * 100, 2),
+                "win_loss_ratio": round(float(abs(wins.mean() / avg_loss)), 4) if len(wins) and avg_loss else None,
+                "profit_factor": round(profit_factor(pnl), 4),
+                "trimmed_profit": round(trimmed_profit(pnl), 4)},
+            "live_tolerance": {
+                "max_drawdown_pct": round(abs(max_dd) * 100, 2),
+                "turnover_rate_annual": round(float((trades["qty"] * trades["exit"]).sum() / nav.mean() * PPY / n_days), 4),
+                "max_margin_used": round(summary["max_margin_used"], 2),
+                "cost_breakeven_multiple": round(max((net + cost) / max(cost, 1e-12), 0.0), 4),
+                "stress_2x_cost_profit": round(net - cost, 4),
+                "oos_sharpe_change": round(oos_change, 4) if oos_change is not None else None},
         }
-    
-    #概率过拟合 (Probability of Backtest Overfitting) 的 CSCV 实现,需要同策略异参数
-    def pbo_cscv(strategies_returns: list, n_blocks: int = 10,seed: int = 42) -> float:
-        if len(strategies_returns) < 2:
-            raise ValueError("PBO 至少需要 2 个策略来比较排名")
-        n_strategies = len(strategies_returns)
-        n = len(strategies_returns[0])
-        if n % n_blocks != 0:
-            # 简单截断到整除长度
-            valid_len = (n // n_blocks) * n_blocks
-            strategies_returns = [sr[:valid_len] for sr in strategies_returns]
-            n = valid_len
-
-        block_len = n // n_blocks
-        # 将每个策略的收益率转换为块和（或块夏普），这里用块内总收益率（或平均收益率）
-        block_returns = np.zeros((n_strategies, n_blocks))
-        for i, sr in enumerate(strategies_returns):
-            for b in range(n_blocks):
-                start = b * block_len
-                end = start + block_len
-                block_returns[i, b] = np.mean(sr[start:end])  # 块内平均收益，也可用夏普
-        
-        # 样本内块数为总块数的一半
-        n_is = n_blocks // 2
-        # 组合对称：枚举所有可能的样本内组合
-        from itertools import combinations
-        all_combos = list(combinations(range(n_blocks), n_is))
-        n_combos = len(all_combos)
-        
-        # 记录每个组合的样本内最优策略在样本外的相对排名
-        oos_ranks = np.zeros(n_combos)
-        
-        for c, is_blocks in enumerate(all_combos):
-            oos_blocks = [b for b in range(n_blocks) if b not in is_blocks]
-            # 样本内、外平均收益（或夏普）矩阵
-            is_avg = np.mean(block_returns[:, is_blocks], axis=1)  # (n_strategies,)
-            oos_avg = np.mean(block_returns[:, oos_blocks], axis=1)
-            
-            # 样本内最佳策略的索引
-            best_is_idx = np.argmax(is_avg)
-            # 该策略在样本外的排名（从大到小，1 为最优）
-            # 归一化排名 w̅ ∈ [0, 1]，0 表示最差，1 表示最优
-            order = np.argsort(oos_avg)   # 升序
-            rank = np.where(order == best_is_idx)[0][0] / (n_strategies - 1) if n_strategies > 1 else 0.5
-            oos_ranks[c] = rank
-        
-        # PBO = 样本内最优落在样本外后 50%（排名 < 0.5）的比例
-        pbo = np.mean(oos_ranks < 0.5)
-        return float(pbo)
-    
-    # 返回测试成绩
-    def _score(self,metrics:dict)->dict:
-        # 无有效交易时各分项是空字典,直接给 0 分,避免 KeyError
-        if metrics["basic"].get("status") == "no_trades":
-            return {"total_score": 0,
-                    "verdict": k_MSG["verdict_no_trades"],
-                    "details": [k_MSG["verdict_no_trades"]]}
-        score = 0
-        details = []
-
-        def add(pts, msg_key):
-            nonlocal score
-            score += pts
-            msg = k_MSG[msg_key].format(score=pts)   # 统一格式化，即使模板无占位符也不影响
-            details.append(msg)
-
-        # ---------- 盈利能力 (满分25) ----------
-        # 总收益 (5分)
-        total_ret = metrics["return_quality"]["total_return_pct"]
-        if total_ret > 0:
-            add(5, "profit_pos")
-        else:
-            add(0, "profit_neg")
-        # 夏普 (10分)
-        sharpe = metrics["overfit_filter"]["sharpe_ratio"]
-        if sharpe > 1:
-            add(10, "sharpe_high")
-        elif sharpe > 0:
-            add(5, "sharpe_mid")
-        else:
-            add(0, "sharpe_low")
-        # 索提诺 (5分)
-        sortino = metrics["overfit_filter"]["sortino_ratio"]
-        if sortino > 1:
-            add(5, "sortino_high")
-        elif sortino > 0:
-            add(3, "sortino_mid")
-        else:
-            add(0, "sortino_low")
-        # 卡玛 (5分)
-        calmar = metrics["overfit_filter"]["calmar_ratio"]
-        if calmar > 1:
-            add(5, "calmar_high")
-        elif calmar > 0:
-            add(3, "calmar_mid")
-        else:
-            add(0, "calmar_low")
-
-        # ---------- 风险控制 (满分20) ----------
-        # 最大回撤 (6分)
-        max_dd = metrics["live_tolerance"]["max_drawdown_pct"]
-        if max_dd < 0.1:
-            add(6, "dd_low")
-        elif max_dd < 0.2:
-            add(3, "dd_mid")
-        else:
-            add(0, "dd_high")
-        # 日波动率 (6分)
-        daily_vol = metrics["post_cost_survival"]["daily_volatility"]
-        if daily_vol < 0.01:
-            add(6, "vol_low")
-        elif daily_vol < 0.03:
-            add(3, "vol_mid")
-        else:
-            add(0, "vol_high")
-        # CVaR 95% (8分)
-        cvar = metrics["post_cost_survival"]["cvar_95_pct"]
-        if cvar <= 0.02:
-            add(8, "cvar_low")
-        elif cvar <= 0.05:
-            add(4, "cvar_mid")
-        else:
-            add(0, "cvar_high")
-
-        # ---------- 过拟合检测 (满分20) ----------
-        # Deflated Sharpe p-value (12分)
-        ds_p = metrics["overfit_filter"]["deflated_sharpe_pvalue"]
-        if ds_p <= 0.05:
-            add(12, "dsig_pvalue_good")
-        else:
-            add(0, "dsig_pvalue_bad")
-        # OOS夏普衰减 (8分)
-        oos = metrics["live_tolerance"]["oos_sharpe_decay"]
-        if oos > -0.3:
-            add(8, "oos_decay_good")
-        elif oos > -0.5:
-            add(4, "oos_decay_mid")
-        else:
-            add(0, "oos_decay_bad")
-
-        # ---------- 稳健性/一致性 (满分20) ----------
-        # 滚动夏普标准差 (6分)
-        roll_std = metrics["live_tolerance"]["rolling_sharpe_std"]
-        if roll_std < 0.3:
-            add(6, "roll_std_low")
-        elif roll_std < 0.6:
-            add(3, "roll_std_mid")
-        else:
-            add(0, "roll_std_high")
-        # 胜率 (4分)
-        win_rate = metrics["basic"]["win_rate_pct"] / 100.0
-        if win_rate >= 0.4:
-            add(4, "win_rate_ok")
-        else:
-            add(0, "win_rate_low")
-        # 最大连续亏损次数 (4分)
-        max_cons_loss = metrics["live_tolerance"]["max_consecutive_losses"]
-        if max_cons_loss <= 5:
-            add(4, "max_cons_loss_ok")
-        else:
-            add(0, "max_cons_loss_warn")
-        # 收益偏度 (6分)
-        skew = metrics["return_quality"]["return_skewness"]
-        if skew > 0:
-            add(6, "skew_ok")
-        else:
-            add(0, "skew_warn")
-
-        # ---------- 实盘摩擦/容量 (满分15) ----------
-        # 滑点冲击 (6分)
-        base = metrics["live_tolerance"]["stress_original_profit"]
-        stressed = metrics["live_tolerance"]["stress_2x_slip_profit"]
-        if base != 0:
-            decay = abs((stressed - base) / abs(base))
-        else:
-            decay = 1.0
-        if decay < 0.5:
-            add(6, "stress_slip_good")
-        elif decay < 0.8:
-            add(3, "stress_slip_mid")
-        else:
-            add(0, "stress_slip_bad")
-        # 换手率 (5分)
-        turnover = metrics["live_tolerance"]["turnover_rate_annual"]
-        if turnover < 200:
-            add(5, "turnover_ok")
-        else:
-            add(0, "turnover_high")
-        # 容量估算 (4分)
-        capacity = metrics["live_tolerance"]["capacity_estimate"]
-        if capacity >= 100:
-            add(4, "capacity_ok")
-        else:
-            add(0, "capacity_low")
-
-        # 最终判定
-        if score >= 70:
-            verdict = k_MSG["verdict_live"]
-        elif score >= 40:
-            verdict = k_MSG["verdict_improve"]
-        else:
-            verdict = k_MSG["verdict_discard"]
-
-        return {"total_score": score,
-                "verdict": verdict,
-                "details": details}
