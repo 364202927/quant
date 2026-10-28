@@ -11,6 +11,7 @@ class taskHandle(metaclass=abc.ABCMeta):
     pause,resume = None,None
 
     def __init__(self):
+        super().__init__()  # 让 realTrade/testTrade 等 mixin 的 __init__ 随之执行
         self.tacticsTime = []# 触发时间
     
     def regTime(self, *timeKeys):

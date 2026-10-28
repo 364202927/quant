@@ -7,7 +7,6 @@ class testCTA(baseCTA):
 
     def __init__(self):
         super().__init__()
-        self._trade = testTrade()
         self._pfAll = None          # 全量K线: 回放框架独占, 策略不得读取
         self._kLine = None          # 可见快照: 策略唯一数据入口(每根一个新对象)
         self._cursor = -1            # 已揭示条数 = 当前bar的全局下标+1

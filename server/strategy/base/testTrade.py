@@ -17,6 +17,7 @@ class testTrade(baseTrade):
         self._type = type
         self._feeRate, self._slip = kFeeRate, slipRange()
         self._index, self._funding, self._fTimes = [], {}, []
+        self._px, self._idx = 0.0, 0                # feed 喂入的当前收盘价/K线下标
         self.reset()
 
     # 初始化账号: 本金/费率/滑点, kLine 提供资金费结算点(无 funding_bps 则不结算)
@@ -137,16 +138,36 @@ class testTrade(baseTrade):
         self._positions.pop(side, None)
         self._openTraj.pop(_DIR[side], None)
 
-    # ── 合约: 杠杆在下单时传入,保证金按净值 pct% 计算 ──
-    def openLong(self, symbol, price, idx, pct=10, lv=1):
-        self._open(1, symbol, price, idx, self._nav(price) * pct / 100, lv)
+    # ── 下单接口: 签名与 realTrade 一致. 模拟按 feed 的收盘价即时成交(含滑点),
+    # orderBook/price/inForce/exName 无意义被忽略, 限价单会按市价成交 ──
+    # 框架/策略每根K线决策前调用: 保存当前收盘价与K线下标, 下单时取用(实盘由交易所给价)
+    def feed(self, price, idx):
+        self._px, self._idx = price, idx
 
-    def openShort(self, symbol, price, idx, pct=10, lv=1):
-        self._open(-1, symbol, price, idx, self._nav(price) * pct / 100, lv)
+    # totelPrice: 数字=名义金额; 'bet:N'=base 的 N%
+    @staticmethod
+    def _notional(totelPrice, base):
+        if isinstance(totelPrice, str) and totelPrice.startswith('bet:'):
+            return float(totelPrice[4:]) * 0.01 * base
+        return float(totelPrice)
 
-    def closePos(self, symbol, dir, price, idx, pct=100, lv=None):
+    # ── 合约: 保证金 = 名义金额 / 杠杆, lv=0 取默认杠杆 ──
+    def _openOrder(self, side, symbol, totelPrice, lv):
+        lv = lv or self._defLv
+        notional = self._notional(totelPrice, self.getAvail(self._px))
+        self._open(side, symbol, self._px, self._idx, notional / lv, lv)
+
+    def openLong(self, symbol, totelPrice, orderBook=0, price=None, lv=0, inForce='GTC', exName=None):
+        self._openOrder(1, symbol, totelPrice, lv)
+
+    def openShort(self, symbol, totelPrice, orderBook=0, price=None, lv=0, inForce='GTC', exName=None):
+        self._openOrder(-1, symbol, totelPrice, lv)
+
+    # totelPrice: 'bet:N'=平 N% 持仓; 数字=按金额折算数量并封顶
+    def closePos(self, symbol, dir, totelPrice='bet:100', orderBook=0, price=None, lv=0, inForce='GTC', exName=None):
         if self._blown:
             return
+        px, idx = self._px, self._idx
         self._settleFunding(idx)
         # 'all' 时按轨迹先后平仓,与 backTest 同一时刻事件按 traj_id 排序的口径一致
         dirs = sorted((kLong, kShort) if dir == 'all' else (dir,), key=lambda d: self._openTraj.get(d, -1))
@@ -154,15 +175,23 @@ class testTrade(baseTrade):
             pos = self._positions.get(_SIDE.get(d))
             if pos is None or pos["symbol"] != symbol:
                 continue
-            self._exit(pos, price, idx, pos["qty"] * min(pct, 100) / 100, lv)
-        self.checkLiquidation(price, idx)
+            if isinstance(totelPrice, str) and totelPrice.startswith('bet:'):
+                qty = pos["qty"] * min(float(totelPrice[4:]), 100) / 100
+            else:
+                qty = min(pos["qty"], float(totelPrice) / px)
+            self._exit(pos, px, idx, qty, lv or None)
+        self.checkLiquidation(px, idx)
 
     # ── 现货: 按金额买入、按比例卖出,lv 固定 1 ──
-    def buy(self, symbol, price, idx, totelPrice=100):
-        self._open(1, symbol, price, idx, float(totelPrice), 1)
+    def buy(self, symbol, totelPrice, orderBook=0, price=None, inForce='GTC', exName=None):
+        self._open(1, symbol, self._px, self._idx, self._notional(totelPrice, self.getAvail(self._px)), 1)
 
-    def sell(self, symbol, price, idx, pct=100):
-        self.closePos(symbol, kLong, price, idx, pct)
+    def sell(self, symbol, totelPrice='bet:100', orderBook=0, price=None, inForce='GTC', exName=None):
+        self.closePos(symbol, kLong, totelPrice)
+
+    # 模拟全部即时成交, 没有挂单可撤
+    def cencel(self, symbol, orderID='', exName=None):
+        pass
 
     # ── 接口 ──
     # 交易轨迹(兼容 backTest 的 trades 格式)

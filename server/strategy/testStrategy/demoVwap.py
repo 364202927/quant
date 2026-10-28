@@ -3,11 +3,12 @@ import numpy as np
 from server.strategy.base.testCTA import *
 from server.utils.science import canOrder
 
-class demoVwap(testCTA):
+class demoVwap(testCTA, testTrade):
     """VWAP 日内示例策略"""
 
     LEVERAGE, MARGIN_PCT = 10, 10               # 下单杠杆 / 单笔占用净值百分比
-    SYMBOL, PRINCIPAL = "binance_swap_BTCUSDT", 1000
+    SYMBOL, PRINCIPAL = "binance_swap_BTCUSDT", 1000   # SYMBOL: K线文件名
+    TRADE_SYMBOL = swapU("BTC/USDT")            # 下单交易对(与实盘一致)
     SIGNAL_SIGMA = 2.0                          # vwap 通道宽度(σ 倍数)
     SIGNAL_VOL = 1.2                            # 放量阈值(相对5周期均量)
     SIGNAL_SESSION = ("09:30:00", "14:30:00")   # 允许开仓时段(UTC0)
@@ -34,7 +35,7 @@ class demoVwap(testCTA):
 
     # 重置回测数据: 账户/资金费/索引按全量重建(结算时刻是预知元数据, 不取未来价格)
     def _resetTest(self):
-        self._trade.initAcc(self._pfAll, self.PRINCIPAL)
+        self.initAcc(self._pfAll, self.PRINCIPAL)
         self._position, self._entry, self._bf = 0, 0.0, None
         self._decided = self._startCount - 2  # 首帧100根只决策最新一根(第99根)
 
@@ -83,26 +84,28 @@ class demoVwap(testCTA):
         row = pf.iloc[idx]
         price, fill = float(row["typical_price"]), float(row["close"])
         timeText = row["candle_begin_time"].strftime("%H:%M:%S")  # UTC 时钟
-        self._trade.checkLiquidation(fill, idx)  # 逐K线按收盘价盯市, 复现 backTest 的逐K线强平检查
+        self.feed(fill, idx)                     # 模拟专用: 喂入当前收盘价/下标, 下单按此成交
+        self.checkLiquidation(fill, idx)         # 逐K线按收盘价盯市, 复现 backTest 的逐K线强平检查
 
         if self._position == 1 and (price <= float(row["vwap"]) or price <= self._entry * 0.998 or timeText >= "14:50:00"):
             # LONG 平仓: sell (14:50 为 UTC 收盘前强平时刻)
-            self._trade.closePos(self.SYMBOL, kLong, fill, idx, 100, lv=self.LEVERAGE)
+            self.closePos(self.TRADE_SYMBOL, kLong, lv=self.LEVERAGE)
             self._position = 0
             return
         if self._position == -1 and (price >= float(row["vwap"]) or price >= self._entry * 1.002 or timeText >= "14:50:00"):
             # SHORT 平仓: buy
-            self._trade.closePos(self.SYMBOL, kShort, fill, idx, 100, lv=self.LEVERAGE)
+            self.closePos(self.TRADE_SYMBOL, kShort, lv=self.LEVERAGE)
             self._position = 0
             return
         if self._position != 0 or row["signal"] == 0:
             return
         # 通用下单门禁: 未爆仓 + 在允许时段 + 有可用保证金 (science.canOrder)
-        if not canOrder(timeText, self._trade.getAvail(fill), self.SIGNAL_SESSION,
-                        self._trade.getAccount()["blowup"]):
+        if not canOrder(timeText, self.getAvail(fill), self.SIGNAL_SESSION,
+                        self.getAccount()["blowup"]):
             return
         self._position, self._entry = int(row["signal"]), fill
-        (self._trade.openLong if self._position == 1 else self._trade.openShort)(self.SYMBOL, fill, idx, self.MARGIN_PCT, lv=self.LEVERAGE)
+        # 名义金额 = 可用余额 × 保证金% × 杠杆 (bet:100 即 10% 保证金 × 10 倍)
+        (self.openLong if self._position == 1 else self.openShort)(self.TRADE_SYMBOL, f"bet:{self.MARGIN_PCT * self.LEVERAGE}", lv=self.LEVERAGE)
 
     # 收尾: 平掉尾仓 + 整段结算 + 打印数据, 返回全结果
     def endStrategy(self):
@@ -110,13 +113,14 @@ class demoVwap(testCTA):
             raise RuntimeError("没有可结算的回测数据, 先跑 startStrategy() 或 beginTest()")
         pf = self._bf.raw()
         # 期末仍有持仓按最后一根收盘价平掉, 与 backTest 期末强平口径一致
-        self._trade.closePos(self.SYMBOL, "all", float(pf["close"].iloc[-1]), len(pf) - 1, lv=self.LEVERAGE)
-        tra = self._trade.getTrajectories()
-        summarize = self.backTest.calculateTa(self._bf, self._trade.getRecords())
+        self.feed(float(pf["close"].iloc[-1]), len(pf) - 1)
+        self.closePos(self.TRADE_SYMBOL, "all", lv=self.LEVERAGE)
+        tra = self.getTrajectories()
+        summarize = self.backTest.calculateTa(self._bf, self.getRecords())
         print("bf:", self._bf.get())
         print("tra:", tra)
-        print("orders:", self._trade.getRecords())
-        print("acc:", self._trade.getAccount())
+        print("orders:", self.getRecords())
+        print("acc:", self.getAccount())
         # 评分里有 ✅❌ 等符号, 转义后再打印, 免得 GBK 控制台直接抛 UnicodeEncodeError
         print("summarize:", summarize)#json.dumps(summarize, ensure_ascii=True, default=str))
         # kLine 用打了signal标记的 bf; tradeRecords 用交易轨迹(前端表格/图表依赖 trades[])
