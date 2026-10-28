@@ -6,37 +6,35 @@ import numpy as np
 import pandas as pd
 from server.indicators.baseIndicators import *
 from server.utils import switch, switchFn
-from server.utils.science import (kFeeRate, kLiqRatio, kMarginRatio,
-                                  feeCost, fundingPay, fundingTable, slipPrice, slipRange)
+from server.utils.science import (kFeeRate, kLiqRatio, kMarginRatio,feeCost, fundingPay, fundingTable, slipPrice, slipRange)
 from server.market import kLong, kShort, kBuy, kSell, kSpot
 
 """
 结构: 一、统计指标 → 二、评分规则 → 三、事件驱动撮合 → 四、backTest 类
 约定:
- - 事件时间 = K线开盘时间;事件的 price 恒取该K线 close(用于盯市、强平与滑点成本)
- - 成交口径两种: 轨迹回测按 close+滑点+手续费模型折算;记录回测直接用记录里的成交价/数量/保证金/手续费
+ - 时间轴: 事件时间 = 成交时刻。轨迹事件 = pos 所在K线的收盘时刻(=下一根开盘,可再叠加 exec_delay 根),价格取该K线 close;
+   记录事件 = 成交所在K线的开盘时间戳,价格取记录里的成交价。同一时刻先结算资金费、再处理事件:
+   边界上开仓不计该次资金费、平仓计入(实盘成交晚于结算快照)
+ - 检查点之间按半开区间 [prev, ts) 逐K线用 low/high 检查强平。期间 cash/持仓不变,nav 对价格线性,最差点必在 low/high 之一
+ - 强平两层: 破产闸门 nav < 本金*kLiqRatio(策略失效); 维持保证金 nav < kMaintRatio*Σ永续名义(现货不适用)
+ - 成交口径两种: 轨迹回测(calculate,基准口径)按 close+滑点+手续费模型折算; 记录回测(calculateTa)直接用记录里的成交价/数量/保证金/手续费
+   记录字段口径以 calculate 为准: total=USDT 保证金(=amount*average/leverage), fee(BNB)=USDT 等值手续费
  - 资金费按 8h(UTC 00/08/16)结算,取结算K线的 open 价,多头付正费率、空头收正费率(两种口径一致)
  - 保证金采用全仓、不做多空轧差(对冲仓位各自占用保证金,偏保守)
+ - 年化周期数 ppy 只存于 backTest(delimit 的 periods,默认 365,股票改 252),统计函数一律不传 ppy
+ - 股票: K线无 funding_bps 列即不计资金费; 允许休市缺口(轨迹事件时间=K线开盘+bar 时长,日线即当日收盘); type 属于 _CASH_TYPES 的不计资金费/维持保证金
+ - K线缺口不再报错,只在 params.kline_gaps 回显; 加密结算K线缺失时 science.fundingTable 用 asof(前一根)兜底
+ - 强平遇跳空(开盘价已越过触发价)按开盘价成交,不再乐观地取触发价
  - 手续费/滑点/资金费/杠杆/强平的常量与算法统一在 science.py,与 testTrade 共用
 """
 
-# todo:open_eff,close时添加冲击成本价(基于ADV/参与率/波动率的平方根模型)
-# todo:接入参数平原+标准PBO(需同策略多参数日收益矩阵);deflated_sharpe 的 n_trials 改传优化器真实试验次数
-# todo:市场类型抽象(MarketConfig): 现货/股票/永续 的手续费、资金费、杠杆、强平、日历
-# todo:逐K线(high/low)强平检查与持仓期最大不利波动(MAE)
-
+_CASH_TYPES = (kSpot, "stock")  # 无资金费、无维持保证金强平的品种;股票的 type 值加在这里
+kMaintRatio = 0.005  # 永续维持保证金率(占名义价值)。占位值:应移入 science.py,并按币种/分档及 PM 的 uniMMR 规则核实
 
 # ======== 一、统计指标 ========
-PPY = 365.0  # 日收益年化周期数(加密货币全年开盘;股票改 252)
-
-
-def annual_sharpe(returns: np.ndarray, ppy: float = PPY) -> float:
+def sharpe(returns: np.ndarray) -> float:  # 单周期夏普,年化由 backTest 乘 sqrt(ppy)
     std = np.std(returns, ddof=1) if len(returns) > 1 else 0.0
-    return float(np.mean(returns) / std * math.sqrt(ppy)) if std > 0 else 0.0
-
-
-def cagr(start: float, end: float, days: int) -> float:
-    return (end / start) ** (365.0 / days) - 1.0 if days > 0 and start > 0 and end > 0 else 0.0
+    return float(np.mean(returns) / std) if std > 0 else 0.0
 
 
 def calmar(cagr_val: float, max_dd: float) -> float:  # 回撤为 0 且赚钱 → 封顶 999;不赚钱 → 0
@@ -64,11 +62,12 @@ def trimmed_profit(pnl: np.ndarray, top_frac: float = 0.05) -> float:
     return float(np.sort(pnl)[:-k].sum())
 
 
-def deflated_sharpe_pval(returns: np.ndarray, ppy: float = PPY, n_sim: int = 1000, n_trials: int = 100, seed: int = 42):
+def deflated_sharpe_pval(returns: np.ndarray, n_trials: int, n_sim: int = 1000, seed: int = 42) -> float:
+    """H0: 真实夏普为 0。n_trials 次独立试验的最大夏普 ≥ 观测夏普的概率(单周期口径,与年化无关)"""
     n = len(returns)
-    sr_obs = annual_sharpe(returns, ppy)
+    sr_obs = sharpe(returns)
     if n < 10 or sr_obs == 0.0:
-        return 1.0, sr_obs
+        return 1.0
     rng = np.random.default_rng(seed)
     zero_mean = returns - returns.mean()
     max_sr = np.empty(n_sim)
@@ -76,8 +75,8 @@ def deflated_sharpe_pval(returns: np.ndarray, ppy: float = PPY, n_sim: int = 100
         batch = zero_mean[rng.integers(0, n, size=(n_trials, n))]
         std = batch.std(axis=1, ddof=1)
         sr = np.divide(batch.mean(axis=1), std, out=np.zeros(n_trials), where=std > 0)
-        max_sr[i] = sr.max() * math.sqrt(ppy)
-    return float(np.mean(max_sr >= sr_obs)), sr_obs
+        max_sr[i] = sr.max()
+    return float(np.mean(max_sr >= sr_obs))
 
 
 # ======== 二、评分规则 ========
@@ -138,27 +137,40 @@ TRADE_COLS = ["traj_id", "side", "open_time", "close_time", "duration", "qty", "
 
 def check_kline(df: pd.DataFrame) -> None:
     """df 以 candle_begin_time(UTC,无时区)为索引。有问题直接抛错并给出首个异常行"""
-    bad = df[["open", "close", "funding_bps"]].isna().any(axis=1)
+    if len(df) < 2:
+        raise ValueError("K线至少需要 2 根")
+    bad = df[[c for c in ("open", "high", "low", "close", "funding_bps") if c in df.columns]].isna().any(axis=1)  # 股票无 funding_bps
     if bad.any():
         raise ValueError(f"K线含 NaN,首个异常行:\n{df[bad].head(1)}")
     if not (df.index.is_unique and df.index.is_monotonic_increasing):
         raise ValueError("K线时间必须唯一且递增")
     if df.index.tz is not None:
         raise ValueError("raw() 应为 UTC 无时区时间")
+    ohlc = df[["open", "high", "low", "close"]]
+    bad = (df["high"] < ohlc.max(axis=1)) | (df["low"] > ohlc.min(axis=1))
+    if bad.any():
+        raise ValueError(f"K线 high/low 与 open/close 矛盾,首个异常行:\n{df[bad].head(1)}")
 
 
-def build_trace_events(df: pd.DataFrame, signal: list) -> list:
+def barStep(index: pd.DatetimeIndex) -> pd.Timedelta:
+    """K线时长 = 相邻最小间隔(休市/缺K线只会让间隔变大)"""
+    return index.to_series().diff().min()
+
+
+def build_trace_events(df: pd.DataFrame, signal: list, delay: int = 0) -> list:
     """交易轨迹 -> 全局事件队列。同一时刻先平后开(释放的保证金可立即复用)
-    轨迹只给仓位比例(pct)与杠杆(lv),成交价/数量/保证金/手续费留空,由 Account 按滑点模型折算"""
-    times, close = df.index, df["close"].to_numpy()
+    轨迹只给仓位比例(pct)与杠杆(lv),成交价/数量/保证金/手续费留空,由 Account 按滑点模型折算
+    事件时间 = 第 pos+delay 根K线的收盘时刻,价格取该K线 close;delay>0 用于成交延迟压力测试"""
+    times, close, n = df.index, df["close"].to_numpy(), len(df)
+    step = barStep(times)
     events = []
     for tid, traj in enumerate(signal):
         trades = traj["trades"]
-        if not trades:  # 只有开仓没有平仓的轨迹也要保留:由 last 事件按末价强平,不能静默丢弃
+        if not trades:  # 没有任何成交的轨迹直接跳过
             continue
         side, pos = switch(_SIDE, traj["dir"]), [t["pos"] for t in trades]
-        if not side or any(b <= a for a, b in zip(pos, pos[1:])):
-            raise ValueError(f"轨迹 {tid} 非法: dir={traj['dir']}, pos={pos} (dir 需合法且 pos 严格递增)")
+        if not side or any(b <= a for a, b in zip(pos, pos[1:])) or pos[0] < 0 or pos[-1] + delay >= n:
+            raise ValueError(f"轨迹 {tid} 非法: dir={traj['dir']}, pos={pos}, exec_delay={delay} (dir 需合法, pos 严格递增且 0 ≤ pos+exec_delay < K线数 {n})")
         for t in trades:
             kind = switch(_KIND, f"{traj['dir']}:{t['behavior']}")
             if not kind:
@@ -166,18 +178,20 @@ def build_trace_events(df: pd.DataFrame, signal: list) -> list:
             pct, lv = float(t.get("position%", 10)) / 100.0, float(t.get("lv", 1))
             if not (pct > 0 and lv > 0):  # 同时拦住 NaN
                 raise ValueError(f"轨迹 {tid} 的 position%/lv 非法: {t}")
-            events.append({"time": times[t["pos"]], "traj_id": tid, "side": side, "kind": kind, "pct": pct,
-                           "lv": lv, "price": float(close[t["pos"]]), "qty": None, "margin": None, "fill": None,
-                           "funding": traj.get("type") != kSpot, "last": t is trades[-1]})
+            i = t["pos"] + delay
+            events.append({"time": times[i] + step, "traj_id": tid, "side": side, "kind": kind, "pct": pct,
+                           "lv": lv, "price": float(close[i]), "qty": None, "margin": None, "fill": None,
+                           "perp": traj.get("type") not in _CASH_TYPES, "last": t is trades[-1]})
     events.sort(key=lambda e: (e["time"], e["kind"] == "open", e["traj_id"]))
     return events
 
 
 def build_record_events(df: pd.DataFrame, records: list) -> list:
     """交易记录 -> 全局事件队列。成交价/数量/保证金/手续费直接取记录(fill),Account 不再重算
+    字段口径以 calculate 为准: amount=数量, average=成交价, total=USDT 保证金, fee(BNB)=USDT 等值手续费, leverage=杠杆
     按 (symbol, 方向) 分组,组序号即 traj_id;资金费仍按 K 线结算,记录里的 funding 行不重复计入现金
-    记录的 time 为该笔成交所在的 K 线下标,事件的 price 取该 K 线 close(用于盯市与滑点成本)"""
-    times, close, groups, events = df.index, df["close"].to_numpy(), {}, []
+    记录的 time 为该笔成交所在 K 线下标: 事件时间取该K线开盘时间戳(成交晚于同刻的资金费结算),事件价格取记录成交价"""
+    times, n, groups, events = df.index, len(df), {}, []
     for rec in records:
         if rec.get("kind") not in ("open", "close"):
             continue
@@ -185,16 +199,16 @@ def build_record_events(df: pd.DataFrame, records: list) -> list:
         if not side:
             raise ValueError(f"交易记录 positionSide 非法: {rec}")
         qty, px = float(rec["amount"]), float(rec["average"])
-        if not (qty > 0 and px > 0):
-            raise ValueError(f"交易记录 amount/average 非法: {rec}")
+        if not (qty > 0 and px > 0 and 0 <= rec["time"] < n):
+            raise ValueError(f"交易记录 amount/average/time 非法: {rec}")
         trajId = groups.setdefault((rec["symbol"], side), len(groups))
         events.append({"time": times[rec["time"]], "traj_id": trajId, "side": side, "kind": rec["kind"], "pct": None,
-                       "lv": float(rec["leverage"]), "price": float(close[rec["time"]]), "qty": qty,
+                       "lv": float(rec["leverage"]), "price": px, "qty": qty,
                        "margin": float(rec["total"]), "fill": (px, float(rec["fee(BNB)"])),
-                       "funding": rec.get("type") != kSpot, "last": False})
-    for e in {e["traj_id"]: e for e in events}.values():  # 每组最后一条事件负责平掉残仓
-        e["last"] = True
+                       "perp": rec.get("type") not in _CASH_TYPES, "last": False})
     events.sort(key=lambda e: (e["time"], e["kind"] == "open", e["traj_id"]))
+    for e in {e["traj_id"]: e for e in events}.values():  # 排序后,每组时间上最后一条事件负责平掉残仓
+        e["last"] = True
     return events
 
 
@@ -203,11 +217,11 @@ class Account:
     成交口径: 事件带 fill(成交价,手续费)时直接用(记录回测),否则按滑点+手续费模型折算(轨迹回测)
     """
 
-    def __init__(self, equity: float, fee_rate: float, slip: list, liq_ratio: float):
-        self.equity0, self.cash, self.fee_rate, self.floor = equity, equity, fee_rate, equity * liq_ratio
+    def __init__(self, equity: float, fee_rate: float, slip: list, liq_ratio: float, mmr: float):
+        self.equity0, self.cash, self.fee_rate, self.floor, self.mmr = equity, equity, fee_rate, equity * liq_ratio, mmr
         self.slip_lo, self.slip_hi, seed = slip
         self.rng = np.random.default_rng(int(seed))
-        self.positions, self.trades = {}, []  # (traj_id, side) -> 持仓
+        self.positions, self.trades, self.troughs = {}, [], []  # (traj_id, side) -> 持仓; troughs=[(时间, 未触发强平K线内最差净值)]
         self.fee_open = self.fee_close = self.slip_cost = self.funding_cost = self.max_margin = 0.0
         self.skipped, self.blown, self.blown_at = 0, False, None
 
@@ -215,8 +229,17 @@ class Account:
     def used_margin(self) -> float:
         return sum(p["margin"] for p in self.positions.values())
 
+    def exposure(self) -> tuple:
+        """(净敞口 E, 成本项 C, 永续总数量 Q): nav(p) = cash - C + E*p,对价格线性"""
+        E = C = Q = 0.0
+        for p in self.positions.values():
+            signed = p["qty"] * p["side"]
+            E, C, Q = E + signed, C + signed * p["cost"], Q + p["qty"] * p["perp"]
+        return E, C, Q
+
     def nav(self, price: float) -> float:
-        return self.cash + sum((price - p["cost"]) * p["qty"] * p["side"] for p in self.positions.values())
+        E, C, _ = self.exposure()
+        return self.cash - C + E * price
 
     # ---- 成交口径 ----
     def _openFill(self, e: dict):
@@ -241,7 +264,7 @@ class Account:
             return
         switchFn({"open": self._open, "close": self._close}, e["kind"], e=e)
         key = (e["traj_id"], e["side"])
-        if e["last"] and key in self.positions:  # 轨迹最后一个事件后仍有残仓 → 按该价强平
+        if e["last"] and key in self.positions:  # 轨迹最后一个事件后仍有残仓 → 按该事件价强平
             self._exit(key, self.positions[key]["qty"], e["price"], e["time"], "traj_end")
         self._check_liquidation(e["time"], e["price"])
 
@@ -251,14 +274,14 @@ class Account:
             self.skipped += 1
             return
         px, qty, margin, fee = fill
-        pos = self.positions.setdefault((e["traj_id"], e["side"]), {"side": e["side"], "traj_id": e["traj_id"], "opened_at": e["time"], "qty": 0.0, "cost": 0.0, "margin": 0.0, "fee": 0.0, "funding": e["funding"]})
+        pos = self.positions.setdefault((e["traj_id"], e["side"]), {"side": e["side"], "traj_id": e["traj_id"], "opened_at": e["time"], "qty": 0.0, "cost": 0.0, "margin": 0.0, "fee": 0.0, "perp": e["perp"]})
         pos["cost"] = (pos["qty"] * pos["cost"] + qty * px) / (pos["qty"] + qty)
         pos["qty"] += qty
         pos["margin"] += margin
         pos["fee"] += fee
         self.cash -= fee
         self.fee_open += fee
-        self.slip_cost += abs(px - e["price"]) * qty  # 模型口径=滑点成本;记录口径=相对K线收盘的偏移
+        self.slip_cost += abs(px - e["price"]) * qty  # 轨迹口径=滑点成本;记录口径事件价即成交价,恒为 0
         self.max_margin = max(self.max_margin, self.used_margin())
 
     def _close(self, e: dict) -> None:
@@ -304,43 +327,63 @@ class Account:
         for key in list(self.positions):
             self._exit(key, self.positions[key]["qty"], price, ts, kind)
 
-    def sweep(self, closes: pd.Series) -> None:
-        """两个检查点之间逐K线(按 close)检查强平。期间 cash 不变,只需向量化比较浮盈"""
-        if self.blown or not self.positions:
+    def sweep(self, times, opens: np.ndarray, lows: np.ndarray, highs: np.ndarray) -> None:
+        """两个检查点之间逐K线用 low/high 检查强平。期间 cash/持仓不变,slack(p)=a+b*p 对价格线性:
+        b≥0(净多)最差点在 low,b<0 在 high。强平价取 slack=0 的穿越价,若开盘已越过则按开盘价(跳空),最后夹到 [low, high]"""
+        if self.blown or not self.positions or len(times) == 0:
             return
-        px = closes.to_numpy()
-        nav = self.cash + sum(p["qty"] * p["side"] * (px - p["cost"]) for p in self.positions.values())
-        hit = np.flatnonzero(nav < self.floor)
-        if hit.size:
-            self.flatten(closes.index[hit[0]], px[hit[0]], "liquidation")
-            self.blown, self.blown_at = True, closes.index[hit[0]]
+        E, C, Q = self.exposure()
+        base = self.cash - C  # nav(p) = base + E*p
+        legs = [(base - self.floor, E)]  # 破产闸门: nav < floor
+        if Q > 0:
+            legs.append((base, E - self.mmr * Q))  # 维持保证金: nav < mmr*Q*p
+        worst = [np.where(b >= 0, lows, highs) for _, b in legs]
+        hit = np.flatnonzero(np.any([a + b * w < 0 for (a, b), w in zip(legs, worst)], axis=0))
+        stop = hit[0] if hit.size else len(times)
+        if stop:  # 未触发K线内的最差净值,供逐K最大回撤
+            navw = base + E * worst[0][:stop]
+            j = int(np.argmin(navw))
+            self.troughs.append((times[j], float(navw[j])))
+        if not hit.size:
+            return
+        i = hit[0]
+        cands = [-a / b if b else w[i] for (a, b), w in zip(legs, worst) if a + b * w[i] < 0]
+        px = max(cands) if E >= 0 else min(cands)  # 净多按下跌先触发,净空按上涨先触发
+        px = float(np.clip(min(px, opens[i]) if E >= 0 else max(px, opens[i]), lows[i], highs[i]))  # 跳空: 开盘价已越过触发价
+        self.flatten(times[i], px, "liquidation")
+        self.blown, self.blown_at = True, times[i]
 
     def settle_funding(self, ts, price: float, rate: float) -> None:
         if self.blown:
             return
-        cost = sum(fundingPay(p["qty"], price, rate, p["side"]) for p in self.positions.values() if p["funding"] and p["opened_at"] < ts)
+        cost = sum(fundingPay(p["qty"], price, rate, p["side"]) for p in self.positions.values() if p["perp"] and p["opened_at"] < ts)
         self.cash -= cost
         self.funding_cost += cost
         self._check_liquidation(ts, price)
 
     def _check_liquidation(self, ts, price: float) -> None:
-        if self.nav(price) < self.floor:
+        E, C, Q = self.exposure()
+        nav = self.cash - C + E * price
+        if nav < self.floor or nav < self.mmr * Q * price:
             self.flatten(ts, price, "liquidation")
             self.blown, self.blown_at = True, ts
 
 
 def run_portfolio(df: pd.DataFrame, events: list, acct: Account):
-    """用给定账户重放事件,返回 (trades_df, curve_df[time,equity], summary)。curve 含初始点、逐日收盘净值、期末平仓后净值"""
-    close = df["close"]
+    """用给定账户重放事件,返回 (trades_df, curve_df[time,equity], summary)
+    curve 含初始点、逐日收盘净值、期末平仓后净值; summary['troughs'] 为未触发强平K线内的最差净值(逐K最大回撤用)"""
+    idx, close, step = df.index, df["close"], barStep(df.index)
+    opens, lows, highs = df["open"].to_numpy(), df["low"].to_numpy(), df["high"].to_numpy()
     settle = fundingTable(df)  # 缺结算K线会直接 KeyError
-    day_end = set(df.index.to_series().groupby(df.index.normalize()).last())
+    day_end = {t + step: t for t in idx.to_series().groupby(idx.normalize()).last()}  # 当日收盘时刻 -> 当日最后一根K线(曲线按它打点)
     by_time = defaultdict(list)
     for e in events:
         by_time[e["time"]].append(e)
 
-    curve, prev = [(df.index[0], acct.equity0)], df.index[0]
-    for ts in sorted(set(settle) | day_end | set(by_time)):
-        acct.sweep(close.loc[prev:ts])
+    curve, prev = [(idx[0], acct.equity0)], idx[0]
+    for ts in sorted(set(settle) | set(day_end) | set(by_time)):
+        lo, hi = idx.searchsorted([prev, ts])  # 半开区间 [prev, ts)
+        acct.sweep(idx[lo:hi], opens[lo:hi], lows[lo:hi], highs[lo:hi])
         prev = ts
         if ts in settle:
             acct.settle_funding(ts, *settle[ts])
@@ -350,10 +393,10 @@ def run_portfolio(df: pd.DataFrame, events: list, acct: Account):
             curve.append((acct.blown_at, acct.cash))
             break
         if ts in day_end:
-            curve.append((ts, acct.nav(close.at[ts])))
+            curve.append((day_end[ts], acct.nav(close.at[day_end[ts]])))
     if not acct.blown:  # 期末仍有持仓 → 按最后一根收盘价平仓(计入手续费/滑点)
-        acct.flatten(df.index[-1], close.iloc[-1], "end")
-        curve.append((df.index[-1], acct.nav(close.iloc[-1])))
+        acct.flatten(idx[-1] + step, close.iloc[-1], "end")
+        curve.append((idx[-1], acct.nav(close.iloc[-1])))
 
     curve_df = pd.DataFrame(curve, columns=["time", "equity"]).drop_duplicates("time", keep="last")
     lvs = [e["lv"] for e in events if e["kind"] == "open"] or [1.0]
@@ -368,6 +411,7 @@ def run_portfolio(df: pd.DataFrame, events: list, acct: Account):
         "avg_leverage": float(np.mean(lvs)),
         "blowup": acct.blown,
         "blowup_time": acct.blown_at,
+        "troughs": pd.Series([v for _, v in acct.troughs], index=pd.DatetimeIndex([t for t, _ in acct.troughs]), dtype=float),
     }
     return pd.DataFrame(acct.trades, columns=TRADE_COLS), curve_df, summary
 
@@ -376,25 +420,34 @@ def run_portfolio(df: pd.DataFrame, events: list, acct: Account):
 class backTest(baseIndicators):
     "回测数据：性能测试"
 
-    MIN_TRADES, MIN_DAYS = 10, 5
+    MIN_TRADES, MIN_DAYS = 10, 30  # MIN_DAYS 同时保证前/后半段夏普各有 ≥15 个日收益
 
     def init(self):
         self.principal = 1000
         self.margin = self.principal * kMarginRatio  # 起始权益
         self.fee_rate = kFeeRate  # 单边吃单手续费率
         self.slip = slipRange()  # [slip_min, slip_max, seed]
+        self.ppy = 365.0  # 年化周期数(加密货币全年开盘=365;股票改 252)
+        self.n_trials = 100  # Deflated Sharpe 的试验次数,应传优化器真实试验数
+        self.exec_delay = 0  # 轨迹成交延迟K线数(压力测试用)
 
     def delimit(self, **kWargs):
-        """principal=本金, fee_rate=手续费率, slip=[min,max,seed] (None/缺省项取 science 默认,杠杆由信号 lv 决定,缺省 1)"""
+        """principal=本金, fee_rate=手续费率, slip=[min,max,seed], periods=年化周期数(默认365), n_trials=DSR试验次数(默认100),
+        exec_delay=轨迹成交延迟K线数(默认0)。None/缺省项保持当前值或 science 默认,杠杆由信号 lv 决定,缺省 1"""
         self.principal = kWargs.get("principal") or self.principal
         self.margin = self.principal * kMarginRatio
         self.fee_rate = kWargs.get("fee_rate", self.fee_rate)
         self.slip = slipRange(kWargs["slip"]) if kWargs.get("slip") else self.slip
+        self.ppy = float(kWargs.get("periods") or self.ppy)
+        self.n_trials = int(kWargs.get("n_trials") or self.n_trials)
+        delay = kWargs.get("exec_delay")
+        self.exec_delay = self.exec_delay if delay is None else int(delay)
 
-    # 入口一 交易轨迹(getTrajectories):只给仓位比例,成交价/费用按滑点与手续费模型折算
+    # 入口一 交易轨迹(getTrajectories,基准口径):只给仓位比例,成交价/费用按滑点与手续费模型折算
     def calculate(self, kLine, signal: list) -> dict:
-        return self._run(kLine, build_trace_events, signal)
-    # 入口二 交易记录(getRecords):直接用记录里的成交价/数量/保证金/手续费
+        return self._run(kLine, lambda df, src: build_trace_events(df, src, self.exec_delay), signal)
+
+    # 入口二 交易记录(getRecords,辅助):直接用记录里的成交价/数量/保证金/手续费(USDT)
     def calculateTa(self, kLine, records: list) -> dict:
         return self._run(kLine, build_record_events, records)
 
@@ -402,31 +455,39 @@ class backTest(baseIndicators):
     def _run(self, kLine, builder, source: list) -> dict:
         df = kLine.raw().set_index("candle_begin_time")  # raw() 为 UTC0 无时区;回测按 UTC 结算资金费
         check_kline(df)
-        trades, curve, summary = run_portfolio(df, builder(df, source), Account(self.margin, self.fee_rate, self.slip, kLiqRatio))
+        acct = Account(self.margin, self.fee_rate, self.slip, kLiqRatio, kMaintRatio)
+        trades, curve, summary = run_portfolio(df, builder(df, source), acct)
         result = self._testing(trades, curve, summary)
         result["score"] = score(result)
+        result["params"] = {"fee_rate": self.fee_rate, "slip": list(self.slip), "periods": self.ppy, "n_trials": self.n_trials,
+                            "exec_delay": self.exec_delay, "liq_ratio": kLiqRatio, "maint_ratio": kMaintRatio,
+                            "kline_gaps": int((df.index.to_series().diff() > barStep(df.index)).sum())}  # 回显口径与K线缺口数(股票含休市),便于复现与对比
         return result
 
     def _testing(self, trades, curve, summary: dict) -> dict:
-        daily = curve.set_index("time")["equity"].resample("D").last().ffill()
+        daily = curve.set_index("time")["equity"].resample("D").last().dropna()  # 无数据的日子不补0收益(股票休市)
         n_trades, n_days = len(trades), len(daily)
-        status = "no_trades" if not n_trades else "insufficient_sample" if (n_trades < self.MIN_TRADES or n_days < self.MIN_DAYS) else "ok"
+        thin = n_trades < self.MIN_TRADES or n_days < self.MIN_DAYS
+        status = "no_trades" if not n_trades else ("blowup" if summary["blowup"] else "insufficient_sample") if thin else "ok"  # 爆仓优先于样本不足
+        blowup_time = None if summary["blowup_time"] is None else str(summary["blowup_time"])
         if status != "ok":
-            return {"basic": {"status": status, "n_trades": n_trades, "trading_days": n_days}, "overfit_filter": {}, "post_cost_survival": {}, "return_quality": {}, "live_tolerance": {}}
+            return {"basic": {"status": status, "n_trades": n_trades, "trading_days": n_days, "blowup": summary["blowup"], "blowup_time": blowup_time},
+                    "overfit_filter": {}, "post_cost_survival": {}, "return_quality": {}, "live_tolerance": {}}
 
         init_eq, final_eq = summary["initial_equity"], summary["final_equity"]
         net = final_eq - init_eq
         nav = np.r_[init_eq, daily.to_numpy()]  # 含初始点,首日损益不丢
         ret = np.diff(nav) / nav[:-1]
         pnl = trades["pnl"].to_numpy()
-        max_dd = max_drawdown(nav)
-        cagr_val = cagr(init_eq, final_eq, n_days)
-        dsr_p, _ = deflated_sharpe_pval(ret)
+        path = pd.concat([summary["troughs"], curve.set_index("time")["equity"]]).sort_index(kind="mergesort")  # 同刻最差点在前,逐K最大回撤
+        max_dd = max_drawdown(np.r_[init_eq, path.to_numpy()])
+        cagr_val = (final_eq / init_eq) ** (self.ppy / n_days) - 1.0 if final_eq > 0 else 0.0
+        dsr_p = deflated_sharpe_pval(ret, self.n_trials)
         daily_vol = float(np.std(ret, ddof=1))
 
-        mid = len(ret) // 2  # 按时间前/后半段对比夏普
-        is_sr, oos_sr = annual_sharpe(ret[:mid]), annual_sharpe(ret[mid:])
-        oos_change = (oos_sr - is_sr) / is_sr if is_sr > 0 and len(ret) >= 10 else None  # 前半段无效时稳定性无意义
+        mid = len(ret) // 2  # 按时间前/后半段对比夏普(比值与年化无关)
+        is_sr, oos_sr = sharpe(ret[:mid]), sharpe(ret[mid:])
+        oos_change = (oos_sr - is_sr) / is_sr if is_sr > 0 else None  # 前半段夏普 ≤ 0 时稳定性无意义
 
         # 成本压力:费用+滑点+资金费(仅付出部分)整体放大 k 倍,k=breakeven 时利润归零
         cost = summary["fee_total"] + summary["slip_cost"] + max(summary["funding_cost"], 0.0)
@@ -449,9 +510,10 @@ class backTest(baseIndicators):
                 "trading_days": n_days,
                 "skipped_opens": summary["skipped_opens"],
                 "blowup": summary["blowup"],
+                "blowup_time": blowup_time,
             },
-            "overfit_filter": {"sharpe_ratio": round(annual_sharpe(ret), 4), "deflated_sharpe_pvalue": round(dsr_p, 6), "calmar_ratio": round(calmar(cagr_val, max_dd), 4)},
-            "post_cost_survival": {"cvar_95_pct": round(-cvar(ret, 0.05) * 100, 2), "daily_volatility": round(daily_vol, 6), "annual_volatility": round(daily_vol * PPY**0.5, 4)},
+            "overfit_filter": {"sharpe_ratio": round(sharpe(ret) * self.ppy**0.5, 4), "deflated_sharpe_pvalue": round(dsr_p, 6), "calmar_ratio": round(calmar(cagr_val, max_dd), 4)},
+            "post_cost_survival": {"cvar_95_pct": round(-cvar(ret, 0.05) * 100, 2), "daily_volatility": round(daily_vol, 6), "annual_volatility": round(daily_vol * self.ppy**0.5, 4)},
             "return_quality": {
                 "cagr_pct": round(cagr_val * 100, 2),
                 "total_return_pct": round(net / init_eq * 100, 2),
@@ -461,7 +523,7 @@ class backTest(baseIndicators):
             },
             "live_tolerance": {
                 "max_drawdown_pct": round(abs(max_dd) * 100, 2),
-                "turnover_rate_annual": round(float((trades["qty"] * trades["exit"]).sum() / nav.mean() * PPY / n_days), 4),
+                "turnover_rate_annual": round(float((trades["qty"] * trades["exit"]).sum() / nav.mean() * self.ppy / n_days), 4),
                 "max_margin_used": round(summary["max_margin_used"], 2),
                 "cost_breakeven_multiple": round(max((net + cost) / max(cost, 1e-12), 0.0), 4),
                 "stress_2x_cost_profit": round(net - cost, 4),
