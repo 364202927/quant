@@ -44,13 +44,18 @@ const period = ref<Period>("5m");
 const allKline = shallowRef<CandlestickData[]>([]);
 const periodKline = computed(() => resampleKline(allKline.value, period.value));
 const klineData = computed<CandlestickData[]>(() =>
-  filterByRange(periodKline.value, startDate.value, endDate.value, period.value),
+  filterByRange(
+    periodKline.value,
+    startDate.value,
+    endDate.value,
+    period.value,
+  ),
 );
 const isLoading = ref(false);
 const loadError = ref("");
 const marketTitle = computed(() => selectedCoin.value || "K线");
 const periodLabel = computed(() =>
-  period.value === "1M" ? "1月" : period.value,
+  period.value === "1M" ? "month" : period.value,
 );
 const dateLabel = computed(() => {
   if (startDate.value && endDate.value)
@@ -190,7 +195,9 @@ function filterByRange(
   const rangeStart = start
     ? Date.parse(`${start}T00:00:00Z`) / 1000
     : -Infinity;
-  const rangeEnd = end ? Date.parse(`${end}T00:00:00Z`) / 1000 + 86400 : Infinity;
+  const rangeEnd = end
+    ? Date.parse(`${end}T00:00:00Z`) / 1000 + 86400
+    : Infinity;
   if (Number.isNaN(rangeStart) || Number.isNaN(rangeEnd)) return bars;
 
   return bars.filter((bar, index) => {

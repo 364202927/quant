@@ -27,11 +27,10 @@ class demoVwap(testCTA):
         
         self._bf = None
         self._position, self._entry = 0, 0.0
-        # 快速回测: 一次算完 -> endStrategy 收尾打印
-        # self.startStrategy()
-        # print("~~~~~~~~rt~~~~~", self.endStrategy())
-        #开启数据隔离
-        self.beginTest()
+
+        # self.startStrategy() #快速回测
+        # self.beginTest() #隔离回测
+    
 
     # 重置回测数据: 账户/资金费/索引按全量重建(结算时刻是预知元数据, 不取未来价格)
     def _resetTest(self):
@@ -40,8 +39,6 @@ class demoVwap(testCTA):
         self._decided = self._startCount - 2  # 首帧100根只决策最新一根(第99根)
 
     # 信号标记: 在指标数据的副本上打标记(不改动传入数据), 返回 pdData 副本
-    # 列: typical_price/std/upper/lower/signal(1 做多 / -1 做空 / 0 无)
-    # 日内VWAP通道突破 + 放量 + UTC时段过滤; 日切与时钟均用 UTC0, 与 vwap 指标同一口径
     def markSignal(self, sorPf):
         bf = pdData()
         bf.format(sorPf.raw(), style="copy")
@@ -62,13 +59,10 @@ class demoVwap(testCTA):
         self._bf = bf
         return bf
 
-    # 有参 = 定时器回调(隔离预知): 指标只在可见快照上重算, 把本次新增的K线逐根决策
-    # step>1 时一次揭示多根, 指标是因果的, 第i行取值与逐根计算一致
-    # 无参 = 快速回测: 全量算一次, 逐行跑完
     def startStrategy(self, kLine=None):
         if kLine is None:
             self._quickTest()
-            return
+            return self.endStrategy()
         pf = self.markSignal(kLine.getIndicators(self.vwap)).raw()
         for idx in range(self._decided + 1, len(pf)):
             self._decide(pf, idx)
@@ -124,6 +118,6 @@ class demoVwap(testCTA):
         print("orders:", self._trade.getRecords())
         print("acc:", self._trade.getAccount())
         # 评分里有 ✅❌ 等符号, 转义后再打印, 免得 GBK 控制台直接抛 UnicodeEncodeError
-        print("summarize:", json.dumps(summarize, ensure_ascii=True, default=str))
+        print("summarize:", summarize)#json.dumps(summarize, ensure_ascii=True, default=str))
         # kLine 用打了signal标记的 bf; tradeRecords 用交易轨迹(前端表格/图表依赖 trades[])
         return {"kLine": self._bf.get(), "tradeRecords": tra, "summarize": summarize}

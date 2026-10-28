@@ -14,6 +14,7 @@ class testCTA(baseCTA):
         self._startCount = 100
         self._testTimeKey = ''
         self._step = 1
+        self._result = None          # 隔离回放的最终结果(kLine/tradeRecords/summarize)
 
     #增量测试(interval间隔时间触发1次, 首帧startCount条, 之后每次推进step条)
     def _testModel(self,interval=0.1,startCount=100,step = 1):
@@ -41,8 +42,17 @@ class testCTA(baseCTA):
         if self._pfAll is None or self._pfAll.empty():
             raise ValueError("未加载K线数据, 先调用 _loadFile")
         self._resetTest()
+        self._result = None
         self._cursor = 0
         self._advance(self._startCount)
+
+    # 回放状态: web 轮询用; 回放结束后 _cursor 复位为 -1
+    def testState(self):
+        return {"testing": self._cursor != -1}
+
+    # 隔离回放的最终结果, 由 startStrategy 在最后一根返回并在此缓存
+    def getBacktestResult(self):
+        return self._result
 
     # interval 每触发1次揭示step根K线; 只认自己注册的回放间隔, 避免与实时周期重复推进
     def evtTime(self,timeKey):
@@ -55,7 +65,9 @@ class testCTA(baseCTA):
         self._reveal(min(self._cursor + count, self._pfAll.size()))
         if self._cursor >= self._pfAll.size():
             self._cursor = -1
-        self.startStrategy(self._kLine)
+        result = self.startStrategy(self._kLine)
+        if result:
+            self._result = result
 
     # 只前进不后退; 快照是 _pfAll 的只读切片(零拷贝), 每根仍是长度固定的新对象
     def _reveal(self,n):

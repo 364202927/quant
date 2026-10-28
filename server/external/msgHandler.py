@@ -22,7 +22,9 @@ eMsgId = {
 
 class msgHandler:
     "消息事件处理器"
-    
+
+    BACKTEST_TIMEOUT = 600  # 隔离回测最长等待秒数, 仅防策略回调异常导致的永久挂起
+
     def __init__(self):
         self.__page = 0
         evtConnect(kEvt_Web, self)
@@ -67,11 +69,10 @@ class msgHandler:
             #todo:是否重启服务器
             return
         async def startBackTest():#开启回测: 执行完直接把结果放进本次响应,web据此渲染
-            checkId = msg[0][0].get('id')
-            taskName = msg[0][0].get('selectedTask')
-            if checkId == 1:
-                return await self._runBackTest(taskName)
-            return {}
+            args = msg[0][0] if msg and msg[0] else {}
+            if args.get('id') != 1:
+                return {}
+            return await self._runBackTest(args.get('selectedTask'), bool(args.get('isolation')))
         return switchFn({eMsgId['eWebInit']: initWeb,
                         eMsgId['ePage_k']: initMarketTrends,
                         eMsgId['ePage_cta']:initStartFile,
@@ -81,12 +82,29 @@ class msgHandler:
                         eMsgId['eStartBackTest']:startBackTest},
                         key=id)
     
-    async def _runBackTest(self, taskName: str) -> dict:
+    async def _runBackTest(self, taskName: str, isolation: bool) -> dict:
         try:
-            return self.callTask(taskName, 'startStrategy')
+            if not isolation:  # 快速回测: 全量一次算完
+                return self.callTask(taskName, 'startStrategy')
+            evtFire(kEvt_Engine, taskName, 'beginTest')  # 数据隔离: 定时器逐段揭示K线
+            await self._waitBackTest(taskName)
+            return self.callTask(taskName, 'getBacktestResult')
         except Exception as e:
             log(f"[msgHandler] 回测启动失败: {e}")
             return {"error": str(e)}
+
+    # 隔离回放由定时器推进, 轮询到结束后再取结果; 上限避免策略回调异常导致请求永久挂起
+    async def _waitBackTest(self, taskName: str) -> None:
+        deadline = asyncio.get_running_loop().time() + self.BACKTEST_TIMEOUT
+        while True:
+            state = evtFire(kEvt_Engine, taskName, 'testState')
+            if not state:
+                raise RuntimeError(f"任务 {taskName} 不支持数据隔离回测")
+            if not state.get('testing'):
+                return
+            if asyncio.get_running_loop().time() > deadline:
+                raise TimeoutError(f"回测超时(>{self.BACKTEST_TIMEOUT}s)")
+            await asyncio.sleep(0.1)
 
     # 调用engine功能
     def callTask(self, taskName, fnName):
