@@ -212,7 +212,7 @@ class baseExchange:
             if amount and price:
                 params.update(type=kLimit, price=price)
             elif state == kBuy and amount is None:
-                extraParams['quoteOrderQty'] = totelPrice
+                extraParams.update(self._spotBuyQuoteParams(totelPrice))
             elif state == kSell and amount is None:
                 raise ValueError(f"现货卖出缺少 amount: {symbol.get('id')}")
             if extraParams:
@@ -311,7 +311,10 @@ class baseExchange:
     #交易所/账户类型相关的 fetch/edit 参数
     def _orderParams(self, category: str) -> dict:
         return {}
-    
+    #现货市价按计价币金额买入的参数,各交易所 ccxt 参数名不同
+    def _spotBuyQuoteParams(self, totelPrice) -> dict:
+        return {'quoteOrderQty': totelPrice}
+
     # WebSocket 入口
     async def run(self) -> None:
         ws_pairs = self._wsListen()
