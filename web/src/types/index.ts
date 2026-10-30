@@ -13,6 +13,7 @@ export interface CandlestickData {
   close: number
   volume?: number
   vwap?: number | null
+  fundingBps?: number | null
 }
 
 // 策略

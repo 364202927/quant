@@ -11,36 +11,13 @@ import * as echarts from "echarts";
 import LightweightChart from "../../utils/LightweightChart.vue";
 import { eMsg, type CandlestickData } from "../../types";
 import { postMessage } from "../../utils/common";
-
-type Period = "5m" | "15m" | "30m" | "1h" | "4h" | "1d" | "1w" | "1M";
-
-const periods: { value: Period; label: string }[] = [
-  { value: "5m", label: "5m" },
-  { value: "15m", label: "15m" },
-  { value: "30m", label: "30m" },
-  { value: "1h", label: "1h" },
-  { value: "4h", label: "4h" },
-  { value: "1d", label: "day" },
-  { value: "1w", label: "week" },
-  { value: "1M", label: "month" },
-];
-
-const fixedPeriodSeconds: Record<Period, number> = {
-  "5m": 300,
-  "15m": 900,
-  "30m": 1800,
-  "1h": 3600,
-  "4h": 14400,
-  "1d": 86400,
-  "1w": 604800,
-  "1M": 0,
-};
+import { filterByRange, resampleKline, type KlinePeriod } from "../../utils/kline";
 
 const coins = ref<string[]>([]);
 const selectedCoin = ref("");
 const startDate = ref("");
 const endDate = ref("");
-const period = ref<Period>("5m");
+const period = ref<KlinePeriod>("5m");
 const allKline = shallowRef<CandlestickData[]>([]);
 const periodKline = computed(() => resampleKline(allKline.value, period.value));
 const klineData = computed<CandlestickData[]>(() =>
@@ -110,105 +87,11 @@ function normalizeKlineRows(rows: unknown): CandlestickData[] {
     };
     const volume = toNumber(item.volume ?? item.vol);
     if (volume !== null) bar.volume = volume;
+    const fundingBps = toNumber(item.funding_bps ?? item.fundingBps);
+    if (fundingBps !== null) bar.fundingBps = fundingBps;
     result.push(bar);
   });
   return result;
-}
-
-function barTimeSeconds(time: CandlestickData["time"]): number | null {
-  if (typeof time === "number" && Number.isFinite(time)) return time;
-  const parsed = Date.parse(String(time));
-  return Number.isFinite(parsed) ? parsed / 1000 : null;
-}
-
-// 周期分桶统一使用 UTC，1w 以周一为起点，1M 以每月 1 日为起点
-function bucketStart(seconds: number, period: Period): number {
-  if (period === "1M") {
-    const date = new Date(seconds * 1000);
-    return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1) / 1000;
-  }
-  if (period === "1w") {
-    const date = new Date(seconds * 1000);
-    const offset = (date.getUTCDay() + 6) % 7;
-    return (
-      Date.UTC(
-        date.getUTCFullYear(),
-        date.getUTCMonth(),
-        date.getUTCDate() - offset,
-      ) / 1000
-    );
-  }
-  const step = fixedPeriodSeconds[period];
-  return Math.floor(seconds / step) * step;
-}
-
-function nextBucketStart(start: number, period: Period): number {
-  if (period === "1M") {
-    const date = new Date(start * 1000);
-    return Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1) / 1000;
-  }
-  return start + fixedPeriodSeconds[period];
-}
-
-function resampleKline(
-  bars: CandlestickData[],
-  period: Period,
-): CandlestickData[] {
-  if (period === "5m" || bars.length === 0) return bars;
-
-  const result: CandlestickData[] = [];
-  let current: (CandlestickData & { time: number }) | null = null;
-  for (const bar of bars) {
-    const seconds = barTimeSeconds(bar.time);
-    if (seconds === null) continue;
-    const time = bucketStart(seconds, period);
-    if (!current || current.time !== time) {
-      if (current) result.push(current);
-      current = {
-        time,
-        open: bar.open,
-        high: bar.high,
-        low: bar.low,
-        close: bar.close,
-        volume: bar.volume,
-      };
-      continue;
-    }
-    current.high = Math.max(current.high, bar.high);
-    current.low = Math.min(current.low, bar.low);
-    current.close = bar.close;
-    if (bar.volume !== undefined)
-      current.volume = (current.volume ?? 0) + bar.volume;
-  }
-  if (current) result.push(current);
-  return result;
-}
-
-// 保留与起止日期有交集的周期 K 线，任一端为空表示该侧不限；周期 > 1d 时取包含该区间的周/月 K 线
-function filterByRange(
-  bars: CandlestickData[],
-  start: string,
-  end: string,
-  period: Period,
-): CandlestickData[] {
-  if (!start && !end) return bars;
-  const rangeStart = start
-    ? Date.parse(`${start}T00:00:00Z`) / 1000
-    : -Infinity;
-  const rangeEnd = end
-    ? Date.parse(`${end}T00:00:00Z`) / 1000 + 86400
-    : Infinity;
-  if (Number.isNaN(rangeStart) || Number.isNaN(rangeEnd)) return bars;
-
-  return bars.filter((bar, index) => {
-    const barStart = barTimeSeconds(bar.time);
-    if (barStart === null) return false;
-    const next = bars[index + 1];
-    const barEnd = next
-      ? barTimeSeconds(next.time)
-      : nextBucketStart(barStart, period);
-    return barStart < rangeEnd && (barEnd ?? barStart + 1) > rangeStart;
-  });
 }
 
 async function loadCoins(): Promise<void> {
@@ -452,41 +335,12 @@ onUnmounted(() => {
               title="结束日期"
               class="rounded-lg border border-paper-line bg-paper px-3 py-1.5 text-sm text-ink transition-all focus:border-transparent focus:outline-none focus:ring-2 focus:ring-indigo-400/40 disabled:cursor-not-allowed disabled:opacity-60"
             />
-            <div class="relative">
-              <select
-                v-model="period"
-                :disabled="!selectedCoin"
-                title="选择周期"
-                class="cursor-pointer appearance-none rounded-lg border border-paper-line bg-paper py-1.5 pl-3 pr-8 text-sm font-medium text-ink transition-all focus:border-transparent focus:outline-none focus:ring-2 focus:ring-indigo-400/40 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <option
-                  v-for="item in periods"
-                  :key="item.value"
-                  :value="item.value"
-                >
-                  {{ item.label }}
-                </option>
-              </select>
-              <svg
-                class="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-faint"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                stroke-width="2.5"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  d="M19 9l-7 7-7-7"
-                />
-              </svg>
-            </div>
           </div>
         </header>
         <LightweightChart
+          v-model:period="period"
           class="min-h-0 flex-1"
           :data="klineData"
-          :period="periodLabel"
           fill
         />
       </section>

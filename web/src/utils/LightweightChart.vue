@@ -27,33 +27,56 @@ import {
 import { DrawingManager } from "lightweight-charts-drawing";
 import type { DrawingKind, OHLC } from "lightweight-charts-drawing";
 import type { BacktestTradeRecord, CandlestickData } from "../types";
+import {
+  bucketStart,
+  periodOptions,
+  resampleKline,
+  type KlinePeriod,
+} from "./kline";
 
 interface Props {
   data: CandlestickData[];
   tradeRecords?: BacktestTradeRecord[];
-  period?: string;
+  period?: KlinePeriod;
   width?: number;
   height?: number;
   autosize?: boolean;
   fill?: boolean;
+  autoPriceRange?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   tradeRecords: () => [],
-  period: "",
   width: 600,
   height: 400,
   autosize: true,
   fill: false,
+  autoPriceRange: true,
 });
 
 const emit = defineEmits<{
   crosshairMove: [param: { time: Time; price: number } | null];
   click: [param: { time: Time; price: number }];
+  "update:period": [value: KlinePeriod];
 }>();
 
 const chartContainer = ref<HTMLDivElement | null>(null);
 const hoveredBar = ref<CandlestickData | null>(null);
+const innerPeriod = ref<KlinePeriod>("5m");
+const activePeriod = computed<KlinePeriod>(
+  () => props.period ?? innerPeriod.value,
+);
+const displayData = computed(() =>
+  resampleKline(props.data, activePeriod.value),
+);
+const displayIndexByTime = computed(() => {
+  const result = new Map<number, number>();
+  displayData.value.forEach((bar, index) => {
+    const seconds = timeToSeconds(bar.time);
+    if (seconds !== null) result.set(seconds, index);
+  });
+  return result;
+});
 let chart: IChartApi | null = null;
 let candlestickSeries: ISeriesApi<"Candlestick"> | null = null;
 let volumeSeries: ISeriesApi<"Histogram"> | null = null;
@@ -146,9 +169,10 @@ let drawingBarsSource: CandlestickData[] | null = null;
 let drawingBarsCache: OHLC[] = [];
 
 function drawingBars(): OHLC[] {
-  if (drawingBarsSource === props.data) return drawingBarsCache;
-  drawingBarsSource = props.data;
-  drawingBarsCache = props.data.map((bar) => ({
+  const data = displayData.value;
+  if (drawingBarsSource === data) return drawingBarsCache;
+  drawingBarsSource = data;
+  drawingBarsCache = data.map((bar) => ({
     time: bar.time as Time,
     open: bar.open,
     high: bar.high,
@@ -185,13 +209,6 @@ function timeToSeconds(time: CandlestickData["time"] | Time): number | null {
   return Number.isFinite(parsed) ? parsed / 1000 : null;
 }
 
-function formatPeriod(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${seconds / 60}m`;
-  if (seconds < 86400) return `${seconds / 3600}h`;
-  return `${seconds / 86400}d`;
-}
-
 function formatIndicatorValue(value: number | null | undefined): string {
   if (!isValidNumber(value)) return "--";
   if (Math.abs(value) >= 1000) return value.toFixed(2);
@@ -202,11 +219,12 @@ function formatIndicatorValue(value: number | null | undefined): string {
 function resolveBarByTime(time: Time): CandlestickData | null {
   const target = timeToSeconds(time);
   if (target === null) return null;
+  const bars = displayData.value;
   let left = 0;
-  let right = props.data.length - 1;
+  let right = bars.length - 1;
   while (left <= right) {
     const mid = Math.floor((left + right) / 2);
-    const bar = props.data[mid];
+    const bar = bars[mid];
     if (!bar) return null;
     const barTime = timeToSeconds(bar.time);
     if (barTime === null) return null;
@@ -218,22 +236,17 @@ function resolveBarByTime(time: Time): CandlestickData | null {
 }
 
 function latestBar(): CandlestickData | null {
-  return props.data.length ? (props.data[props.data.length - 1] ?? null) : null;
+  const bars = displayData.value;
+  return bars.length ? (bars[bars.length - 1] ?? null) : null;
 }
 
-const periodText = computed(() => {
-  if (props.period) return props.period;
-  for (let i = 1; i < props.data.length; i += 1) {
-    const currentBar = props.data[i];
-    const previousBar = props.data[i - 1];
-    if (!currentBar || !previousBar) continue;
-    const current = timeToSeconds(currentBar.time);
-    const previous = timeToSeconds(previousBar.time);
-    if (current === null || previous === null) continue;
-    const seconds = Math.round(current - previous);
-    if (seconds > 0) return formatPeriod(seconds);
+const periodLabel = computed(() => {
+  if (props.period) {
+    const option = periodOptions.find((item) => item.value === props.period);
+    return option?.label ?? props.period;
   }
-  return "--";
+  const option = periodOptions.find((item) => item.value === activePeriod.value);
+  return option?.label ?? activePeriod.value;
 });
 
 const infoBar = computed(() => hoveredBar.value ?? latestBar());
@@ -250,6 +263,11 @@ const infoItems = computed(() => {
   const volume = volumeValue(bar);
   if (volume !== null)
     items.push({ label: "VOL", value: formatIndicatorValue(volume) });
+  if (isValidNumber(bar.fundingBps))
+    items.push({
+      label: "FUND",
+      value: `${(bar.fundingBps / 100).toFixed(6)}%`,
+    });
   const vwap = vwapValue(bar);
   if (vwap !== null)
     items.push({ label: "VWAP", value: formatIndicatorValue(vwap) });
@@ -321,6 +339,18 @@ function updateIndicators(newData: CandlestickData[]): void {
   }
 }
 
+function displayIndexForRawPos(pos: number): number | null {
+  const bar = props.data[pos];
+  if (!bar) return null;
+  const seconds = timeToSeconds(bar.time);
+  if (seconds === null) return null;
+  return (
+    displayIndexByTime.value.get(seconds) ??
+    displayIndexByTime.value.get(bucketStart(seconds, activePeriod.value)) ??
+    null
+  );
+}
+
 function updateTradeMarkers(records: BacktestTradeRecord[]): void {
   if (!candlestickSeries) return;
   if (!tradeMarkers) {
@@ -331,7 +361,9 @@ function updateTradeMarkers(records: BacktestTradeRecord[]): void {
   const markers: SeriesMarker<Time>[] = [];
   records.forEach((record, recordIndex) => {
     record.trades?.forEach((trade, tradeIndex) => {
-      const bar = props.data[trade.pos];
+      const index = displayIndexForRawPos(trade.pos);
+      if (index === null) return;
+      const bar = displayData.value[index];
       if (!bar) return;
       const isTop = isTopTradeMarker(record.dir, trade.behavior);
       const price = isTop ? bar.high + 80 : bar.low - 80;
@@ -358,13 +390,50 @@ function updateTradeMarkers(records: BacktestTradeRecord[]): void {
 
 function refreshChartData(newData: CandlestickData[]): void {
   if (!candlestickSeries) return;
+  const priceScale = chart?.priceScale("right");
+  // 模拟回测锁定价格轴: 先记住用户当前缩放, 数据更新后再原样恢复
+  const lockedRange = props.autoPriceRange ? null : (priceScale?.getVisibleRange() ?? null);
+  if (!props.autoPriceRange) priceScale?.applyOptions({ autoScale: false });
   candlestickSeries.setData(newData as LWCandlestickData[]);
   hoveredBar.value = newData.length
     ? (newData[newData.length - 1] ?? null)
     : null;
-  setPriceVisibleRange(newData);
+  if (props.autoPriceRange) setPriceVisibleRange(newData);
   updateIndicators(newData);
   updateTradeMarkers(props.tradeRecords);
+  if (!props.autoPriceRange) {
+    priceScale?.applyOptions({ autoScale: false });
+    if (lockedRange) priceScale?.setVisibleRange(lockedRange);
+  }
+}
+
+// 只水平滚动到最新一根；fitPrice 为 true 时按可见窗口重设一次价格范围
+function scrollToLast(visibleBars = 80, fitPrice = false): void {
+  if (!chart) return;
+  const data = displayData.value;
+  if (!data.length) return;
+  const priceScale = chart.priceScale("right");
+  // 先确保价格轴不自动缩放, 并在改时间轴前后恢复用户当前的纵向缩放
+  const lockedRange = !props.autoPriceRange && !fitPrice
+    ? (priceScale.getVisibleRange() ?? null)
+    : null;
+  if (!props.autoPriceRange) priceScale.applyOptions({ autoScale: false });
+  const to = data.length - 1 + 8;
+  const from = Math.max(to - visibleBars, 0);
+  chart.timeScale().setVisibleLogicalRange({ from, to });
+  if (!fitPrice) {
+    if (lockedRange) priceScale.setVisibleRange(lockedRange);
+    return;
+  }
+  const visible = data.slice(Math.max(data.length - visibleBars, 0));
+  const prices = visible
+    .flatMap((bar) => [bar.high, bar.low])
+    .filter(isValidNumber);
+  if (!prices.length) return;
+  const min = Math.min(...prices);
+  const max = Math.max(...prices);
+  const padding = Math.max((max - min) * 0.12, Math.abs(max || min) * 0.001, 1);
+  applyPriceRange({ from: min - padding, to: max + padding });
 }
 
 function setPriceVisibleRange(newData: CandlestickData[]): void {
@@ -387,12 +456,14 @@ function setPriceVisibleRange(newData: CandlestickData[]): void {
 }
 
 function focusTrade(pos: number): void {
-  if (!chart || !props.data[pos]) return;
+  const index = displayIndexForRawPos(pos);
+  if (!chart || index === null) return;
   const sideBars = 35;
-  const from = Math.max(pos - sideBars, 0);
-  const to = Math.min(pos + sideBars, props.data.length - 1);
+  const data = displayData.value;
+  const from = Math.max(index - sideBars, 0);
+  const to = Math.min(index + sideBars, data.length - 1);
   chart.timeScale().setVisibleLogicalRange({ from, to });
-  const visibleBars = props.data.slice(from, to + 1);
+  const visibleBars = data.slice(from, to + 1);
   const prices = visibleBars
     .flatMap((bar) => [bar.high, bar.low])
     .filter(isValidNumber);
@@ -411,9 +482,13 @@ function toggleTool(tool: DrawingKind): void {
   drawingManager.setTool(activeTool.value === tool ? null : tool);
 }
 
+function drawingsStorageKey(): string {
+  return `chart-drawings-${props.period ? periodLabel.value : "default"}`;
+}
+
 function saveDrawings(): void {
   if (!drawingManager) return;
-  const key = `chart-drawings-${props.period || "default"}`;
+  const key = drawingsStorageKey();
   try {
     localStorage.setItem(key, drawingManager.exportJSON());
   } catch {
@@ -423,7 +498,7 @@ function saveDrawings(): void {
 
 function restoreDrawings(): void {
   if (!drawingManager) return;
-  const key = `chart-drawings-${props.period || "default"}`;
+  const key = drawingsStorageKey();
   const saved = localStorage.getItem(key);
   if (saved) {
     try {
@@ -591,8 +666,8 @@ function initChart(): void {
     });
   }
 
-  if (props.data.length > 0 && candlestickSeries) {
-    refreshChartData(props.data);
+  if (displayData.value.length > 0 && candlestickSeries) {
+    refreshChartData(displayData.value);
   }
 
   // 恢复已保存的绘图（需在数据设置之后）
@@ -651,12 +726,15 @@ function appendData(bar: CandlestickData): void {
   }
 }
 
-watch(
-  () => props.data,
-  (newData) => {
-    updateData(newData);
-  },
-);
+function handlePeriodChange(event: Event): void {
+  const value = (event.target as HTMLSelectElement).value as KlinePeriod;
+  innerPeriod.value = value;
+  emit("update:period", value);
+}
+
+watch(displayData, (newData) => {
+  updateData(newData);
+});
 
 watch(
   () => props.tradeRecords,
@@ -710,6 +788,7 @@ defineExpose({
   updateData,
   appendData,
   focusTrade,
+  scrollToLast,
   clearDrawings,
   saveDrawings,
 });
@@ -743,6 +822,21 @@ defineExpose({
       >
         清除
       </button>
+      <div class="w-px h-4 mx-1 bg-paper-line" />
+      <select
+        :value="activePeriod"
+        title="选择周期"
+        class="h-7 cursor-pointer rounded border border-paper-line bg-paper px-2 text-xs font-semibold text-ink-soft focus:outline-none focus:ring-1 focus:ring-indigo-400/40"
+        @change="handlePeriodChange"
+      >
+        <option
+          v-for="item in periodOptions"
+          :key="item.value"
+          :value="item.value"
+        >
+          {{ item.label }}
+        </option>
+      </select>
     </div>
 
     <!-- 图表容器 -->
@@ -756,10 +850,10 @@ defineExpose({
       "
     >
       <div
-        v-if="data.length"
+        v-if="displayData.length"
         class="pointer-events-none absolute left-2 top-2 z-10 flex flex-wrap items-center gap-x-3 gap-y-1 rounded border border-paper-line/80 bg-paper/90 px-2 py-1 text-xs font-semibold text-ink-soft backdrop-blur-sm"
       >
-        <span class="text-ink">{{ periodText }}</span>
+        <span class="text-ink">{{ periodLabel }}</span>
         <span
           v-for="item in infoItems"
           :key="item.label"

@@ -1,5 +1,6 @@
 import asyncio
 import os
+import random
 import pandas as pd
 from server.core.engine import engine
 from server.utils import switchFn,evtConnect, rtWeb,evtFire,kEvt_Web,kEvt_Engine,log,pdData
@@ -24,6 +25,7 @@ class msgHandler:
     "消息事件处理器"
 
     BACKTEST_TIMEOUT = 600  # 隔离回测最长等待秒数, 仅防策略回调异常导致的永久挂起
+    SAMPLE_BARS = 365 * 24 * 12  # 模拟回测随机截取约 1 年的 5m K线
 
     def __init__(self):
         self.__page = 0
@@ -68,11 +70,9 @@ class msgHandler:
             g_config.saveFile()
             #todo:是否重启服务器
             return
-        async def startBackTest():#开启回测: 执行完直接把结果放进本次响应,web据此渲染
+        async def startBackTest():#开启回测: id 0=数据隔离, 1=快速回测, 其他=模拟回测取数(symbol)
             args = msg[0][0] if msg and msg[0] else {}
-            if args.get('id') != 1:
-                return {}
-            return await self._runBackTest(args.get('selectedTask'), bool(args.get('isolation')))
+            return await self._runBackTest(args.get('id'), args.get('selectedTask'))
         return switchFn({eMsgId['eWebInit']: initWeb,
                         eMsgId['ePage_k']: initMarketTrends,
                         eMsgId['ePage_cta']:initStartFile,
@@ -82,16 +82,35 @@ class msgHandler:
                         eMsgId['eStartBackTest']:startBackTest},
                         key=id)
     
-    async def _runBackTest(self, taskName: str, isolation: bool) -> dict:
+    async def _runBackTest(self, id, taskName: str | None = None) -> dict:
         try:
-            if not isolation:  # 快速回测: 全量一次算完
+            if id == 1:  # 快速回测: 全量一次算完
                 return self.callTask(taskName, 'startStrategy')
-            evtFire(kEvt_Engine, taskName, 'beginTest')  # 数据隔离: 定时器逐段揭示K线
-            await self._waitBackTest(taskName)
-            return self.callTask(taskName, 'getBacktestResult')
+            if id == 0:  # 数据隔离: 定时器逐段揭示K线
+                evtFire(kEvt_Engine, taskName, 'beginTest')
+                await self._waitBackTest(taskName)
+                return self.callTask(taskName, 'getBacktestResult')
+            return await asyncio.to_thread(self._sampleKline, str(id))  # 模拟回测: id 即 symbol
         except Exception as e:
             log(f"[msgHandler] 回测启动失败: {e}")
             return {"error": str(e)}
+
+    # 模拟回测取数: 随机截取约 1 年 5m K线, 由前端按所选周期聚合回放
+    def _sampleKline(self, symbol: str) -> dict:
+        if not symbol or os.path.basename(symbol) != symbol or symbol not in self._marketCoins():
+            return {"error": f"未知symbol: {symbol}"}
+        data = pdData()
+        if not data.readFile(symbol, isFull=True):
+            return {"error": f"未找到K线数据: {symbol}"}
+        frame = data.raw()
+        if len(frame) > self.SAMPLE_BARS:
+            start = random.randint(0, len(frame) - self.SAMPLE_BARS)
+            frame = frame.iloc[start:start + self.SAMPLE_BARS]
+        columns = ['candle_begin_time', 'open', 'high', 'low', 'close', 'vol']
+        if 'funding_bps' in frame.columns:
+            columns.append('funding_bps')
+        frame = frame[columns]
+        return {"kLine": rtWeb({'kLine': frame})['kLine']}
 
     # 隔离回放由定时器推进, 轮询到结束后再取结果; 上限避免策略回调异常导致请求永久挂起
     async def _waitBackTest(self, taskName: str) -> None:

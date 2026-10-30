@@ -1,8 +1,12 @@
 <script setup lang="ts">
-import { computed, ref, inject, nextTick, onMounted, type Ref } from 'vue'
+import { computed, ref, inject, nextTick, onActivated, onDeactivated, onMounted, watch, type Ref } from 'vue'
 import LightweightChart from '../../utils/LightweightChart.vue'
 import { eMsg, type BacktestTrade, type BacktestTradeRecord, type CandlestickData } from '../../types'
 import { postMessage } from '../../utils/common'
+import { detectKlinePeriod, type KlinePeriod } from '../../utils/kline'
+import { useSimBacktest } from '../../utils/simBacktest'
+
+const SIM_TASK = '__sim__'
 
 const klineData = ref<CandlestickData[]>([])
 const tradeRecords = ref<BacktestTradeRecord[]>([])
@@ -13,6 +17,21 @@ const activeTab = ref<'orders' | 'results'>('orders')
 const isRunning = ref(false)
 const isolateData = ref(true)
 const errorMessage = ref('')
+const isSimLoading = ref(false)
+const isPlaying = ref(false)
+let playTimer: number | null = null
+const chartPeriod = ref<KlinePeriod>('5m')
+const sim = useSimBacktest(chartPeriod)
+const {
+  symbol: simSymbol,
+  principalModel: simPrincipal,
+  bet: simBet,
+  lv: simLv,
+  started: simStarted,
+  hasMore: simHasMore,
+  displayBars: simDisplayBars,
+  tradeRecords: simTradeRecords,
+} = sim
 
 const tabs = [
   { key: 'orders', label: '交易轨迹' },
@@ -100,6 +119,9 @@ const summaryGroupConfigs: { title: string; metrics: SummaryMetricConfig[] }[] =
 // inject 必须在 setup 顶层
 const taskList = ref<string[]>([])
 const selectedTask = ref<string>('')
+const simMode = computed(() => selectedTask.value === SIM_TASK)
+const chartData = computed(() => (simMode.value ? simDisplayBars.value : klineData.value))
+const chartTrades = computed(() => (simMode.value ? simTradeRecords.value : tradeRecords.value))
 
 type KlineRow = Partial<CandlestickData> & {
   vol?: number | null
@@ -260,6 +282,10 @@ function normalizeKline(rows: unknown): CandlestickData[] {
     if (vwap !== null)
       bar.vwap = vwap
 
+    const fundingBps = toNumber(item.funding_bps ?? item.fundingBps)
+    if (fundingBps !== null)
+      bar.fundingBps = fundingBps
+
     result.push(bar)
   })
 
@@ -293,7 +319,7 @@ function normalizeTradeRecords(records: unknown): BacktestTradeRecord[] {
 }
 
 function formatTimeByPos(pos: number): string {
-  const time = klineData.value[pos]?.time
+  const time = chartData.value[pos]?.time
   if (time === undefined) return '-'
   if (typeof time === 'number') {
     return new Date(time * 1000).toLocaleString()
@@ -315,8 +341,8 @@ function durationMinutes(record: BacktestTradeRecord): number | string {
 
 function durationBetweenTrades(current: BacktestTrade, next?: BacktestTrade): number | string {
   if (!next) return '-'
-  const currentTime = klineData.value[current.pos]?.time
-  const nextTime = klineData.value[next.pos]?.time
+  const currentTime = chartData.value[current.pos]?.time
+  const nextTime = chartData.value[next.pos]?.time
   if (typeof currentTime === 'number' && typeof nextTime === 'number') {
     return Math.max(Math.round((nextTime - currentTime) / 60), 0)
   }
@@ -359,7 +385,7 @@ function buildChildRow(record: BacktestTradeRecord, recordIndex: number, tradeIn
   }
 }
 
-const tableRows = computed<TradeTableRow[]>(() => tradeRecords.value.flatMap((record, recordIndex) => {
+const tableRows = computed<TradeTableRow[]>(() => chartTrades.value.flatMap((record, recordIndex) => {
   const rows = [buildParentRow(record, recordIndex)]
   if (!expandedRecords.value.has(recordIndex)) return rows
 
@@ -387,24 +413,80 @@ async function focusFirstTrade(records: BacktestTradeRecord[]): Promise<void> {
   focusTrade(firstPos)
 }
 
-async function handleBacktest(id: 1 | 2) {
-  if (id === 2) {
-    klineData.value = []
-    tradeRecords.value = []
-    backtestSummary.value = null
-    expandedRecords.value = new Set()
+const busy = computed(() => (simMode.value ? isSimLoading.value : isRunning.value))
+const cancelMode = computed(() => simMode.value && simStarted.value)
+const primaryLabel = computed(() => {
+  if (simMode.value) {
+    if (isSimLoading.value) return '加载中…'
+    return simStarted.value ? '取消测试' : '开始回测'
+  }
+  return isRunning.value ? '回测中…' : '开始回测'
+})
+const busyTitle = computed(() => (simMode.value ? '正在加载 K 线数据…' : '回测运行中…'))
+const busyHint = computed(() => {
+  if (simMode.value)
+    return `${simSymbol.value.trim() || 'symbol'} · 随机截取约 1 年 5m K 线`
+  return isolateData.value
+    ? '数据隔离模式：逐段揭示 K 线，跑完整段后返回'
+    : '快速回测：全量一次计算'
+})
+
+async function focusSimLast(fitPrice = false): Promise<void> {
+  if (!simDisplayBars.value.length) return
+  await nextTick()
+  chartRef.value?.scrollToLast(80, fitPrice)
+}
+
+const playbackLabel = computed(() => {
+  if (!simHasMore.value) return '已播完'
+  return isPlaying.value ? '播放中' : '已暂停'
+})
+
+function stopPlayback(): void {
+  if (playTimer !== null) {
+    window.clearInterval(playTimer)
+    playTimer = null
+  }
+  isPlaying.value = false
+}
+
+function startPlayback(): void {
+  if (!simStarted.value || !simHasMore.value || playTimer !== null) return
+  isPlaying.value = true
+  playTimer = window.setInterval(tickPlayback, 1000)
+}
+
+function tickPlayback(): void {
+  if (!simMode.value || !simStarted.value || !sim.play()) {
+    stopPlayback()
     return
   }
+  void focusSimLast()
+}
 
-  if (!selectedTask.value) return
+// 空格：播放中停止，停止后再按继续
+function togglePlayback(): void {
+  if (isPlaying.value) {
+    stopPlayback()
+    return
+  }
+  startPlayback()
+}
+
+function handlePlaybackToggle(event: MouseEvent): void {
+  togglePlayback()
+  ;(event.currentTarget as HTMLElement | null)?.blur()
+}
+
+async function runTaskBacktest(): Promise<void> {
+  if (!selectedTask.value || simMode.value) return
 
   isRunning.value = true
   errorMessage.value = ''
   try {
     const response = await postMessage(eMsg.eBacktest, {
-      id,
-      selectedTask: selectedTask.value,
-      isolation: isolateData.value
+      id: isolateData.value ? 0 : 1,
+      selectedTask: selectedTask.value
     })
     const payload = response as BacktestPayload & { received?: { args?: BacktestPayload } }
     const result = payload.received?.args ?? payload
@@ -418,6 +500,7 @@ async function handleBacktest(id: 1 | 2) {
     klineData.value = normalizeKline(kLine)
     tradeRecords.value = records
     expandedRecords.value = new Set()
+    chartPeriod.value = detectKlinePeriod(klineData.value)
     await focusFirstTrade(records)
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : String(error)
@@ -425,6 +508,119 @@ async function handleBacktest(id: 1 | 2) {
     isRunning.value = false
   }
 }
+
+function clearTaskBacktest(): void {
+  klineData.value = []
+  tradeRecords.value = []
+  backtestSummary.value = null
+  expandedRecords.value = new Set()
+  errorMessage.value = ''
+}
+
+async function startSim(): Promise<void> {
+  const name = simSymbol.value.trim() || 'binance_swap_BTCUSDT'
+  simSymbol.value = name
+  if (sim.principal.value <= 0 || sim.bet.value <= 0 || sim.bet.value > 100 || sim.lv.value < 1) {
+    errorMessage.value = '请检查本金 / 下注% / lv'
+    return
+  }
+
+  isSimLoading.value = true
+  errorMessage.value = ''
+  ;(document.activeElement as HTMLElement | null)?.blur()
+  try {
+    const response = await postMessage(eMsg.eBacktest, { id: name })
+    const payload = response as BacktestPayload & { received?: { args?: BacktestPayload } }
+    const result = payload.received?.args ?? payload
+    if (result?.error) {
+      errorMessage.value = result.error
+      return
+    }
+    const bars = normalizeKline(result?.kLine ?? [])
+    if (!bars.length) {
+      errorMessage.value = '未获取到K线数据'
+      return
+    }
+    sim.start(bars)
+    await focusSimLast(true)
+    startPlayback()
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    isSimLoading.value = false
+  }
+}
+
+function handlePrimaryAction(): void {
+  if (simMode.value) {
+    if (simStarted.value) {
+      stopPlayback()
+      sim.cancelTest()
+      ;(document.activeElement as HTMLElement | null)?.blur()
+      return
+    }
+    void startSim()
+    return
+  }
+  void runTaskBacktest()
+}
+
+function handleSimKey(event: KeyboardEvent): void {
+  if (!simMode.value || !simStarted.value || isSimLoading.value) return
+  const target = event.target as HTMLElement | null
+  if (
+    target &&
+    (target.isContentEditable ||
+      ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+  )
+    return
+  switch (event.key) {
+    case ' ':
+    case 'Spacebar':
+      event.preventDefault()
+      if (event.repeat) return
+      togglePlayback()
+      return
+    case 'l':
+    case 'L':
+      sim.openLong()
+      return
+    case 's':
+    case 'S':
+      sim.openShort()
+      return
+    case 'c':
+    case 'C':
+      sim.close()
+      return
+    case 'Escape':
+      sim.undo()
+  }
+}
+
+watch(selectedTask, (value, oldValue) => {
+  stopPlayback()
+  if (value === SIM_TASK) {
+    clearTaskBacktest()
+    sim.cancelTest()
+    activeTab.value = 'orders'
+    return
+  }
+  if (oldValue === SIM_TASK) sim.cancelTest()
+})
+
+watch(chartPeriod, () => {
+  if (simMode.value && simStarted.value) void focusSimLast()
+})
+
+onActivated(() => {
+  window.addEventListener('keydown', handleSimKey)
+})
+
+onDeactivated(() => {
+  stopPlayback()
+  window.removeEventListener('keydown', handleSimKey)
+})
 
 onMounted(() => {
   const pageData = inject<Ref<any>>('pageData')
@@ -446,12 +642,13 @@ onMounted(() => {
 
         <!-- 实例下拉 -->
         <div class="relative min-w-40 flex-1 max-w-56">
-          <select v-model="selectedTask" class="w-full appearance-none bg-paper border border-paper-line rounded-lg
+          <select v-model="selectedTask" :disabled="isRunning || isSimLoading" class="w-full appearance-none bg-paper border border-paper-line rounded-lg
                    pl-3 pr-8 py-1.5 text-sm font-medium text-ink
                    focus:outline-none focus:ring-2 focus:ring-indigo-400/40 focus:border-transparent
-                   transition-all cursor-pointer">
+                   transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-60">
             <option v-if="!taskList.length" value="" disabled>暂无实例</option>
             <option v-for="task in taskList" :key="task" :value="task">{{ task }}</option>
+            <option :value="SIM_TASK">模拟回测</option>
           </select>
           <svg class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-ink-faint"
             fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
@@ -460,29 +657,68 @@ onMounted(() => {
         </div>
 
         <!-- 操作按钮组 -->
-        <div class="ml-auto flex items-center gap-2">
+        <div class="ml-auto flex flex-wrap items-center justify-end gap-2">
+          <!-- 模拟回测参数 -->
+          <div class="flex flex-wrap items-center gap-1.5" :style="{ display: simMode ? 'flex' : 'none' }">
+            <label class="flex items-center gap-1 text-[11px] font-medium text-ink-soft">
+              <span>symbol</span>
+              <input v-model="simSymbol" :readonly="simStarted" type="text" placeholder="binance_swap_BTCUSDT"
+                class="w-44 rounded border border-paper-line bg-paper px-2 py-1 text-xs text-ink focus:outline-none focus:ring-1 focus:ring-indigo-400/40 read-only:bg-paper-deep/40" />
+            </label>
+            <label class="flex items-center gap-1 text-[11px] font-medium text-ink-soft">
+              <span>本金</span>
+              <input v-model.number="simPrincipal" :readonly="simStarted" type="number" min="1" step="100"
+                class="w-20 rounded border border-paper-line bg-paper px-2 py-1 text-xs text-ink focus:outline-none focus:ring-1 focus:ring-indigo-400/40 read-only:bg-paper-deep/40" />
+            </label>
+            <label class="flex items-center gap-1 text-[11px] font-medium text-ink-soft">
+              <span>下注%</span>
+              <input v-model.number="simBet" type="number" min="1" max="100" step="1"
+                title="开仓保证金占权益的百分比；平仓按该百分比减仓，100% 全平；手续费 0.05%/边"
+                class="w-16 rounded border border-paper-line bg-paper px-2 py-1 text-xs text-ink focus:outline-none focus:ring-1 focus:ring-indigo-400/40" />
+            </label>
+            <label class="flex items-center gap-1 text-[11px] font-medium text-ink-soft">
+              <span>lv</span>
+              <input v-model.number="simLv" type="number" min="1" step="1"
+                class="w-14 rounded border border-paper-line bg-paper px-2 py-1 text-xs text-ink focus:outline-none focus:ring-1 focus:ring-indigo-400/40" />
+            </label>
+            <button v-if="simStarted" type="button" @click="handlePlaybackToggle"
+              class="cursor-pointer rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors"
+              :class="isPlaying
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-600'
+                : 'border-amber-200 bg-amber-50 text-amber-600'"
+              title="空格暂停/继续，每秒新增一根 K 线">
+              {{ playbackLabel }}
+            </button>
+          </div>
+
           <!-- 数据隔离开关 -->
           <label class="mr-1 flex items-center gap-1.5 text-xs font-medium text-ink-soft select-none cursor-pointer"
+            :style="{ display: simMode ? 'none' : 'flex' }"
             :title="isolateData ? '数据隔离：逐根揭示K线回放，跑完整段才返回' : '快速回测：全量一次计算'">
             <input v-model="isolateData" type="checkbox" :disabled="isRunning"
               class="h-3.5 w-3.5 accent-indigo-600 cursor-pointer disabled:cursor-not-allowed" />
             数据隔离
           </label>
 
-          <!-- 开始回测 -->
-          <button @click="handleBacktest(1)" :disabled="isRunning" title="开始回测" class="group flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold
+          <!-- 开始回测 / 取消测试 -->
+          <button @click="handlePrimaryAction" :disabled="busy" :title="cancelMode ? '取消测试' : '开始回测'" class="group flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold
                    transition-all duration-150 select-none
-                   bg-emerald-600 hover:bg-emerald-700 active:scale-95
-                   text-white shadow-sm shadow-emerald-200/50
-                   disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100">
-            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+                   active:scale-95
+                   disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
+            :class="cancelMode
+              ? 'bg-rose-600 hover:bg-rose-700 text-white shadow-sm shadow-rose-200/50'
+              : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm shadow-emerald-200/50'">
+            <svg v-if="cancelMode" class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+              <rect x="6" y="6" width="12" height="12" rx="1" />
+            </svg>
+            <svg v-else class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
               <path d="M8 5v14l11-7z" />
             </svg>
-            {{ isRunning ? '回测中…' : '开始回测' }}
+            {{ primaryLabel }}
           </button>
 
           <!-- 清空按钮 -->
-          <button @click="handleBacktest(2)" title="清空回测结果" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold
+          <button @click="clearTaskBacktest" title="清空回测结果" :style="{ display: simMode ? 'none' : 'flex' }" class="items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold
                    border border-paper-line bg-paper text-ink-soft
                    hover:bg-paper-deep hover:text-ink
                    active:scale-95 transition-all duration-150">
@@ -495,7 +731,8 @@ onMounted(() => {
         </div>
       </div>
 
-      <LightweightChart ref="chartRef" :data="klineData" :trade-records="tradeRecords" :height="360" />
+      <LightweightChart ref="chartRef" v-model:period="chartPeriod" :data="chartData" :trade-records="chartTrades"
+        :auto-price-range="!simMode" :height="360" />
     </div>
 
     <!-- 下单记录 / 回测结果 -->
@@ -547,7 +784,7 @@ onMounted(() => {
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-50">
-              <tr v-if="!tradeRecords.length">
+              <tr v-if="!chartTrades.length">
                 <td colspan="9" class="px-4 py-12 text-center text-sm text-gray-300">暂无交易轨迹</td>
               </tr>
               <tr v-for="row in tableRows" :key="row.key"
@@ -635,14 +872,12 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- 回测进行中的遮罩：拦截全部点击，避免加载期间误操作 -->
-    <div v-if="isRunning" class="fixed inset-0 z-50 flex items-center justify-center bg-ink/20 backdrop-blur-sm cursor-wait">
+    <!-- 回测/取数进行中的遮罩：拦截全部点击，避免加载期间误操作 -->
+    <div v-if="busy" class="fixed inset-0 z-50 flex items-center justify-center bg-ink/20 backdrop-blur-sm cursor-wait">
       <div class="flex flex-col items-center gap-2 rounded-xl border border-paper-line bg-paper-soft px-8 py-6 shadow-2xl">
         <i class="ri-loader-4-line animate-spin text-2xl text-indigo-600"></i>
-        <p class="text-sm font-semibold text-ink">回测运行中…</p>
-        <p class="text-xs text-ink-faint">
-          {{ isolateData ? '数据隔离模式：逐段揭示 K 线，跑完整段后返回' : '快速回测：全量一次计算' }}
-        </p>
+        <p class="text-sm font-semibold text-ink">{{ busyTitle }}</p>
+        <p class="text-xs text-ink-faint">{{ busyHint }}</p>
       </div>
     </div>
 
