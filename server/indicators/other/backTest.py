@@ -9,25 +9,6 @@ from server.utils import switch, switchFn
 from server.utils.science import (kFeeRate, kLiqRatio, kMarginRatio,feeCost, fundingPay, fundingTable, slipPrice, slipRange)
 from server.market import kLong, kShort, kBuy, kSell, kSpot
 
-"""
-结构: 一、统计指标 → 二、评分规则 → 三、事件驱动撮合 → 四、backTest 类
-约定:
- - 时间轴: 事件时间 = 成交时刻。轨迹事件 = pos 所在K线的收盘时刻(=下一根开盘,可再叠加 exec_delay 根),价格取该K线 close;
-   记录事件 = 成交所在K线的开盘时间戳,价格取记录里的成交价。同一时刻先结算资金费、再处理事件:
-   边界上开仓不计该次资金费、平仓计入(实盘成交晚于结算快照)
- - 检查点之间按半开区间 [prev, ts) 逐K线用 low/high 检查强平。期间 cash/持仓不变,nav 对价格线性,最差点必在 low/high 之一
- - 强平两层: 破产闸门 nav < 本金*kLiqRatio(策略失效); 维持保证金 nav < kMaintRatio*Σ永续名义(现货不适用)
- - 成交口径两种: 轨迹回测(calculate,基准口径)按 close+滑点+手续费模型折算; 记录回测(calculateTa)直接用记录里的成交价/数量/保证金/手续费
-   记录字段口径以 calculate 为准: total=USDT 保证金(=amount*average/leverage), fee(BNB)=USDT 等值手续费
- - 资金费按 8h(UTC 00/08/16)结算,取结算K线的 open 价,多头付正费率、空头收正费率(两种口径一致)
- - 保证金采用全仓、不做多空轧差(对冲仓位各自占用保证金,偏保守)
- - 年化周期数 ppy 只存于 backTest(delimit 的 periods,默认 365,股票改 252),统计函数一律不传 ppy
- - 股票: K线无 funding_bps 列即不计资金费; 允许休市缺口(轨迹事件时间=K线开盘+bar 时长,日线即当日收盘); type 属于 _CASH_TYPES 的不计资金费/维持保证金
- - K线缺口不再报错,只在 params.kline_gaps 回显; 加密结算K线缺失时 science.fundingTable 用 asof(前一根)兜底
- - 强平遇跳空(开盘价已越过触发价)按开盘价成交,不再乐观地取触发价
- - 手续费/滑点/资金费/杠杆/强平的常量与算法统一在 science.py,与 testTrade 共用
-"""
-
 _CASH_TYPES = (kSpot, "stock")  # 无资金费、无维持保证金强平的品种;股票的 type 值加在这里
 kMaintRatio = 0.005  # 永续维持保证金率(占名义价值)。占位值:应移入 science.py,并按币种/分档及 PM 的 uniMMR 规则核实
 

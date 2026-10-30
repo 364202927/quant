@@ -390,10 +390,6 @@ function updateTradeMarkers(records: BacktestTradeRecord[]): void {
 
 function refreshChartData(newData: CandlestickData[]): void {
   if (!candlestickSeries) return;
-  const priceScale = chart?.priceScale("right");
-  // 模拟回测锁定价格轴: 先记住用户当前缩放, 数据更新后再原样恢复
-  const lockedRange = props.autoPriceRange ? null : (priceScale?.getVisibleRange() ?? null);
-  if (!props.autoPriceRange) priceScale?.applyOptions({ autoScale: false });
   candlestickSeries.setData(newData as LWCandlestickData[]);
   hoveredBar.value = newData.length
     ? (newData[newData.length - 1] ?? null)
@@ -401,10 +397,18 @@ function refreshChartData(newData: CandlestickData[]): void {
   if (props.autoPriceRange) setPriceVisibleRange(newData);
   updateIndicators(newData);
   updateTradeMarkers(props.tradeRecords);
-  if (!props.autoPriceRange) {
-    priceScale?.applyOptions({ autoScale: false });
-    if (lockedRange) priceScale?.setVisibleRange(lockedRange);
-  }
+}
+
+// 价格轴已冻结时, 最新一根超出可见区只平移窗口(高度 span 不变), 不缩放
+function followLastBar(): void {
+  const bar = latestBar();
+  const range = chart?.priceScale("right").getVisibleRange();
+  if (!bar || !range) return;
+  const span = range.to - range.from;
+  const pad = span * 0.1;
+  if (bar.low >= range.from + pad && bar.high <= range.to - pad) return;
+  const center = (bar.high + bar.low) / 2;
+  applyPriceRange({ from: center - span / 2, to: center + span / 2 });
 }
 
 // 只水平滚动到最新一根；fitPrice 为 true 时按可见窗口重设一次价格范围
@@ -412,17 +416,11 @@ function scrollToLast(visibleBars = 80, fitPrice = false): void {
   if (!chart) return;
   const data = displayData.value;
   if (!data.length) return;
-  const priceScale = chart.priceScale("right");
-  // 先确保价格轴不自动缩放, 并在改时间轴前后恢复用户当前的纵向缩放
-  const lockedRange = !props.autoPriceRange && !fitPrice
-    ? (priceScale.getVisibleRange() ?? null)
-    : null;
-  if (!props.autoPriceRange) priceScale.applyOptions({ autoScale: false });
   const to = data.length - 1 + 8;
   const from = Math.max(to - visibleBars, 0);
   chart.timeScale().setVisibleLogicalRange({ from, to });
   if (!fitPrice) {
-    if (lockedRange) priceScale.setVisibleRange(lockedRange);
+    followLastBar();
     return;
   }
   const visible = data.slice(Math.max(data.length - visibleBars, 0));
